@@ -4,7 +4,7 @@
 // process lifecycle). In a plain browser (vite dev / preview) there's no Tauri
 // runtime, so these become no-ops and the app degrades to manual workflows.
 
-import { app, page, applyDetection, toast } from './store.svelte.js';
+import { app, page, applyDetection, applyClean, setCleanStatus, toast } from './store.svelte.js';
 
 // app.sidecar is initialized lazily so older saved state stays compatible.
 function ensureState() {
@@ -57,6 +57,117 @@ export async function detectCurrentPage({ ocr = true } = {}) {
     toast(`Detection failed: ${e}`);
   } finally {
     app.detecting = false;
+  }
+}
+
+// ---- cleaning -------------------------------------------------------------
+
+// Smart-clean an image's regions. Returns { img_width, img_height, layers:[...] }.
+// regions = [{ n, box, method? }]; mask = base64 text mask from /analyze (optional,
+// re-detected server-side when absent). method = default OpenCV inpaint flavour.
+export async function cleanImage(imageUrl, regions, { mask = '', method = 'telea', flux = false } = {}) {
+  const invoke = await getInvoke();
+  if (!invoke) throw new Error('sidecar unavailable (no Tauri runtime)');
+  const buf = await (await fetch(imageUrl)).arrayBuffer();
+  const bytes = Array.from(new Uint8Array(buf));
+  return invoke('sidecar_clean', {
+    image: bytes,
+    regions: JSON.stringify(regions),
+    maskPng: mask,
+    method,
+    flux,
+  });
+}
+
+// Clean every detected region on the current page and apply the patch layers.
+export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) {
+  const p = page();
+  if (!p?.raw) {
+    toast('No raw page to clean — import a raw image first');
+    return;
+  }
+  const regions = (p.detect?.boxes ?? []).map((b) => ({ n: b.n, box: b.box }));
+  if (!regions.length) {
+    toast('Run Detect first — no text regions');
+    return;
+  }
+  if (!sidecarReady()) {
+    toast('Sidecar not ready');
+    return;
+  }
+  app.cleaning = true;
+  for (const r of regions) setCleanStatus(r.n, 'cleaning');
+  try {
+    const result = await cleanImage(p.raw, regions, { mask: p.clean?.maskPng ?? '', method, flux });
+    applyClean(result);
+    toast(`Cleaned ${result.layers.length} region(s)`);
+  } catch (e) {
+    for (const r of regions) setCleanStatus(r.n, 'error');
+    toast(`Clean failed: ${e}`);
+  } finally {
+    app.cleaning = false;
+  }
+}
+
+// Re-clean a single region with a forced method (retry / redo a layer).
+export async function recleanRegion(n, method) {
+  const p = page();
+  const b = (p.detect?.boxes ?? []).find((x) => x.n === n);
+  if (!b || !p.raw) return;
+  if (!sidecarReady()) {
+    toast('Sidecar not ready');
+    return;
+  }
+  setCleanStatus(n, 'cleaning');
+  try {
+    const result = await cleanImage(p.raw, [{ n, box: b.box, method }], {
+      mask: p.clean?.maskPng ?? '',
+      method,
+    });
+    applyClean(result, { replace: false });
+    toast(`Re-cleaned line ${n} → ${method}`);
+  } catch (e) {
+    setCleanStatus(n, 'error');
+    toast(`Re-clean failed: ${e}`);
+  }
+}
+
+// ---- opt-in FLUX inpainter ------------------------------------------------
+export async function refreshFluxStatus() {
+  const invoke = await getInvoke();
+  app.flux.checking = true;
+  try {
+    if (!invoke) {
+      app.flux = { ...app.flux, available: false, reason: 'no Tauri runtime' };
+      return app.flux;
+    }
+    const s = await invoke('sidecar_flux_status');
+    app.flux = { ...app.flux, available: !!s.available, reason: s.reason ?? null };
+    return app.flux;
+  } catch (e) {
+    app.flux = { ...app.flux, available: false, reason: String(e) };
+    return app.flux;
+  } finally {
+    app.flux.checking = false;
+  }
+}
+
+export async function downloadFlux() {
+  const invoke = await getInvoke();
+  if (!invoke) {
+    toast('FLUX download needs the desktop app');
+    return;
+  }
+  app.flux.downloading = true;
+  toast('Installing FLUX deps — this can take a while…');
+  try {
+    const res = await invoke('sidecar_flux_download');
+    toast(res.ok ? 'FLUX ready' : 'FLUX install failed — see logs');
+    await refreshFluxStatus();
+  } catch (e) {
+    toast(`FLUX install failed: ${e}`);
+  } finally {
+    app.flux.downloading = false;
   }
 }
 

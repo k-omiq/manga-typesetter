@@ -78,6 +78,9 @@ export const app = $state({
   toast: { msg: '', seq: 0 },
   sidecar: { status: 'unknown', device: null, info: null }, // Python ML sidecar health
   detecting: false, // detection/OCR request in flight
+  cleaning: false, // a /clean request is in flight
+  selectedLayerId: null, // active clean patch layer
+  flux: { available: false, reason: null, checking: false, downloading: false }, // opt-in inpaint
 });
 
 // ---------- derived helpers ----------
@@ -230,6 +233,73 @@ export function applyDetection(result) {
   app.loaded = true;
   markUnsaved();
 }
+
+// ---------- clean-mode patch layers ----------
+// Each detected text becomes its own editable patch (cleaned bbox pixels). The
+// composite clean page = raw + ordered visible patches (NOT a flat image), so
+// any single region can be re-cleaned, hidden, or deleted without re-running
+// the whole page. Populated from the sidecar /clean result.
+let layerSeq = 1;
+
+export const cleanStatus = (n) => page().clean?.status?.[n] ?? 'pending';
+
+export function setCleanStatus(n, s) {
+  const p = page();
+  if (!p.clean) p.clean = { base: null, layers: [] };
+  p.clean.status = { ...(p.clean.status ?? {}), [n]: s };
+}
+
+// Merge cleaned layers from a /clean result. replace=true swaps the whole set;
+// replace=false updates only the regions present in the result (single-region redo).
+export function applyClean(result, { replace = true } = {}) {
+  const p = page();
+  if (!p.clean) p.clean = { base: null, layers: [] };
+  p.clean.base = p.raw ?? p.clean.base;
+  const incoming = (result.layers ?? []).map((L) => ({
+    id: 'L' + layerSeq++,
+    n: L.n,
+    box: L.box, // [x, y, w, h] in image coords
+    method: L.method,
+    requested: L.requested,
+    fellBack: !!L.fell_back,
+    uniform: !!L.uniform,
+    ringStd: L.ring_std,
+    patchPng: L.patch_png, // base64 PNG of the cleaned bbox
+    visible: true,
+  }));
+  if (replace) {
+    p.clean.layers = incoming;
+  } else {
+    const byN = new Map(incoming.map((l) => [l.n, l]));
+    p.clean.layers = p.clean.layers.map((l) => byN.get(l.n) ?? l);
+    for (const l of incoming) if (!p.clean.layers.some((x) => x.n === l.n)) p.clean.layers.push(l);
+  }
+  for (const l of incoming) setCleanStatus(l.n, 'done');
+  markUnsaved();
+}
+
+export function toggleLayer(id) {
+  const l = page().clean?.layers.find((x) => x.id === id);
+  if (l) {
+    l.visible = !l.visible;
+    markUnsaved();
+  }
+}
+export function selectCleanLayer(id) {
+  app.selectedLayerId = app.selectedLayerId === id ? null : id;
+}
+export function deleteLayer(id) {
+  const p = page();
+  const l = p.clean?.layers.find((x) => x.id === id);
+  if (!l) return;
+  p.clean.layers = p.clean.layers.filter((x) => x.id !== id);
+  setCleanStatus(l.n, 'pending');
+  if (app.selectedLayerId === id) app.selectedLayerId = null;
+  markUnsaved();
+  toast(`Deleted clean layer · line ${l.n} back to queue`);
+}
+export const layerByLine = (n) => page().clean?.layers.find((x) => x.n === n) ?? null;
+export const patchSrc = (layer) => (layer?.patchPng ? 'data:image/png;base64,' + layer.patchPng : null);
 
 // ---------- placement ----------
 export function placeActiveAt(imgX, imgY) {

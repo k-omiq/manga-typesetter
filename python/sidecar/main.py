@@ -9,7 +9,9 @@ from __future__ import annotations
 import base64
 import statistics
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+import json
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from . import __version__, config
 
@@ -98,6 +100,84 @@ def create_app() -> FastAPI:
             "panels": result.get("panels", []),
             "mask_png": mask_png,
         }
+
+    @app.post("/clean")
+    async def clean(
+        image: UploadFile = File(...),
+        regions: str = Form("[]"),
+        mask_png: str = Form(""),
+        method: str = Form("telea"),
+        flux: bool = Form(False),
+        uniform_threshold: float = Form(12.0),
+    ):
+        """Smart-clean each text region into its own editable patch layer.
+
+        `regions` is JSON: [{n, box:[x1,y1,x2,y2], method?}]. `mask_png` is the
+        base64 text mask from /analyze; if omitted, detection is re-run to derive
+        both the mask and the regions. Per-region `method` overrides the
+        uniform->fill / textured->inpaint choice (force-inpaint / force-fill).
+        """
+        import cv2
+        import numpy as np
+
+        from . import clean as cleaner
+
+        raw = await image.read()
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(status_code=400, detail="could not decode image")
+        H, W = img.shape[:2]
+
+        try:
+            region_list = json.loads(regions) if regions else []
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"bad regions json: {e}") from e
+
+        mask = cleaner._decode_mask(mask_png, img.shape)
+
+        # Fall back to re-detection when the client didn't pass a mask/regions
+        # (e.g. cleaning without a prior /analyze round-trip).
+        if mask is None or not region_list:
+            from . import detect
+
+            try:
+                result = detect.analyze(img, do_ocr=False, do_panels=False)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"detect failed: {e}") from e
+            if mask is None:
+                mask = np.where(result["mask_refined"] > 127, 255, 0).astype(np.uint8)
+            if not region_list:
+                region_list = [
+                    {"n": i + 1, "box": b["box"]}
+                    for i, b in enumerate(result["blocks"])
+                ]
+
+        try:
+            layers = cleaner.clean_regions(
+                img,
+                mask,
+                region_list,
+                default_inpaint=method,
+                uniform_threshold=uniform_threshold,
+                flux=flux,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"clean failed: {e}") from e
+
+        return {"img_width": W, "img_height": H, "layers": layers}
+
+    @app.get("/clean/flux-status")
+    async def flux_status():
+        from . import flux as flux_mod
+
+        return flux_mod.status()
+
+    @app.post("/clean/flux-download")
+    async def flux_download():
+        from . import flux as flux_mod
+
+        return flux_mod.download()
 
     return app
 

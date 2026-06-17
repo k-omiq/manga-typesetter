@@ -48,17 +48,18 @@ fn make_token() -> String {
 /// Resolve how to launch the sidecar for the current build profile.
 /// Returns a ready-to-spawn `Command` or `None` if no sidecar is available.
 fn build_command(app: &tauri::AppHandle, token: &str) -> Option<Command> {
-    // Prod: bundled binary next to the executable.
-    if let Ok(exe_dir) = std::env::current_exe().and_then(|p| {
-        p.parent()
-            .map(|d| d.to_path_buf())
-            .ok_or_else(|| std::io::Error::other("no exe dir"))
-    }) {
-        let bin = exe_dir.join(if cfg!(windows) {
-            "mt-sidecar.exe"
-        } else {
-            "mt-sidecar"
-        });
+    let exe = if cfg!(windows) {
+        "mt-sidecar.exe"
+    } else {
+        "mt-sidecar"
+    };
+
+    // Prod: PyInstaller --onedir folder shipped via `bundle.resources`
+    // (binaries/mt-sidecar/) and unpacked into the app's resource dir. The glob
+    // preserves the relative path, so the binary lands at
+    // <resources>/binaries/mt-sidecar/mt-sidecar.
+    if let Ok(res_dir) = app.path().resource_dir() {
+        let bin = res_dir.join("binaries").join("mt-sidecar").join(exe);
         if bin.exists() {
             let mut cmd = Command::new(bin);
             apply_env(&mut cmd, token);
@@ -135,8 +136,10 @@ pub async fn sidecar_health(
     let url = format!("{}/health", state.base_url());
     let client = reqwest::Client::new();
 
+    // Up to ~30s: the bundled onedir sidecar can take ~10s on a cold first run
+    // (dylib load + macOS first-launch verification).
     let mut last_err = String::from("unreachable");
-    for _ in 0..40 {
+    for _ in 0..120 {
         match client.get(&url).send().await {
             Ok(resp) => match resp.json::<serde_json::Value>().await {
                 Ok(v) => return Ok(v),
@@ -174,6 +177,79 @@ pub async fn sidecar_analyze(
         let body = resp.text().await.unwrap_or_default();
         return Err(format!("sidecar {code}: {body}"));
     }
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy a page image to the sidecar `/clean` (smart per-region cleaning).
+///
+/// `regions` is the JSON array the frontend already holds from `/analyze`
+/// (`[{n, box, method?}]`); `mask_png` is the base64 text mask from the same
+/// call. `method` is the default OpenCV inpaint flavour for textured regions
+/// ("telea"/"ns"); `flux` opts into the heavy FLUX path. Returns one patch
+/// layer per region.
+#[tauri::command]
+pub async fn sidecar_clean(
+    state: tauri::State<'_, Sidecar>,
+    image: Vec<u8>,
+    regions: String,
+    mask_png: String,
+    method: String,
+    flux: bool,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/clean", state.base_url());
+    let part = reqwest::multipart::Part::bytes(image).file_name("page.png");
+    let form = reqwest::multipart::Form::new()
+        .part("image", part)
+        .text("regions", regions)
+        .text("mask_png", mask_png)
+        .text("method", method)
+        .text("flux", flux.to_string());
+
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("x-mt-token", &state.token)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("sidecar {code}: {body}"));
+    }
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Report whether the opt-in FLUX inpainter can run on this machine.
+#[tauri::command]
+pub async fn sidecar_flux_status(
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/clean/flux-status", state.base_url());
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .header("x-mt-token", &state.token)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// One-click install of the FLUX deps into the sidecar venv (heavy, opt-in).
+#[tauri::command]
+pub async fn sidecar_flux_download(
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/clean/flux-download", state.base_url());
+    // pip install can take a while; allow a long timeout.
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("x-mt-token", &state.token)
+        .timeout(std::time::Duration::from_secs(1800))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 

@@ -35,6 +35,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "binaries/mt-sidecar/**/*"
+    ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }

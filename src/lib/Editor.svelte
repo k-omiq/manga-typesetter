@@ -15,6 +15,7 @@
     setZoom,
     zoomReset,
     openBulk,
+    patchSrc,
   } from './store.svelte.js';
   import { pickJson, pickImages } from './importer.js';
 
@@ -24,6 +25,11 @@
 
   const p = $derived(page());
   const zoomPct = $derived(Math.round(app.zoom * 100));
+  // Clean mode composites raw + visible patch layers; translate mode shows the
+  // cleaned page with text boxes on top.
+  const cleanMode = $derived(app.mode === 'clean');
+  const baseSrc = $derived(cleanMode ? (p.raw ?? p.clean?.base) : p.cleaned);
+  const patches = $derived(cleanMode ? (p.clean?.layers ?? []).filter((l) => l.visible) : []);
 
   function computeFit(force = false) {
     if (!scrollEl) return;
@@ -141,9 +147,18 @@
     <div class="editor-scroll" bind:this={scrollEl} onmousemove={onMouseMove}>
       <div class="stage" style={app.bulk.active ? 'cursor:pointer' : app.tool === 'text' ? 'cursor:grab' : ''}>
         <div class="page-frame" bind:this={pageFrameEl} style="width:{p.w * app.zoom}px; height:{p.h * app.zoom}px">
-          {#if p.cleaned}
-            <img class="page-img" src={p.cleaned} alt="Cleaned page" onload={onCleanedLoad} />
+          {#if baseSrc}
+            <img class="page-img" src={baseSrc} alt={cleanMode ? 'Raw page' : 'Cleaned page'} onload={onCleanedLoad} />
           {/if}
+          {#each patches as l (l.id)}
+            <img
+              class="patch"
+              class:sel={app.selectedLayerId === l.id}
+              src={patchSrc(l)}
+              alt=""
+              style="left:{l.box[0] * app.zoom}px; top:{l.box[1] * app.zoom}px; width:{l.box[2] * app.zoom}px; height:{l.box[3] * app.zoom}px;"
+            />
+          {/each}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div class="boxlayer" onpointerdown={onLayerPointerDown}>
             {#each p.boxes as box (box.id)}
@@ -180,3 +195,16 @@
     {/if}
   </div>
 </section>
+
+<style>
+  /* Clean-mode patch layers: cleaned bbox pixels overlaid on the raw page. */
+  .patch {
+    position: absolute;
+    pointer-events: none;
+    image-rendering: auto;
+  }
+  .patch.sel {
+    outline: 2px solid var(--accent, #4b7bec);
+    outline-offset: -1px;
+  }
+</style>

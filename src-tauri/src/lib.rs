@@ -10,7 +10,10 @@ pub fn run() {
     .manage(sidecar::new_state())
     .invoke_handler(tauri::generate_handler![
       sidecar::sidecar_health,
-      sidecar::sidecar_analyze
+      sidecar::sidecar_analyze,
+      sidecar::sidecar_clean,
+      sidecar::sidecar_flux_status,
+      sidecar::sidecar_flux_download
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
