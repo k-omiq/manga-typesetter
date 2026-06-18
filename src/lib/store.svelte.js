@@ -81,6 +81,19 @@ export const app = $state({
   cleaning: false, // a /clean request is in flight
   selectedLayerId: null, // active clean patch layer
   flux: { available: false, reason: null, checking: false, downloading: false }, // opt-in inpaint
+  // BYOK LLM translation (reuses MangaTranslator's provider set). Keys are kept
+  // locally (localStorage) for convenience; never leave the machine except in
+  // the loopback request the Rust side proxies to the sidecar.
+  translate: {
+    provider: 'Anthropic',
+    model: '',
+    outputLanguage: 'English',
+    baseUrl: '', // OpenAI-Compatible only
+    special: '', // special instructions / glossary
+    apiKeys: {}, // { [provider]: key }
+    providers: [], // catalogue from the sidecar
+    translating: false,
+  },
 });
 
 // ---------- derived helpers ----------
@@ -120,6 +133,19 @@ try {
   const saved = JSON.parse(localStorage.getItem('mt.export') || '{}');
   if (saved.dir) app.exportDir = saved.dir;
   if (saved.name) app.exportName = saved.name;
+} catch {
+  /* ignore */
+}
+try {
+  const t = JSON.parse(localStorage.getItem('mt.translate') || '{}');
+  Object.assign(app.translate, {
+    provider: t.provider ?? app.translate.provider,
+    model: t.model ?? app.translate.model,
+    outputLanguage: t.outputLanguage ?? app.translate.outputLanguage,
+    baseUrl: t.baseUrl ?? app.translate.baseUrl,
+    special: t.special ?? app.translate.special,
+    apiKeys: t.apiKeys ?? app.translate.apiKeys,
+  });
 } catch {
   /* ignore */
 }
@@ -300,6 +326,46 @@ export function deleteLayer(id) {
 }
 export const layerByLine = (n) => page().clean?.layers.find((x) => x.n === n) ?? null;
 export const patchSrc = (layer) => (layer?.patchPng ? 'data:image/png;base64,' + layer.patchPng : null);
+
+// ---------- translation ----------
+// Apply a /translate result ({ lines:[{n,en}] }) onto the current page's lines.
+export function applyTranslation(result) {
+  const p = page();
+  const byN = new Map((result.lines ?? []).map((l) => [l.n, l.en]));
+  for (const ln of p.lines) {
+    if (byN.has(ln.n) && byN.get(ln.n) != null) ln.en = byN.get(ln.n);
+  }
+  markUnsaved();
+}
+
+export function setTranslateProvider(provider) {
+  app.translate.provider = provider;
+  // Prefill the model field with the provider's suggested default when empty.
+  const meta = app.translate.providers.find((x) => x.id === provider);
+  if (meta && (!app.translate.model || app.translate.model === '')) {
+    app.translate.model = meta.default_model ?? '';
+  }
+  saveTranslatePrefs();
+}
+
+export function saveTranslatePrefs() {
+  const t = app.translate;
+  try {
+    localStorage.setItem(
+      'mt.translate',
+      JSON.stringify({
+        provider: t.provider,
+        model: t.model,
+        outputLanguage: t.outputLanguage,
+        baseUrl: t.baseUrl,
+        special: t.special,
+        apiKeys: t.apiKeys,
+      }),
+    );
+  } catch {
+    /* ignore */
+  }
+}
 
 // ---------- placement ----------
 export function placeActiveAt(imgX, imgY) {

@@ -253,6 +253,48 @@ pub async fn sidecar_flux_download(
     resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
+/// List the BYOK translation providers the sidecar supports (id + default model).
+#[tauri::command]
+pub async fn sidecar_translate_providers(
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/translate/providers", state.base_url());
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .header("x-mt-token", &state.token)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy a translation request to the sidecar `/translate`. The BYOK API key
+/// travels in the JSON body and stays loopback-local; the webview never talks to
+/// the provider or the sidecar directly. `payload` =
+/// { lines:[{n,type,jp}], provider, model, api_key, base_url?, ... }.
+#[tauri::command]
+pub async fn sidecar_translate(
+    state: tauri::State<'_, Sidecar>,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/translate", state.base_url());
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("x-mt-token", &state.token)
+        .timeout(std::time::Duration::from_secs(300))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("sidecar {code}: {body}"));
+    }
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
 /// Build the managed state (call once before `.manage`).
 pub fn new_state() -> Sidecar {
     Sidecar {

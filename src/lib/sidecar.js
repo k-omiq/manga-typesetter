@@ -4,7 +4,15 @@
 // process lifecycle). In a plain browser (vite dev / preview) there's no Tauri
 // runtime, so these become no-ops and the app degrades to manual workflows.
 
-import { app, page, applyDetection, applyClean, setCleanStatus, toast } from './store.svelte.js';
+import {
+  app,
+  page,
+  applyDetection,
+  applyClean,
+  setCleanStatus,
+  applyTranslation,
+  toast,
+} from './store.svelte.js';
 
 // app.sidecar is initialized lazily so older saved state stays compatible.
 function ensureState() {
@@ -168,6 +176,66 @@ export async function downloadFlux() {
     toast(`FLUX install failed: ${e}`);
   } finally {
     app.flux.downloading = false;
+  }
+}
+
+// ---- translation (BYOK) ---------------------------------------------------
+
+// Fetch the provider catalogue (id + suggested default model) into app.translate.
+export async function loadTranslateProviders() {
+  const invoke = await getInvoke();
+  if (!invoke) return [];
+  try {
+    const r = await invoke('sidecar_translate_providers');
+    app.translate.providers = r.providers ?? [];
+    // Prefill model from the active provider's default if still empty.
+    if (!app.translate.model) {
+      const meta = app.translate.providers.find((x) => x.id === app.translate.provider);
+      if (meta) app.translate.model = meta.default_model ?? '';
+    }
+    return app.translate.providers;
+  } catch {
+    return [];
+  }
+}
+
+// Translate the current page's detected JP lines via the configured provider.
+export async function translateCurrentPage() {
+  const p = page();
+  const t = app.translate;
+  const lines = p.lines.filter((l) => l.jp).map((l) => ({ n: l.n, type: l.type, jp: l.jp }));
+  if (!lines.length) {
+    toast('No detected JP lines — run Detect first');
+    return;
+  }
+  if (!sidecarReady()) {
+    toast('Sidecar not ready');
+    return;
+  }
+  if (!t.model) {
+    toast('Set a model first');
+    return;
+  }
+  const invoke = await getInvoke();
+  app.translate.translating = true;
+  try {
+    const payload = {
+      lines,
+      provider: t.provider,
+      model: t.model,
+      api_key: t.apiKeys?.[t.provider] ?? '',
+      base_url: t.baseUrl ?? '',
+      output_language: t.outputLanguage || 'English',
+      special_instructions: t.special ?? '',
+    };
+    const result = await invoke('sidecar_translate', { payload });
+    applyTranslation(result);
+    const n = (result.lines ?? []).filter((x) => x.en).length;
+    toast(`Translated ${n} line(s)`);
+  } catch (e) {
+    toast(`Translate failed: ${e}`);
+  } finally {
+    app.translate.translating = false;
   }
 }
 

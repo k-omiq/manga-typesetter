@@ -3,6 +3,7 @@
   import Queue from './Queue.svelte';
   import Inspector from './Inspector.svelte';
   import CleanPanel from './CleanPanel.svelte';
+  import TranslateControls from './TranslateControls.svelte';
 
   const placedCount = $derived(page().lines.filter((l) => isPlaced(page(), l.n)).length);
   const totalCount = $derived(page().lines.length);
@@ -13,6 +14,9 @@
     <CleanPanel />
   {:else}
   <div class="rpanel">
+    <!-- Translation (BYOK) -->
+    <TranslateControls />
+
     <!-- Text Queue -->
     <div class="section queue" class:collapsed={app.collapsed.queue}>
       <div

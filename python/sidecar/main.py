@@ -11,7 +11,7 @@ import statistics
 
 import json
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 
 from . import __version__, config
 
@@ -166,6 +166,48 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=f"clean failed: {e}") from e
 
         return {"img_width": W, "img_height": H, "layers": layers}
+
+    @app.get("/translate/providers")
+    async def translate_providers():
+        from . import translate as tr
+
+        return {"providers": tr.providers()}
+
+    @app.post("/translate")
+    async def translate(payload: dict = Body(...)):
+        """Translate detected JP lines via a BYOK LLM provider. Text->text.
+
+        payload = { lines:[{n,type,jp}], provider, model, api_key, base_url?,
+                    output_language?, special_instructions?, reasoning_effort? }
+        Returns { lines:[{n,en}] }.
+        """
+        from . import translate as tr
+
+        lines = payload.get("lines") or []
+        provider = payload.get("provider") or ""
+        model = payload.get("model") or ""
+        if not provider or not model:
+            raise HTTPException(status_code=400, detail="provider and model are required")
+        try:
+            result = tr.translate_lines(
+                lines,
+                provider=provider,
+                model=model,
+                api_key=payload.get("api_key", ""),
+                base_url=payload.get("base_url", ""),
+                output_language=payload.get("output_language") or "English",
+                input_language=payload.get("input_language") or "Japanese",
+                reading_direction=payload.get("reading_direction") or "rtl",
+                special_instructions=payload.get("special_instructions") or "",
+                reasoning_effort=payload.get("reasoning_effort"),
+            )
+        except (ValueError, RuntimeError) as e:
+            # missing key / provider, or endpoint failure surfaced to the client
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"translate failed: {e}") from e
+
+        return {"lines": result}
 
     @app.get("/clean/flux-status")
     async def flux_status():
