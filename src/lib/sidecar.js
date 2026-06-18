@@ -107,7 +107,7 @@ export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) 
   for (const r of regions) setCleanStatus(r.n, 'cleaning');
   try {
     const result = await cleanImage(p.raw, regions, { mask: p.clean?.maskPng ?? '', method, flux });
-    applyClean(result);
+    applyClean(result, { target: p });
     toast(`Cleaned ${result.layers.length} region(s)`);
   } catch (e) {
     for (const r of regions) setCleanStatus(r.n, 'error');
@@ -131,8 +131,9 @@ export async function recleanRegion(n, method) {
     const result = await cleanImage(p.raw, [{ n, box: b.box, method }], {
       mask: p.clean?.maskPng ?? '',
       method,
+      flux: method === 'flux', // the redo dropdown offers flux; actually engage it
     });
-    applyClean(result, { replace: false });
+    applyClean(result, { replace: false, target: p });
     toast(`Re-cleaned line ${n} → ${method}`);
   } catch (e) {
     setCleanStatus(n, 'error');
@@ -229,7 +230,7 @@ export async function translateCurrentPage() {
       special_instructions: t.special ?? '',
     };
     const result = await invoke('sidecar_translate', { payload });
-    applyTranslation(result);
+    applyTranslation(result, p);
     const n = (result.lines ?? []).filter((x) => x.en).length;
     toast(`Translated ${n} line(s)`);
   } catch (e) {

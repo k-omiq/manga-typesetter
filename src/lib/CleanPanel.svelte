@@ -31,9 +31,13 @@
     refreshFluxStatus();
   });
 
-  function onFluxToggle(e) {
+  async function onFluxToggle(e) {
     flux = e.target.checked;
-    if (flux && !app.flux.available) downloadFlux();
+    if (flux && !app.flux.available) {
+      await downloadFlux();
+      // Reflect reality: if the opt-in install failed, don't leave FLUX "on".
+      flux = app.flux.available;
+    }
   }
 </script>
 

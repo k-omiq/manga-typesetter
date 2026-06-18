@@ -134,6 +134,11 @@ def create_app() -> FastAPI:
         except json.JSONDecodeError as e:
             raise HTTPException(status_code=400, detail=f"bad regions json: {e}") from e
 
+        # The global default only applies to textured regions, where only the
+        # OpenCV inpaint flavours make sense.
+        if method not in ("telea", "ns"):
+            method = "telea"
+
         mask = cleaner._decode_mask(mask_png, img.shape)
 
         # Fall back to re-detection when the client didn't pass a mask/regions
@@ -174,8 +179,12 @@ def create_app() -> FastAPI:
         return {"providers": tr.providers()}
 
     @app.post("/translate")
-    async def translate(payload: dict = Body(...)):
+    def translate(payload: dict = Body(...)):
         """Translate detected JP lines via a BYOK LLM provider. Text->text.
+
+        Sync handler on purpose: the provider call is a blocking `requests.post`
+        with long timeouts, so FastAPI runs this in its threadpool instead of
+        stalling the event loop (which would freeze /health, /analyze, etc.).
 
         payload = { lines:[{n,type,jp}], provider, model, api_key, base_url?,
                     output_language?, special_instructions?, reasoning_effort? }
@@ -201,9 +210,15 @@ def create_app() -> FastAPI:
                 special_instructions=payload.get("special_instructions") or "",
                 reasoning_effort=payload.get("reasoning_effort"),
             )
-        except (ValueError, RuntimeError) as e:
-            # missing key / provider, or endpoint failure surfaced to the client
+        except ValueError as e:
+            # validation (bad provider, missing key field)
             raise HTTPException(status_code=400, detail=str(e)) from e
+        except RuntimeError as e:
+            # TranslationError: a missing key is the client's fault (400); an
+            # upstream provider/HTTP failure is not (502, so the UI can say "retry").
+            msg = str(e)
+            code = 400 if "api key" in msg.lower() else 502
+            raise HTTPException(status_code=code, detail=msg) from e
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"translate failed: {e}") from e
 

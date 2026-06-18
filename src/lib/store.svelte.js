@@ -24,8 +24,17 @@ function clonePage(p) {
     // Clean-mode state: each detected text becomes its own editable patch layer.
     // composite = raw + ordered visible patches. Populated by the clean pipeline.
     clean: p.clean
-      ? { base: p.clean.base ?? null, layers: p.clean.layers.map((l) => ({ ...l })) }
-      : { base: null, layers: [] },
+      ? {
+          base: p.clean.base ?? null,
+          maskPng: p.clean.maskPng ?? null,
+          status: { ...(p.clean.status ?? {}) },
+          layers: p.clean.layers.map((l) => ({ ...l })),
+        }
+      : { base: null, maskPng: null, status: {}, layers: [] },
+    // Detection geometry (drives the cleaning queue + box auto-placement).
+    detect: p.detect
+      ? { panels: (p.detect.panels ?? []).slice(), boxes: p.detect.boxes.map((b) => ({ ...b })) }
+      : null,
     boxes: p.boxes.map((b) => ({
       id: 'b' + boxSeq++,
       lineN: b.lineN,
@@ -182,6 +191,7 @@ export function gotoPage(i) {
   if (i < 0 || i > app.pages.length - 1) return;
   app.pageIndex = i;
   app.selectedId = null;
+  app.selectedLayerId = null; // layer ids are per-page; don't leak selection across pages
   const p = page();
   if (p.activeLineN == null) p.activeLineN = firstUnplaced(p);
 }
@@ -277,8 +287,8 @@ export function setCleanStatus(n, s) {
 
 // Merge cleaned layers from a /clean result. replace=true swaps the whole set;
 // replace=false updates only the regions present in the result (single-region redo).
-export function applyClean(result, { replace = true } = {}) {
-  const p = page();
+export function applyClean(result, { replace = true, target = null } = {}) {
+  const p = target ?? page();
   if (!p.clean) p.clean = { base: null, layers: [] };
   p.clean.base = p.raw ?? p.clean.base;
   const incoming = (result.layers ?? []).map((L) => ({
@@ -300,7 +310,11 @@ export function applyClean(result, { replace = true } = {}) {
     p.clean.layers = p.clean.layers.map((l) => byN.get(l.n) ?? l);
     for (const l of incoming) if (!p.clean.layers.some((x) => x.n === l.n)) p.clean.layers.push(l);
   }
-  for (const l of incoming) setCleanStatus(l.n, 'done');
+  // Mark status on the target page directly (not page(), which may have changed
+  // if the user navigated while the request was in flight).
+  const st = { ...(p.clean.status ?? {}) };
+  for (const l of incoming) st[l.n] = 'done';
+  p.clean.status = st;
   markUnsaved();
 }
 
@@ -329,8 +343,8 @@ export const patchSrc = (layer) => (layer?.patchPng ? 'data:image/png;base64,' +
 
 // ---------- translation ----------
 // Apply a /translate result ({ lines:[{n,en}] }) onto the current page's lines.
-export function applyTranslation(result) {
-  const p = page();
+export function applyTranslation(result, target = null) {
+  const p = target ?? page();
   const byN = new Map((result.lines ?? []).map((l) => [l.n, l.en]));
   for (const ln of p.lines) {
     if (byN.has(ln.n) && byN.get(ln.n) != null) ln.en = byN.get(ln.n);

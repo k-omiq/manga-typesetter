@@ -106,24 +106,34 @@ def clean_region(
     # Ring just outside the text: a few px wide annulus around the glyphs.
     ring_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
     ring = cv2.subtract(cv2.dilate(m_dil, ring_k, iterations=1), m_dil)
+    chans = roi.shape[2]
     ring_px = roi[ring > 0]
 
-    # Uniformity = worst-channel std of the surrounding ring. Empty ring (region
-    # flush to an edge) is treated as uniform.
+    # Uniformity = worst-channel std of the surrounding ring. An empty ring (region
+    # flush to an image edge) is treated as uniform; sample the ROI's own non-text
+    # pixels for the fill colour rather than hardcoding white (which would paint a
+    # white block inside a dark bubble).
     if ring_px.size == 0:
         ring_std = 0.0
-        fill_color = (255, 255, 255)
+        interior = roi[m_dil == 0]
+        if interior.size:
+            fill_color = tuple(int(v) for v in np.median(interior.reshape(-1, chans), axis=0))
+        else:
+            fill_color = (255, 255, 255)
     else:
-        ring_std = float(ring_px.reshape(-1, roi.shape[2]).std(axis=0).max())
-        fill_color = tuple(int(v) for v in np.median(ring_px.reshape(-1, roi.shape[2]), axis=0))
+        ring_std = float(ring_px.reshape(-1, chans).std(axis=0).max())
+        fill_color = tuple(int(v) for v in np.median(ring_px.reshape(-1, chans), axis=0))
     uniform = ring_std <= uniform_threshold
 
-    # Decide method: explicit override wins, else uniform->fill / textured->inpaint.
-    requested = (force_method or "").lower() or None
-    if requested and requested not in _VALID_METHODS:
-        requested = None
-    if requested:
-        method = requested
+    # Decide method: explicit per-region override wins, else uniform->fill /
+    # textured->inpaint. `requested` records what was asked ("auto" when not
+    # forced) so the response never misreports the resolved method as the ask.
+    forced = (force_method or "").lower() or None
+    if forced and forced not in _VALID_METHODS:
+        forced = None
+    requested = forced or ("flux" if flux else "auto")
+    if forced:
+        method = forced
     elif flux:
         method = "flux"
     elif uniform:
@@ -148,7 +158,7 @@ def clean_region(
     return {
         "box": [x1, y1, x2 - x1, y2 - y1],
         "method": method,
-        "requested": requested or ("flux" if flux else ("fill" if uniform else default_inpaint)),
+        "requested": requested,
         "fell_back": fell_back,
         "uniform": bool(uniform),
         "ring_std": round(ring_std, 2),
@@ -186,6 +196,10 @@ def clean_regions(
     for r in regions:
         box = r.get("box")
         if not box or len(box) != 4:
+            continue
+        # Skip degenerate boxes (non-positive width/height) so they don't become
+        # bogus 1px patches.
+        if box[2] <= box[0] or box[3] <= box[1]:
             continue
         layer = clean_region(
             img_bgr,

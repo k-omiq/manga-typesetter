@@ -120,7 +120,9 @@ pub fn spawn(app: &tauri::AppHandle) {
         Some(mut cmd) => match cmd.spawn() {
             Ok(child) => {
                 log::info!("sidecar spawned on port {SIDECAR_PORT}");
-                *state.child.lock().unwrap() = Some(child);
+                if let Ok(mut guard) = state.child.lock() {
+                    *guard = Some(child);
+                }
             }
             Err(e) => log::error!("failed to spawn sidecar: {e}"),
         },
@@ -208,6 +210,8 @@ pub async fn sidecar_clean(
     let resp = reqwest::Client::new()
         .post(&url)
         .header("x-mt-token", &state.token)
+        // FLUX cleaning can be slow; cap so a hung run can't block forever.
+        .timeout(std::time::Duration::from_secs(1800))
         .multipart(form)
         .send()
         .await
@@ -233,6 +237,11 @@ pub async fn sidecar_flux_status(
         .send()
         .await
         .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("sidecar {code}: {body}"));
+    }
     resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
@@ -265,6 +274,11 @@ pub async fn sidecar_translate_providers(
         .send()
         .await
         .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("sidecar {code}: {body}"));
+    }
     resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
