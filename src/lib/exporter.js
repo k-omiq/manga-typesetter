@@ -139,10 +139,17 @@ function renderBox(box) {
   const cw = Math.ceil(box.w + leftExtra + rightExtra + pad * 2);
   const ch = Math.ceil(box.h + topExtra + bottomExtra + pad * 2);
 
+  // Supersample non-roughened text 2x: render the glyphs at double resolution so
+  // that downsampling them onto the page canvas yields crisp edges (fixes export
+  // blur). Roughened boxes stay 1x — their effect is pixel-space displacement
+  // (getImageData/putImageData) that must match the composited resolution.
+  const SS = s.roughen.on ? 1 : 2;
   const cnv = document.createElement('canvas');
-  cnv.width = cw;
-  cnv.height = ch;
+  cnv.width = cw * SS;
+  cnv.height = ch * SS;
   const ctx = cnv.getContext('2d');
+  ctx.scale(SS, SS); // all drawing stays in native units; SS handled here
+  ctx.imageSmoothingQuality = 'high';
   const family = familyFor(s);
   ctx.font = fontShorthand(s, s.size, family);
   ctx.textBaseline = 'top';
@@ -212,7 +219,9 @@ function renderBox(box) {
   }
 
   if (s.roughen.on) roughen(ctx, cw, ch, s.roughen.amount, s.roughen.detail, s.roughen.seed);
-  return { canvas: cnv, pad, leftExtra, topExtra };
+  // cw/ch are the NATIVE (unscaled) draw size; the caller downsamples the SSx
+  // bitmap into that footprint.
+  return { canvas: cnv, pad, leftExtra, topExtra, cw, ch };
 }
 
 const MIME = { PNG: 'image/png', JPG: 'image/jpeg', WebP: 'image/webp' };
@@ -238,18 +247,26 @@ async function renderPageBlob(p, fmt) {
       /* draw text on white if image fails */
     }
   }
+  ctx.imageSmoothingQuality = 'high'; // crisp downscale of the supersampled text
   for (const box of p.boxes) {
-    const { canvas: bc, pad, leftExtra, topExtra } = renderBox(box);
+    const { canvas: bc, pad, leftExtra, topExtra, cw, ch } = renderBox(box);
     ctx.save();
     ctx.globalAlpha = box.style.opacity ?? 1;
-    const cx = box.x + box.w / 2;
-    const cy = box.y + box.h / 2;
-    ctx.translate(cx, cy);
-    ctx.rotate((box.style.rotation * Math.PI) / 180);
-    // Draw so the BOX center (which sits at leftExtra+pad+w/2, topExtra+pad+h/2
-    // inside the enlarged canvas) lands on the origin — keeping the rotation
-    // pivot at the box center, exactly like the editor rotates .tbox.
-    ctx.drawImage(bc, -(box.w / 2 + leftExtra + pad), -(box.h / 2 + topExtra + pad));
+    const rot = box.style.rotation || 0;
+    if (rot === 0) {
+      // Integer-snap the bitmap origin so a sub-pixel box position doesn't force
+      // a bilinear resample of the whole text block (the primary export blur).
+      // The box's top-left sits at (box.x - leftExtra - pad) inside the bitmap.
+      const originX = Math.round(box.x - leftExtra - pad);
+      const originY = Math.round(box.y - topExtra - pad);
+      ctx.drawImage(bc, originX, originY, cw, ch);
+    } else {
+      // Rotated: pivot around the box center like the editor rotates .tbox, and
+      // downsample the SSx bitmap into its native footprint.
+      ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
+      ctx.rotate((rot * Math.PI) / 180);
+      ctx.drawImage(bc, -(box.w / 2 + leftExtra + pad), -(box.h / 2 + topExtra + pad), cw, ch);
+    }
     ctx.restore();
   }
   return new Promise((res) => canvas.toBlob(res, MIME[fmt], QUALITY[fmt]));
