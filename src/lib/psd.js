@@ -316,7 +316,7 @@ export async function buildPagePsd(p) {
   children.push({
     name: 'Text',
     opened: true,
-    children: (p.boxes ?? []).map((b) => textLayerFor(p, b, renderBoxLayer(b, W, H, scratch))),
+    children: (p.boxes ?? []).map((b) => textLayerFor(p, b, renderBoxLayer(b, W, H, scratch, p))),
   });
 
   // Brush group — reserved for Phase 4, empty for now.

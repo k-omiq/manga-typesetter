@@ -58,9 +58,9 @@ function roughen(ctx, w, h, amount, detail, seed) {
 // layout so nothing clips on export. (ox,oy) is where the box's top-left sits
 // inside that footprint. Split out from painting so rotated text can be drawn
 // directly onto the page canvas (sharp glyphs) instead of rotating a raster.
-function layoutBox(box) {
+function layoutBox(box, p) {
   const s = box.style;
-  const text = applyCase(boxText(box), s);
+  const text = applyCase(boxText(box, p), s);
   const lineH = s.size * s.lineHeight;
   const pad = Math.ceil(
     Math.max(s.outlineWidth * 2, s.shadow.on ? Math.abs(s.shadow.x) + Math.abs(s.shadow.y) + s.shadow.blur : 0, s.roughen.on ? s.roughen.amount + 2 : 0) + 4,
@@ -201,8 +201,8 @@ function paintBox(ctx, box, L) {
 // boxes and for rotated+roughened boxes (whose pixel-space displacement needs
 // an axis-aligned raster). Non-roughened text is supersampled 2x so the
 // downscale-on-composite yields crisp edges.
-function renderBox(box) {
-  const L = layoutBox(box);
+function renderBox(box, p) {
+  const L = layoutBox(box, p);
   const s = L.s;
   const SS = s.roughen.on ? 1 : 2;
   const cnv = document.createElement('canvas');
@@ -246,7 +246,7 @@ export async function renderPageCanvas(p) {
   for (const box of p.boxes) {
     ctx.save();
     ctx.globalAlpha = box.style.opacity ?? 1;
-    paintBoxOnPage(ctx, box);
+    paintBoxOnPage(ctx, box, p);
     ctx.restore();
   }
   return canvas;
@@ -257,7 +257,7 @@ export async function renderPageCanvas(p) {
 // fallback for roughened/translucent. Opacity is applied by the caller (via
 // ctx.globalAlpha or a layer opacity), NOT here, so the same pixels can back a
 // translucent PSD layer.
-function paintBoxOnPage(ctx, box) {
+function paintBoxOnPage(ctx, box, p) {
   const s = box.style;
   const rot = s.rotation || 0;
   const opaque = (s.opacity ?? 1) >= 0.999;
@@ -267,7 +267,7 @@ function paintBoxOnPage(ctx, box) {
     // around the box center like the editor rotates .tbox. Roughened or
     // translucent boxes fall through to the raster path so their pixel filter
     // / alpha compositing stays correct.
-    const L = layoutBox(box);
+    const L = layoutBox(box, p);
     ctx.save();
     ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
     ctx.rotate((rot * Math.PI) / 180);
@@ -275,7 +275,7 @@ function paintBoxOnPage(ctx, box) {
     paintBox(ctx, box, L);
     ctx.restore();
   } else {
-    const { canvas: bc, pad, leftExtra, topExtra, cw, ch } = renderBox(box);
+    const { canvas: bc, pad, leftExtra, topExtra, cw, ch } = renderBox(box, p);
     if (rot === 0) {
       // Integer-snap the bitmap origin so a sub-pixel box position doesn't
       // force a bilinear resample of the whole text block (the primary blur).
@@ -300,14 +300,15 @@ function paintBoxOnPage(ctx, box) {
 // text layer so it displays pixel-identical to the app even when the manga
 // font is missing in Photoshop. Returns null for a box that paints nothing.
 // `scratch` is an optional reusable W×H canvas to avoid per-box allocations.
-export function renderBoxLayer(box, W, H, scratch) {
+// `p` is the page the box belongs to (so line-backed text resolves correctly).
+export function renderBoxLayer(box, W, H, scratch, p) {
   const cnv = scratch || document.createElement('canvas');
   if (cnv.width !== W) cnv.width = W;
   if (cnv.height !== H) cnv.height = H;
   const ctx = cnv.getContext('2d');
   ctx.clearRect(0, 0, W, H);
   ctx.imageSmoothingQuality = 'high';
-  paintBoxOnPage(ctx, box); // full opacity; layer opacity applied by consumer
+  paintBoxOnPage(ctx, box, p); // full opacity; layer opacity applied by consumer
   const full = ctx.getImageData(0, 0, W, H);
   const d = full.data;
   let minX = W,

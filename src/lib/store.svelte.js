@@ -163,9 +163,12 @@ export const lineText = (ln) => {
   if (!ln) return '';
   return ln.en ?? ln.natural ?? ln.stylised ?? ln.text ?? '';
 };
-export const boxText = (b) => {
+// Resolve a box's display text. Line-backed boxes (text == null) look up their
+// line on `p` — defaulting to the current page, but callers rendering another
+// page (e.g. export-all) must pass that page so glyphs resolve correctly.
+export const boxText = (b, p = page()) => {
   if (b.text != null) return b.text;
-  return lineText(lineByN(page(), b.lineN));
+  return lineText(lineByN(p ?? page(), b.lineN));
 };
 export function setMode(m) {
   app.mode = m === 'clean' ? 'clean' : 'translate';
