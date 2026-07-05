@@ -220,17 +220,21 @@ const MIME = { PNG: 'image/png', JPG: 'image/jpeg', WebP: 'image/webp', PSD: 'im
 const EXT = { PNG: 'png', JPG: 'jpg', WebP: 'webp', PSD: 'psd' };
 const QUALITY = { PNG: undefined, JPG: 0.95, WebP: 0.92, PSD: undefined };
 
-// Render one page to a canvas in native resolution: white base + cleaned image
-// (if any) + all text boxes composited exactly as the editor shows them. Split
-// out from renderPageBlob so the PSD exporter can grab the exact composite
-// ImageData (for the flattened preview / merged image) without a Blob round-trip.
-export async function renderPageCanvas(p) {
+// Render one page to a canvas: white base + cleaned image (if any) + all text
+// boxes composited exactly as the editor shows them. Split out from
+// renderPageBlob so the PSD exporter can grab the exact composite ImageData
+// (for the flattened preview / merged image) without a Blob round-trip.
+// `scale` supersamples the whole page (2 = 2x pixel dims); because text is
+// already rendered 2x internally, an outer scale maps that bitmap 1:1 to device
+// pixels — so 2x output stays genuinely sharp, not a soft upscale.
+export async function renderPageCanvas(p, scale = 1) {
   const W = p.w,
     H = p.h;
   const canvas = document.createElement('canvas');
-  canvas.width = W;
-  canvas.height = H;
+  canvas.width = Math.round(W * scale);
+  canvas.height = Math.round(H * scale);
   const ctx = canvas.getContext('2d');
+  if (scale !== 1) ctx.scale(scale, scale);
   // white base (JPG has no alpha; manga pages are white anyway)
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
@@ -299,25 +303,32 @@ function paintBoxOnPage(ctx, box, p) {
 // returned as `opacity`). Used as the cached rasterization of an editable PSD
 // text layer so it displays pixel-identical to the app even when the manga
 // font is missing in Photoshop. Returns null for a box that paints nothing.
-// `scratch` is an optional reusable W×H canvas to avoid per-box allocations.
-// `p` is the page the box belongs to (so line-backed text resolves correctly).
-export function renderBoxLayer(box, W, H, scratch, p) {
+// `scratch` is an optional reusable (W*scale)×(H*scale) canvas to avoid per-box
+// allocations. `p` is the box's page (so line-backed text resolves correctly).
+// `scale` supersamples to match a scaled document; returned bounds are in the
+// scaled (device) pixel space.
+export function renderBoxLayer(box, W, H, scratch, p, scale = 1) {
+  const SW = Math.round(W * scale);
+  const SH = Math.round(H * scale);
   const cnv = scratch || document.createElement('canvas');
-  if (cnv.width !== W) cnv.width = W;
-  if (cnv.height !== H) cnv.height = H;
+  if (cnv.width !== SW) cnv.width = SW;
+  if (cnv.height !== SH) cnv.height = SH;
   const ctx = cnv.getContext('2d');
-  ctx.clearRect(0, 0, W, H);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, SW, SH);
+  if (scale !== 1) ctx.scale(scale, scale);
   ctx.imageSmoothingQuality = 'high';
   paintBoxOnPage(ctx, box, p); // full opacity; layer opacity applied by consumer
-  const full = ctx.getImageData(0, 0, W, H);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const full = ctx.getImageData(0, 0, SW, SH);
   const d = full.data;
-  let minX = W,
-    minY = H,
+  let minX = SW,
+    minY = SH,
     maxX = -1,
     maxY = -1;
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      if (d[(y * W + x) * 4 + 3] !== 0) {
+  for (let y = 0; y < SH; y++) {
+    for (let x = 0; x < SW; x++) {
+      if (d[(y * SW + x) * 4 + 3] !== 0) {
         if (x < minX) minX = x;
         if (x > maxX) maxX = x;
         if (y < minY) minY = y;

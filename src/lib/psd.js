@@ -220,7 +220,7 @@ function warpForCurve(curve) {
 // the box's exact sharp pixels — the layer's cached rasterization — so it
 // displays pixel-identical to the app even when the manga font is missing in
 // Photoshop, while remaining an editable type layer (engineData below).
-function textLayerFor(p, box, rendered) {
+function textLayerFor(p, box, rendered, scale = 1) {
   const s = box.style;
   const raw = boxTextFor(p, box);
   const content = s.uppercase ? raw.toUpperCase() : raw;
@@ -230,15 +230,23 @@ function textLayerFor(p, box, rendered) {
   const cx = box.x + box.w / 2;
   const cy = box.y + box.h / 2;
   // Rotate the box top-left about the box center (pivot matches exporter.js).
-  const tx = cx + (box.x - cx) * cos - (box.y - cy) * sin;
-  const ty = cy + (box.x - cx) * sin + (box.y - cy) * cos;
-  const fontSize = s.size;
-  const tracking = fontSize > 0 ? Math.round(((s.letterSpacing || 0) / fontSize) * 1000) : 0;
+  // All geometry is scaled to the document so live (font-present) re-rendering
+  // aligns with the scaled cached pixels; tracking is per-em, so scale-invariant.
+  const tx = (cx + (box.x - cx) * cos - (box.y - cy) * sin) * scale;
+  const ty = (cy + (box.x - cx) * sin + (box.y - cy) * cos) * scale;
+  const fontSize = s.size * scale;
+  const tracking = s.size > 0 ? Math.round(((s.letterSpacing || 0) / s.size) * 1000) : 0;
 
-  // Layer bounds follow the cached raster (tight) when present, else the box.
+  // Layer bounds follow the cached raster (tight, already scaled) when present,
+  // else the box rect scaled to the document.
   const bounds = rendered
     ? { left: rendered.left, top: rendered.top, right: rendered.right, bottom: rendered.bottom }
-    : { left: Math.round(box.x), top: Math.round(box.y), right: Math.round(box.x + box.w), bottom: Math.round(box.y + box.h) };
+    : {
+        left: Math.round(box.x * scale),
+        top: Math.round(box.y * scale),
+        right: Math.round((box.x + box.w) * scale),
+        bottom: Math.round((box.y + box.h) * scale),
+      };
 
   return {
     name: (raw || `line ${box.lineN ?? '·'}`).slice(0, 40),
@@ -256,7 +264,7 @@ function textLayerFor(p, box, rendered) {
       antiAlias: 'smooth',
       warp: warpForCurve(s.curve),
       shapeType: 'box',
-      boxBounds: [0, 0, Math.round(box.w), Math.round(box.h)],
+      boxBounds: [0, 0, Math.round(box.w * scale), Math.round(box.h * scale)],
       style: {
         font: { name: postScriptName(s.font) },
         fontSize,
@@ -286,16 +294,25 @@ function textLayerFor(p, box, rendered) {
 //   Brush    — reserved slot for Phase 4 brush layers (empty for now)
 //   Cleaning — one masked patch per clean layer + hidden full-page AI mask
 //   Base     — Cleaned (if any) over Raw
-export async function buildPagePsd(p) {
+//
+// `scale` supersamples the whole document (default 2) so the rasterized text
+// stays sharp when zoomed in Preview / on lower-res pages. Text is rendered
+// natively at the scaled resolution (crisp), base art is scaled up. The
+// embedded JSON stays in ORIGINAL page coordinates, so re-import is unaffected
+// by scale and remains lossless.
+export async function buildPagePsd(p, scale = 2) {
   await document.fonts.ready;
   const W = p.w ?? PAGE_W;
   const H = p.h ?? PAGE_H;
+  const SW = Math.round(W * scale);
+  const SH = Math.round(H * scale);
+  const sc = (v) => Math.round(v * scale);
 
-  // Exact app composite (mirrors renderPageBlob) → the PSD's merged image AND a
+  // Exact app composite at the scaled resolution → the PSD's merged image AND a
   // hidden reference layer, so the file's appearance matches the app even where
   // Photoshop can't reproduce roughen/curve.
-  const compCanvas = await renderPageCanvas(p);
-  const compImageData = compCanvas.getContext('2d').getImageData(0, 0, W, H);
+  const compCanvas = await renderPageCanvas(p, scale);
+  const compImageData = compCanvas.getContext('2d').getImageData(0, 0, SW, SH);
 
   const children = [];
 
@@ -305,8 +322,8 @@ export async function buildPagePsd(p) {
     hidden: true,
     left: 0,
     top: 0,
-    right: W,
-    bottom: H,
+    right: SW,
+    bottom: SH,
     imageData: compImageData,
   });
 
@@ -316,7 +333,7 @@ export async function buildPagePsd(p) {
   children.push({
     name: 'Text',
     opened: true,
-    children: (p.boxes ?? []).map((b) => textLayerFor(p, b, renderBoxLayer(b, W, H, scratch, p))),
+    children: (p.boxes ?? []).map((b) => textLayerFor(p, b, renderBoxLayer(b, W, H, scratch, p, scale), scale)),
   });
 
   // Brush group — reserved for Phase 4, empty for now.
@@ -327,7 +344,7 @@ export async function buildPagePsd(p) {
   let fullMask = null;
   if (p.clean?.maskPng) {
     try {
-      fullMask = await imageDataFromBase64Png(p.clean.maskPng);
+      fullMask = await imageDataFromBase64Png(p.clean.maskPng, SW, SH);
     } catch {
       fullMask = null;
     }
@@ -335,27 +352,31 @@ export async function buildPagePsd(p) {
   for (const L of p.clean?.layers ?? []) {
     if (!L.patchPng) continue;
     const [bx, by, bw, bh] = L.box;
+    const lx = sc(bx);
+    const ly = sc(by);
+    const lw = sc(bw);
+    const lh = sc(bh);
     let patch;
     try {
-      patch = await imageDataFromBase64Png(L.patchPng, bw, bh);
+      patch = await imageDataFromBase64Png(L.patchPng, lw, lh);
     } catch {
       continue;
     }
     const layer = {
       name: `clean-${L.n} (${L.method})`,
       hidden: !L.visible,
-      left: Math.round(bx),
-      top: Math.round(by),
-      right: Math.round(bx + bw),
-      bottom: Math.round(by + bh),
+      left: lx,
+      top: ly,
+      right: lx + lw,
+      bottom: ly + lh,
       imageData: patch,
     };
     // Non-destructive: mask the patch to the detected text region so it only
     // covers the original text, cropped from the full-page mask.
     if (fullMask) {
       try {
-        const maskData = cropImageData(fullMask, Math.round(bx), Math.round(by), bw, bh);
-        layer.mask = { left: Math.round(bx), top: Math.round(by), imageData: maskData, defaultColor: 0 };
+        const maskData = cropImageData(fullMask, lx, ly, lw, lh);
+        layer.mask = { left: lx, top: ly, imageData: maskData, defaultColor: 0 };
       } catch {
         /* skip mask on failure — patch still exports */
       }
@@ -375,11 +396,11 @@ export async function buildPagePsd(p) {
   }
   if (cleanChildren.length) children.push({ name: 'Cleaning', opened: true, children: cleanChildren });
 
-  // Base group — Cleaned over Raw (bottom).
+  // Base group — Cleaned over Raw (bottom). Both scaled to fill the document.
   const baseChildren = [];
   if (p.cleaned) {
     try {
-      const data = await imageDataFromSrc(p.cleaned, W, H);
+      const data = await imageDataFromSrc(p.cleaned, SW, SH);
       baseChildren.push({ name: 'Cleaned', left: 0, top: 0, right: data.width, bottom: data.height, imageData: data });
     } catch {
       /* skip */
@@ -387,7 +408,7 @@ export async function buildPagePsd(p) {
   }
   if (p.raw) {
     try {
-      const data = await imageDataFromSrc(p.raw);
+      const data = await imageDataFromSrc(p.raw, SW, SH);
       baseChildren.push({ name: 'Raw', left: 0, top: 0, right: data.width, bottom: data.height, imageData: data });
     } catch {
       /* skip */
@@ -395,22 +416,23 @@ export async function buildPagePsd(p) {
   }
   if (baseChildren.length) children.push({ name: 'Base', opened: true, children: baseChildren });
 
-  // Embedded lossless project state.
-  const project = { key: PROJECT_KEY, schema: SCHEMA, page: serializePage(p) };
+  // Embedded lossless project state — ORIGINAL page coordinates (scale-agnostic).
+  const project = { key: PROJECT_KEY, schema: SCHEMA, scale, page: serializePage(p) };
 
+  const dpi = Math.round(72 * scale); // higher DPI keeps physical size constant
   const psd = {
-    width: W,
-    height: H,
+    width: SW,
+    height: SH,
     colorMode: 3, // RGB
     bitsPerChannel: 8,
     children,
-    imageData: compImageData, // merged/composite image = exact app render
+    imageData: compImageData, // merged/composite image = exact app render (scaled)
     imageResources: {
       resolutionInfo: {
-        horizontalResolution: 72,
+        horizontalResolution: dpi,
         horizontalResolutionUnit: 'PPI',
         widthUnit: 'Inches',
-        verticalResolution: 72,
+        verticalResolution: dpi,
         verticalResolutionUnit: 'PPI',
         heightUnit: 'Inches',
       },
@@ -418,7 +440,7 @@ export async function buildPagePsd(p) {
     },
   };
 
-  const psb = W > PSD_MAX || H > PSD_MAX;
+  const psb = SW > PSD_MAX || SH > PSD_MAX;
   return writePsd(psd, { noBackground: true, generateThumbnail: true, psb });
 }
 
@@ -618,11 +640,12 @@ export async function psdSelfTest(p) {
     }
   }
 
-  // 2) Visual parity: PSD composite vs the exact app render (byte-identical by
-  // construction — we wrote the render as the merged image).
+  // 2) Visual parity: PSD composite vs the exact app render at the same scale
+  // (byte-identical by construction — we wrote that render as the merged image).
+  const scale = project.scale || 1;
   const comp = psd.canvas ? psd.canvas.getContext('2d').getImageData(0, 0, psd.width, psd.height) : psd.imageData;
-  const refCanvas = await renderPageCanvas(src);
-  const ref = refCanvas.getContext('2d').getImageData(0, 0, src.w, src.h);
+  const refCanvas = await renderPageCanvas(src, scale);
+  const ref = refCanvas.getContext('2d').getImageData(0, 0, Math.round(src.w * scale), Math.round(src.h * scale));
   let maxDiff = 0;
   if (comp && comp.data.length === ref.data.length) {
     for (let i = 0; i < ref.data.length; i++) maxDiff = Math.max(maxDiff, Math.abs(comp.data[i] - ref.data[i]));
