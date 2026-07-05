@@ -244,41 +244,101 @@ export async function renderPageCanvas(p) {
   }
   ctx.imageSmoothingQuality = 'high'; // crisp downscale of the supersampled text
   for (const box of p.boxes) {
-    const s = box.style;
-    const rot = s.rotation || 0;
-    const opaque = (s.opacity ?? 1) >= 0.999;
     ctx.save();
-    ctx.globalAlpha = s.opacity ?? 1;
-    if (rot !== 0 && !s.roughen.on && opaque) {
-      // Rotated text: paint glyphs DIRECTLY at the angle so they rasterize sharp
-      // (rotating a pre-rendered bitmap would resample and soften it). Pivot
-      // around the box center like the editor rotates .tbox. Roughened or
-      // translucent boxes fall through to the raster path so their pixel filter
-      // / alpha compositing stays correct.
-      const L = layoutBox(box);
-      ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
-      ctx.rotate((rot * Math.PI) / 180);
-      ctx.translate(-box.w / 2 - L.ox, -box.h / 2 - L.oy);
-      paintBox(ctx, box, L);
-    } else {
-      const { canvas: bc, pad, leftExtra, topExtra, cw, ch } = renderBox(box);
-      if (rot === 0) {
-        // Integer-snap the bitmap origin so a sub-pixel box position doesn't
-        // force a bilinear resample of the whole text block (the primary blur).
-        const originX = Math.round(box.x - leftExtra - pad);
-        const originY = Math.round(box.y - topExtra - pad);
-        ctx.drawImage(bc, originX, originY, cw, ch);
-      } else {
-        // Rotated raster fallback (roughened/translucent): downsample the SSx
-        // bitmap into its native footprint, pivoting at the box center.
-        ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
-        ctx.rotate((rot * Math.PI) / 180);
-        ctx.drawImage(bc, -(box.w / 2 + leftExtra + pad), -(box.h / 2 + topExtra + pad), cw, ch);
-      }
-    }
+    ctx.globalAlpha = box.style.opacity ?? 1;
+    paintBoxOnPage(ctx, box);
     ctx.restore();
   }
   return canvas;
+}
+
+// Draw one box's glyphs onto `ctx` at page coordinates, exactly as the page
+// composite does — sharp direct-angle draw for rotated opaque text, raster
+// fallback for roughened/translucent. Opacity is applied by the caller (via
+// ctx.globalAlpha or a layer opacity), NOT here, so the same pixels can back a
+// translucent PSD layer.
+function paintBoxOnPage(ctx, box) {
+  const s = box.style;
+  const rot = s.rotation || 0;
+  const opaque = (s.opacity ?? 1) >= 0.999;
+  if (rot !== 0 && !s.roughen.on && opaque) {
+    // Rotated text: paint glyphs DIRECTLY at the angle so they rasterize sharp
+    // (rotating a pre-rendered bitmap would resample and soften it). Pivot
+    // around the box center like the editor rotates .tbox. Roughened or
+    // translucent boxes fall through to the raster path so their pixel filter
+    // / alpha compositing stays correct.
+    const L = layoutBox(box);
+    ctx.save();
+    ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
+    ctx.rotate((rot * Math.PI) / 180);
+    ctx.translate(-box.w / 2 - L.ox, -box.h / 2 - L.oy);
+    paintBox(ctx, box, L);
+    ctx.restore();
+  } else {
+    const { canvas: bc, pad, leftExtra, topExtra, cw, ch } = renderBox(box);
+    if (rot === 0) {
+      // Integer-snap the bitmap origin so a sub-pixel box position doesn't
+      // force a bilinear resample of the whole text block (the primary blur).
+      const originX = Math.round(box.x - leftExtra - pad);
+      const originY = Math.round(box.y - topExtra - pad);
+      ctx.drawImage(bc, originX, originY, cw, ch);
+    } else {
+      // Rotated raster fallback (roughened/translucent): downsample the SSx
+      // bitmap into its native footprint, pivoting at the box center.
+      ctx.save();
+      ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
+      ctx.rotate((rot * Math.PI) / 180);
+      ctx.drawImage(bc, -(box.w / 2 + leftExtra + pad), -(box.h / 2 + topExtra + pad), cw, ch);
+      ctx.restore();
+    }
+  }
+}
+
+// Render a single box to its own compact, transparent canvas with the exact
+// sharp pixels the page composite would show for it (opacity NOT baked in —
+// returned as `opacity`). Used as the cached rasterization of an editable PSD
+// text layer so it displays pixel-identical to the app even when the manga
+// font is missing in Photoshop. Returns null for a box that paints nothing.
+// `scratch` is an optional reusable W×H canvas to avoid per-box allocations.
+export function renderBoxLayer(box, W, H, scratch) {
+  const cnv = scratch || document.createElement('canvas');
+  if (cnv.width !== W) cnv.width = W;
+  if (cnv.height !== H) cnv.height = H;
+  const ctx = cnv.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  ctx.imageSmoothingQuality = 'high';
+  paintBoxOnPage(ctx, box); // full opacity; layer opacity applied by consumer
+  const full = ctx.getImageData(0, 0, W, H);
+  const d = full.data;
+  let minX = W,
+    minY = H,
+    maxX = -1,
+    maxY = -1;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (d[(y * W + x) * 4 + 3] !== 0) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return null; // nothing drawn (empty text)
+  const w = maxX - minX + 1;
+  const h = maxY - minY + 1;
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  out.getContext('2d').putImageData(full, -minX, -minY);
+  return {
+    imageData: out.getContext('2d').getImageData(0, 0, w, h),
+    left: minX,
+    top: minY,
+    right: minX + w,
+    bottom: minY + h,
+    opacity: box.style.opacity ?? 1,
+  };
 }
 
 // Render one page to a Blob in the requested raster format (native resolution).

@@ -11,7 +11,7 @@
 // Tauri webview / vite browser), so no explicit initializeCanvas call is needed.
 import { writePsd, readPsd } from 'ag-psd';
 import { app, toast, loadProjectPages, PAGE_W, PAGE_H } from './store.svelte.js';
-import { renderPageCanvas } from './exporter.js';
+import { renderPageCanvas, renderBoxLayer } from './exporter.js';
 import { fontCssFor } from './store.svelte.js';
 
 // Bumped when the embedded schema changes in a non-back-compatible way. Import
@@ -216,48 +216,11 @@ function warpForCurve(curve) {
   return { style: 'arc', value: Math.max(-100, Math.min(100, curve)), perspective: 0, perspectiveOther: 0, rotate: 'horizontal' };
 }
 
-// Drop shadow + outline (stroke) as native layer effects. roughen/exact curve
-// have no native equivalent — intentionally omitted; the JSON carries them.
-function effectsForStyle(s) {
-  const fx = {};
-  if (s.shadow?.on) {
-    const dist = Math.round(Math.hypot(s.shadow.x || 0, s.shadow.y || 0));
-    // PS angle is the direction the light comes FROM (opposite the offset), y up.
-    const angle = Math.round((Math.atan2(-(s.shadow.y || 0), -(s.shadow.x || 0)) * 180) / Math.PI);
-    fx.dropShadow = [
-      {
-        present: true,
-        enabled: true,
-        color: hexToRgb(s.shadow.color),
-        opacity: s.shadow.opacity ?? 0.6,
-        blendMode: 'multiply',
-        distance: { units: 'Pixels', value: dist },
-        angle,
-        useGlobalLight: false,
-        size: { units: 'Pixels', value: s.shadow.blur || 0 },
-        choke: { units: 'Pixels', value: 0 },
-      },
-    ];
-  }
-  if ((s.outlineWidth || 0) > 0) {
-    fx.stroke = [
-      {
-        present: true,
-        enabled: true,
-        size: { units: 'Pixels', value: s.outlineWidth },
-        position: 'outside',
-        fillType: 'color',
-        blendMode: 'normal',
-        opacity: 1,
-        color: hexToRgb(s.outline),
-      },
-    ];
-  }
-  return Object.keys(fx).length ? fx : undefined;
-}
-
-// Build one editable text layer for a box.
-function textLayerFor(p, box) {
+// Build one editable text layer for a box. `rendered` (from renderBoxLayer) is
+// the box's exact sharp pixels — the layer's cached rasterization — so it
+// displays pixel-identical to the app even when the manga font is missing in
+// Photoshop, while remaining an editable type layer (engineData below).
+function textLayerFor(p, box, rendered) {
   const s = box.style;
   const raw = boxTextFor(p, box);
   const content = s.uppercase ? raw.toUpperCase() : raw;
@@ -272,15 +235,20 @@ function textLayerFor(p, box) {
   const fontSize = s.size;
   const tracking = fontSize > 0 ? Math.round(((s.letterSpacing || 0) / fontSize) * 1000) : 0;
 
+  // Layer bounds follow the cached raster (tight) when present, else the box.
+  const bounds = rendered
+    ? { left: rendered.left, top: rendered.top, right: rendered.right, bottom: rendered.bottom }
+    : { left: Math.round(box.x), top: Math.round(box.y), right: Math.round(box.x + box.w), bottom: Math.round(box.y + box.h) };
+
   return {
     name: (raw || `line ${box.lineN ?? '·'}`).slice(0, 40),
-    left: Math.round(box.x),
-    top: Math.round(box.y),
-    right: Math.round(box.x + box.w),
-    bottom: Math.round(box.y + box.h),
+    ...bounds,
+    imageData: rendered ? rendered.imageData : undefined,
     opacity: s.opacity ?? 1,
     blendMode: 'normal',
-    effects: effectsForStyle(s),
+    // Outline + shadow (and roughen/curve) are baked into the cached pixels
+    // above for pixel-exact, sharp display; we deliberately DON'T also attach
+    // layer effects here — Photoshop would double them over the baked pixels.
     text: {
       text: content,
       orientation: 'horizontal',
@@ -342,11 +310,13 @@ export async function buildPagePsd(p) {
     imageData: compImageData,
   });
 
-  // Text group
+  // Text group — one editable type layer per box, each backed by the box's
+  // exact sharp pixels (a shared scratch canvas avoids per-box allocations).
+  const scratch = document.createElement('canvas');
   children.push({
     name: 'Text',
     opened: true,
-    children: (p.boxes ?? []).map((b) => textLayerFor(p, b)),
+    children: (p.boxes ?? []).map((b) => textLayerFor(p, b, renderBoxLayer(b, W, H, scratch))),
   });
 
   // Brush group — reserved for Phase 4, empty for now.
