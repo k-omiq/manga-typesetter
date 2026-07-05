@@ -216,12 +216,15 @@ function renderBox(box) {
   return { canvas: cnv, pad: L.pad, leftExtra: L.leftExtra, topExtra: L.topExtra, cw: L.cw, ch: L.ch };
 }
 
-const MIME = { PNG: 'image/png', JPG: 'image/jpeg', WebP: 'image/webp' };
-const EXT = { PNG: 'png', JPG: 'jpg', WebP: 'webp' };
-const QUALITY = { PNG: undefined, JPG: 0.95, WebP: 0.92 };
+const MIME = { PNG: 'image/png', JPG: 'image/jpeg', WebP: 'image/webp', PSD: 'image/vnd.adobe.photoshop' };
+const EXT = { PNG: 'png', JPG: 'jpg', WebP: 'webp', PSD: 'psd' };
+const QUALITY = { PNG: undefined, JPG: 0.95, WebP: 0.92, PSD: undefined };
 
-// Render one page to a Blob in the requested format (native resolution).
-async function renderPageBlob(p, fmt) {
+// Render one page to a canvas in native resolution: white base + cleaned image
+// (if any) + all text boxes composited exactly as the editor shows them. Split
+// out from renderPageBlob so the PSD exporter can grab the exact composite
+// ImageData (for the flattened preview / merged image) without a Blob round-trip.
+export async function renderPageCanvas(p) {
   const W = p.w,
     H = p.h;
   const canvas = document.createElement('canvas');
@@ -275,6 +278,12 @@ async function renderPageBlob(p, fmt) {
     }
     ctx.restore();
   }
+  return canvas;
+}
+
+// Render one page to a Blob in the requested raster format (native resolution).
+async function renderPageBlob(p, fmt) {
+  const canvas = await renderPageCanvas(p);
   return new Promise((res) => canvas.toBlob(res, MIME[fmt], QUALITY[fmt]));
 }
 
@@ -339,7 +348,17 @@ export async function exportImages(fmt, scope) {
     const ext = EXT[fmt];
     const items = [];
     for (const p of pages) {
-      const blob = await renderPageBlob(p, fmt);
+      let blob;
+      if (fmt === 'PSD') {
+        // Layered, editable PSD carrying the full project as embedded JSON so
+        // it round-trips losslessly (one .psd per page). Lazily imported so
+        // ag-psd isn't pulled into the raster-export path.
+        const { buildPagePsd } = await import('./psd.js');
+        const bytes = await buildPagePsd(p);
+        blob = new Blob([bytes], { type: MIME.PSD });
+      } else {
+        blob = await renderPageBlob(p, fmt);
+      }
       items.push({ name: `${app.exportName}-${p.id}.${ext}`, blob, page: p });
     }
     if (isTauri()) {

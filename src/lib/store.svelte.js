@@ -12,6 +12,7 @@ import {
 export { PAGE_W, PAGE_H };
 
 let boxSeq = 1;
+let pageLoadSeq = 5000; // page ids for imported projects that carry none
 
 function clonePage(p) {
   const cloned = {
@@ -49,6 +50,54 @@ function clonePage(p) {
   };
   cloned.activeLineN = firstUnplaced(cloned);
   return cloned;
+}
+
+// Replace all pages from an imported project (e.g. a lossless PSD). Mirrors
+// clonePage but assigns fresh box AND clean-layer ids from the store's own
+// sequences (so nothing collides with existing state) and normalizes styles up
+// to the current schema. Object URLs (raw/cleaned/clean.base) are passed
+// through as-is — the caller regenerates them from the source.
+export function loadProjectPages(rawPages) {
+  app.pages = rawPages.map((p) => {
+    const cp = {
+      id: p.id ?? pageLoadSeq++,
+      raw: p.raw ?? null,
+      cleaned: p.cleaned ?? null,
+      w: p.w ?? PAGE_W,
+      h: p.h ?? PAGE_H,
+      lines: (p.lines ?? []).map((l) => ({ ...l })),
+      clean: p.clean
+        ? {
+            base: p.clean.base ?? null,
+            maskPng: p.clean.maskPng ?? null,
+            status: { ...(p.clean.status ?? {}) },
+            layers: (p.clean.layers ?? []).map((l) => ({ ...l, id: 'L' + layerSeq++ })),
+          }
+        : { base: null, maskPng: null, status: {}, layers: [] },
+      detect: p.detect
+        ? { panels: (p.detect.panels ?? []).slice(), boxes: p.detect.boxes.map((b) => ({ ...b })) }
+        : null,
+      boxes: (p.boxes ?? []).map((b) => ({
+        id: 'b' + boxSeq++,
+        lineN: b.lineN,
+        text: b.text ?? null,
+        x: b.x,
+        y: b.y,
+        w: b.w,
+        h: b.h,
+        style: normalizeStyle(b.style),
+      })),
+      activeLineN: null,
+    };
+    cp.activeLineN = firstUnplaced(cp);
+    return cp;
+  });
+  app.pageIndex = 0;
+  app.selectedId = null;
+  app.selectedLayerId = null;
+  app.editingId = null;
+  app.loaded = true;
+  markUnsaved();
 }
 
 export function firstUnplaced(p) {
