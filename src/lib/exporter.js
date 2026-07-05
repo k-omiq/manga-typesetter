@@ -52,14 +52,13 @@ function roughen(ctx, w, h, amount, detail, seed) {
   ctx.putImageData(dst, 0, 0);
 }
 
-// Render one box's text onto an offscreen canvas (native units).
-// The canvas is grown to contain the FULL text block, including any overflow
-// beyond the box rectangle on all sides — mirroring the editor's
-// `overflow:visible` centered layout so nothing gets clipped on export.
-// Returns {canvas, pad, leftExtra, topExtra}: leftExtra/topExtra are how far
-// the box's top-left sits inside the (padded) canvas, so the caller can pivot
-// rotation around the box center exactly like the app.
-function renderBox(box) {
+// Lay out a box's text and compute its canvas geometry WITHOUT drawing. The
+// footprint (cw×ch) grows to contain the full block incl. overflow beyond the
+// box rect on all sides — mirroring the editor's `overflow:visible` centered
+// layout so nothing clips on export. (ox,oy) is where the box's top-left sits
+// inside that footprint. Split out from painting so rotated text can be drawn
+// directly onto the page canvas (sharp glyphs) instead of rotating a raster.
+function layoutBox(box) {
   const s = box.style;
   const text = applyCase(boxText(box), s);
   const lineH = s.size * s.lineHeight;
@@ -69,9 +68,6 @@ function renderBox(box) {
 
   const isCurve = s.curve && s.curve !== 0 && text.trim() !== '';
 
-  // ---- 1. Lay out text and compute its real bounds relative to the box rect.
-  // Bounds are expressed as overflow distances beyond each edge of the box
-  // (0 when the text fits inside that edge).
   let lines = null;
   let layout = null;
   let leftExtra = 0,
@@ -80,8 +76,6 @@ function renderBox(box) {
     bottomExtra = 0;
 
   if (isCurve) {
-    // Curved single-line: glyphs are positioned around the box center. Find the
-    // glyph extent (incl. half a glyph's size as a rough cap for stroke/shape).
     layout = arcLayout(text, s, s.size);
     let minX = 0,
       maxX = 0,
@@ -94,70 +88,60 @@ function renderBox(box) {
       minY = Math.min(minY, g.y - half);
       maxY = Math.max(maxY, g.y + half);
     }
-    // Glyph coords are relative to box center; convert to per-edge overflow.
     leftExtra = Math.max(0, -minX - box.w / 2);
     rightExtra = Math.max(0, maxX - box.w / 2);
     topExtra = Math.max(0, -minY - box.h / 2);
     bottomExtra = Math.max(0, maxY - box.h / 2);
   } else {
-    // box.w - 4 = content width (the box has 2px horizontal padding each side),
-    // so export breaks lines exactly where the editor's CSS does.
+    // box.w - 4 = content width (2px horizontal padding each side), so export
+    // breaks lines exactly where the editor's CSS does.
     lines = wrapLinesDOM(text, s, s.size, box.w - 4);
     const blockH = lines.length * lineH;
     const blockW = maxLineWidth(lines, s, s.size);
 
-    // Vertical overflow depends on valign (mirrors flex align-items).
     if (s.valign === 'middle') {
       const o = Math.max(0, (blockH - box.h) / 2);
       topExtra = o;
       bottomExtra = o;
     } else if (s.valign === 'bottom') {
-      topExtra = Math.max(0, blockH - box.h); // block ends at box bottom
+      topExtra = Math.max(0, blockH - box.h);
     } else {
-      bottomExtra = Math.max(0, blockH - box.h); // top: block starts at box top
+      bottomExtra = Math.max(0, blockH - box.h);
     }
 
-    // Horizontal overflow depends on text-align (line wider than box.w spills).
     const hOver = Math.max(0, blockW - box.w);
     if (s.align === 'center') {
       leftExtra = hOver / 2;
       rightExtra = hOver / 2;
     } else if (s.align === 'right') {
-      leftExtra = hOver; // anchored at box right → spills left
+      leftExtra = hOver;
     } else {
-      rightExtra = hOver; // left: anchored at box left → spills right
+      rightExtra = hOver;
     }
   }
 
-  // ---- 2. Size the canvas to box + overflow + pad (for stroke/shadow/roughen).
   leftExtra = Math.ceil(leftExtra);
   rightExtra = Math.ceil(rightExtra);
   topExtra = Math.ceil(topExtra);
   bottomExtra = Math.ceil(bottomExtra);
-  const ox = leftExtra + pad; // box's top-left X inside the canvas
-  const oy = topExtra + pad; // box's top-left Y inside the canvas
+  const ox = leftExtra + pad; // box's top-left X inside the footprint
+  const oy = topExtra + pad; // box's top-left Y inside the footprint
   const cw = Math.ceil(box.w + leftExtra + rightExtra + pad * 2);
   const ch = Math.ceil(box.h + topExtra + bottomExtra + pad * 2);
+  return { s, lineH, pad, isCurve, lines, layout, leftExtra, topExtra, ox, oy, cw, ch };
+}
 
-  // Supersample non-roughened text 2x: render the glyphs at double resolution so
-  // that downsampling them onto the page canvas yields crisp edges (fixes export
-  // blur). Roughened boxes stay 1x — their effect is pixel-space displacement
-  // (getImageData/putImageData) that must match the composited resolution.
-  const SS = s.roughen.on ? 1 : 2;
-  const cnv = document.createElement('canvas');
-  cnv.width = cw * SS;
-  cnv.height = ch * SS;
-  const ctx = cnv.getContext('2d');
-  ctx.scale(SS, SS); // all drawing stays in native units; SS handled here
-  ctx.imageSmoothingQuality = 'high';
-  const family = familyFor(s);
-  ctx.font = fontShorthand(s, s.size, family);
+// Paint a laid-out box (L from layoutBox) onto `ctx`, with the box's top-left at
+// (L.ox, L.oy) in the current transform. Works on either an offscreen canvas or
+// directly on a rotated page context.
+function paintBox(ctx, box, L) {
+  const s = L.s;
+  ctx.font = fontShorthand(s, s.size, familyFor(s));
   ctx.textBaseline = 'top';
   ctx.lineJoin = 'round';
   ctx.miterLimit = 2;
 
   const strokeFill = (drawFns) => {
-    // shadow pass
     if (s.shadow.on) {
       ctx.save();
       ctx.shadowColor = hexToRgba(s.shadow.color, s.shadow.opacity);
@@ -168,7 +152,6 @@ function renderBox(box) {
       drawFns.fill();
       ctx.restore();
     }
-    // outline
     if (s.outlineWidth > 0) {
       ctx.strokeStyle = s.outline;
       ctx.lineWidth = s.outlineWidth * 2;
@@ -178,15 +161,13 @@ function renderBox(box) {
     drawFns.fill();
   };
 
-  if (isCurve) {
-    // curved single-line layout along a circular arc, centered on the box.
-    const cx = ox + box.w / 2;
-    const cy = oy + box.h / 2;
-    const prevBaseline = ctx.textBaseline;
+  if (L.isCurve) {
+    const cx = L.ox + box.w / 2;
+    const cy = L.oy + box.h / 2;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
     const place = (cb) => {
-      for (const g of layout) {
+      for (const g of L.layout) {
         ctx.save();
         ctx.translate(cx + g.x, cy + g.y);
         ctx.rotate(g.rot);
@@ -195,33 +176,44 @@ function renderBox(box) {
       }
     };
     strokeFill({
-      stroke: () => place((ch, x, y) => ctx.strokeText(ch, x, y)),
-      fill: () => place((ch, x, y) => ctx.fillText(ch, x, y)),
+      stroke: () => place((c, x, y) => ctx.strokeText(c, x, y)),
+      fill: () => place((c, x, y) => ctx.fillText(c, x, y)),
     });
-    ctx.textBaseline = prevBaseline;
   } else {
-    // straight multi-line layout. The text block is positioned relative to the
-    // box rectangle (whose top-left sits at ox,oy inside the enlarged canvas).
     if ('letterSpacing' in ctx) ctx.letterSpacing = `${s.letterSpacing}px`;
-    const blockH = lines.length * lineH;
-    let startY = oy;
-    if (s.valign === 'middle') startY = oy + (box.h - blockH) / 2;
-    else if (s.valign === 'bottom') startY = oy + (box.h - blockH);
+    const blockH = L.lines.length * L.lineH;
+    let startY = L.oy;
+    if (s.valign === 'middle') startY = L.oy + (box.h - blockH) / 2;
+    else if (s.valign === 'bottom') startY = L.oy + (box.h - blockH);
     ctx.textAlign = s.align;
-    const anchorX = s.align === 'left' ? ox : s.align === 'right' ? ox + box.w : ox + box.w / 2;
+    const anchorX = s.align === 'left' ? L.ox : s.align === 'right' ? L.ox + box.w : L.ox + box.w / 2;
     const drawAll = (fn) => {
-      lines.forEach((ln, i) => fn(ln, anchorX, startY + i * lineH + (lineH - s.size) / 2));
+      L.lines.forEach((ln, i) => fn(ln, anchorX, startY + i * L.lineH + (L.lineH - s.size) / 2));
     };
     strokeFill({
       stroke: () => drawAll((ln, x, y) => ctx.strokeText(ln, x, y)),
       fill: () => drawAll((ln, x, y) => ctx.fillText(ln, x, y)),
     });
   }
+}
 
-  if (s.roughen.on) roughen(ctx, cw, ch, s.roughen.amount, s.roughen.detail, s.roughen.seed);
-  // cw/ch are the NATIVE (unscaled) draw size; the caller downsamples the SSx
-  // bitmap into that footprint.
-  return { canvas: cnv, pad, leftExtra, topExtra, cw, ch };
+// Render a box to its own supersampled offscreen canvas. Used for un-rotated
+// boxes and for rotated+roughened boxes (whose pixel-space displacement needs
+// an axis-aligned raster). Non-roughened text is supersampled 2x so the
+// downscale-on-composite yields crisp edges.
+function renderBox(box) {
+  const L = layoutBox(box);
+  const s = L.s;
+  const SS = s.roughen.on ? 1 : 2;
+  const cnv = document.createElement('canvas');
+  cnv.width = L.cw * SS;
+  cnv.height = L.ch * SS;
+  const ctx = cnv.getContext('2d');
+  ctx.scale(SS, SS); // all drawing stays in native units; SS handled here
+  ctx.imageSmoothingQuality = 'high';
+  paintBox(ctx, box, L);
+  if (s.roughen.on) roughen(ctx, L.cw, L.ch, s.roughen.amount, s.roughen.detail, s.roughen.seed);
+  return { canvas: cnv, pad: L.pad, leftExtra: L.leftExtra, topExtra: L.topExtra, cw: L.cw, ch: L.ch };
 }
 
 const MIME = { PNG: 'image/png', JPG: 'image/jpeg', WebP: 'image/webp' };
@@ -249,23 +241,37 @@ async function renderPageBlob(p, fmt) {
   }
   ctx.imageSmoothingQuality = 'high'; // crisp downscale of the supersampled text
   for (const box of p.boxes) {
-    const { canvas: bc, pad, leftExtra, topExtra, cw, ch } = renderBox(box);
+    const s = box.style;
+    const rot = s.rotation || 0;
+    const opaque = (s.opacity ?? 1) >= 0.999;
     ctx.save();
-    ctx.globalAlpha = box.style.opacity ?? 1;
-    const rot = box.style.rotation || 0;
-    if (rot === 0) {
-      // Integer-snap the bitmap origin so a sub-pixel box position doesn't force
-      // a bilinear resample of the whole text block (the primary export blur).
-      // The box's top-left sits at (box.x - leftExtra - pad) inside the bitmap.
-      const originX = Math.round(box.x - leftExtra - pad);
-      const originY = Math.round(box.y - topExtra - pad);
-      ctx.drawImage(bc, originX, originY, cw, ch);
-    } else {
-      // Rotated: pivot around the box center like the editor rotates .tbox, and
-      // downsample the SSx bitmap into its native footprint.
+    ctx.globalAlpha = s.opacity ?? 1;
+    if (rot !== 0 && !s.roughen.on && opaque) {
+      // Rotated text: paint glyphs DIRECTLY at the angle so they rasterize sharp
+      // (rotating a pre-rendered bitmap would resample and soften it). Pivot
+      // around the box center like the editor rotates .tbox. Roughened or
+      // translucent boxes fall through to the raster path so their pixel filter
+      // / alpha compositing stays correct.
+      const L = layoutBox(box);
       ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
       ctx.rotate((rot * Math.PI) / 180);
-      ctx.drawImage(bc, -(box.w / 2 + leftExtra + pad), -(box.h / 2 + topExtra + pad), cw, ch);
+      ctx.translate(-box.w / 2 - L.ox, -box.h / 2 - L.oy);
+      paintBox(ctx, box, L);
+    } else {
+      const { canvas: bc, pad, leftExtra, topExtra, cw, ch } = renderBox(box);
+      if (rot === 0) {
+        // Integer-snap the bitmap origin so a sub-pixel box position doesn't
+        // force a bilinear resample of the whole text block (the primary blur).
+        const originX = Math.round(box.x - leftExtra - pad);
+        const originY = Math.round(box.y - topExtra - pad);
+        ctx.drawImage(bc, originX, originY, cw, ch);
+      } else {
+        // Rotated raster fallback (roughened/translucent): downsample the SSx
+        // bitmap into its native footprint, pivoting at the box center.
+        ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
+        ctx.rotate((rot * Math.PI) / 180);
+        ctx.drawImage(bc, -(box.w / 2 + leftExtra + pad), -(box.h / 2 + topExtra + pad), cw, ch);
+      }
     }
     ctx.restore();
   }
