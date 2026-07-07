@@ -13,6 +13,7 @@ import json
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from . import __version__, config
 
@@ -57,53 +58,13 @@ def create_app() -> FastAPI:
 
     @app.post("/analyze")
     async def analyze(image: UploadFile = File(...), ocr: bool = True):
-        """Detect text blocks + OCR. Returns lines in JP reading order + mask PNG."""
-        import cv2
-        import numpy as np
+        """Detect text blocks + OCR. Returns lines in JP reading order + mask PNG.
 
-        from . import detect
-
+        The upload is read on the event loop; the CPU/model-bound work is offloaded
+        to the threadpool so /health and concurrent requests aren't blocked.
+        """
         raw = await image.read()
-        arr = np.frombuffer(raw, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise HTTPException(status_code=400, detail="could not decode image")
-
-        try:
-            result = detect.analyze(img, do_ocr=ocr)
-        except Exception as e:  # surface model/runtime errors to the client
-            raise HTTPException(status_code=500, detail=f"analyze failed: {e}") from e
-
-        from .sorting import sort_bubbles_by_reading_order
-
-        # Panel-aware RTL reading order: panels top→bottom, right→left; text
-        # ordered within each panel. Falls back to spatial sort if no panels.
-        dets = [dict(b, bbox=b["box"]) for b in result["blocks"]]
-        ordered = sort_bubbles_by_reading_order(dets, "rtl", result.get("panels") or None)
-        _assign_types(ordered)
-        lines = [
-            {
-                "n": i + 1,
-                "type": b["type"],
-                "jp": b["jp"],
-                "en": "",
-                "box": b["box"],
-                "vertical": b["vertical"],
-                "font_size": b["font_size"],
-            }
-            for i, b in enumerate(ordered)
-        ]
-
-        ok, buf = cv2.imencode(".png", result["mask_refined"])
-        mask_png = base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
-
-        return {
-            "img_width": result["img_width"],
-            "img_height": result["img_height"],
-            "lines": lines,
-            "panels": result.get("panels", []),
-            "mask_png": mask_png,
-        }
+        return await run_in_threadpool(_analyze_image, raw, ocr)
 
     @app.post("/clean")
     async def clean(
@@ -119,62 +80,12 @@ def create_app() -> FastAPI:
         `regions` is JSON: [{n, box:[x1,y1,x2,y2], method?}]. `mask_png` is the
         base64 text mask from /analyze; if omitted, detection is re-run to derive
         both the mask and the regions. Per-region `method` overrides the
-        uniform->fill / textured->inpaint choice (force-inpaint / force-fill).
+        uniform->fill / textured->inpaint choice. Heavy work runs in the threadpool.
         """
-        import cv2
-        import numpy as np
-
-        from . import clean as cleaner
-
         raw = await image.read()
-        arr = np.frombuffer(raw, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise HTTPException(status_code=400, detail="could not decode image")
-        H, W = img.shape[:2]
-
-        try:
-            region_list = json.loads(regions) if regions else []
-        except json.JSONDecodeError as e:
-            raise HTTPException(status_code=400, detail=f"bad regions json: {e}") from e
-
-        # The global default only applies to textured regions, where only the
-        # OpenCV inpaint flavours make sense.
-        if method not in ("telea", "ns"):
-            method = "telea"
-
-        mask = cleaner._decode_mask(mask_png, img.shape)
-
-        # Fall back to re-detection when the client didn't pass a mask/regions
-        # (e.g. cleaning without a prior /analyze round-trip).
-        if mask is None or not region_list:
-            from . import detect
-
-            try:
-                result = detect.analyze(img, do_ocr=False, do_panels=False)
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"detect failed: {e}") from e
-            if mask is None:
-                mask = np.where(result["mask_refined"] > 127, 255, 0).astype(np.uint8)
-            if not region_list:
-                region_list = [
-                    {"n": i + 1, "box": b["box"]}
-                    for i, b in enumerate(result["blocks"])
-                ]
-
-        try:
-            layers = cleaner.clean_regions(
-                img,
-                mask,
-                region_list,
-                default_inpaint=method,
-                uniform_threshold=uniform_threshold,
-                flux=flux,
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"clean failed: {e}") from e
-
-        return {"img_width": W, "img_height": H, "layers": layers}
+        return await run_in_threadpool(
+            _clean_image, raw, regions, mask_png, method, flux, uniform_threshold
+        )
 
     @app.post("/clean/brush")
     async def clean_brush(
@@ -188,34 +99,10 @@ def create_app() -> FastAPI:
         `image` is the current clean composite (raw + visible patches, so residue
         can be touched up); `mask_png` is the base64 painted alpha (full-page).
         Returns a single patch layer { box:[x,y,w,h], patch_png, method, fell_back }
-        the client turns into a brush layer. Mirrors /clean but for one hand-
-        painted region instead of the detected set.
+        the client turns into a brush layer. Heavy work runs in the threadpool.
         """
-        import cv2
-        import numpy as np
-
-        from . import clean as cleaner
-
         raw = await image.read()
-        arr = np.frombuffer(raw, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise HTTPException(status_code=400, detail="could not decode image")
-
-        mask = cleaner._decode_mask(mask_png, img.shape)
-        if mask is None or not np.any(mask):
-            raise HTTPException(status_code=400, detail="empty brush mask")
-
-        flux_inpainter = cleaner._load_flux_inpainter() if flux else None
-        try:
-            layer = cleaner.inpaint_brush(
-                img, mask, method=method, flux=flux, flux_inpainter=flux_inpainter
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"brush inpaint failed: {e}") from e
-        if layer is None:
-            raise HTTPException(status_code=400, detail="brush mask covered no pixels")
-        return layer
+        return await run_in_threadpool(_brush_inpaint, raw, mask_png, method, flux)
 
     @app.get("/translate/providers")
     async def translate_providers():
@@ -275,15 +162,161 @@ def create_app() -> FastAPI:
     async def flux_status():
         from . import flux as flux_mod
 
-        return flux_mod.status()
+        return await run_in_threadpool(flux_mod.status)
 
     @app.post("/clean/flux-download")
     async def flux_download():
         from . import flux as flux_mod
 
-        return flux_mod.download()
+        # A multi-minute `pip install` — must not run on the event loop or it
+        # freezes /health and every other request for the whole install.
+        return await run_in_threadpool(flux_mod.download)
 
     return app
+
+
+# ---------------------------------------------------------------------------
+# CPU/model-bound route bodies, run via run_in_threadpool so the async event
+# loop stays free. They raise HTTPException like inline handlers would — the
+# exception propagates out of the threadpool into the endpoint and is handled
+# by FastAPI normally (unlike the auth *middleware*, which must not raise).
+# ---------------------------------------------------------------------------
+def _analyze_image(raw: bytes, ocr: bool) -> dict:
+    import cv2
+    import numpy as np
+
+    from . import detect
+
+    arr = np.frombuffer(raw, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="could not decode image")
+
+    try:
+        result = detect.analyze(img, do_ocr=ocr)
+    except Exception as e:  # surface model/runtime errors to the client
+        raise HTTPException(status_code=500, detail=f"analyze failed: {e}") from e
+
+    from .sorting import sort_bubbles_by_reading_order
+
+    # Panel-aware RTL reading order: panels top→bottom, right→left; text
+    # ordered within each panel. Falls back to spatial sort if no panels.
+    dets = [dict(b, bbox=b["box"]) for b in result["blocks"]]
+    ordered = sort_bubbles_by_reading_order(dets, "rtl", result.get("panels") or None)
+    _assign_types(ordered)
+    lines = [
+        {
+            "n": i + 1,
+            "type": b["type"],
+            "jp": b["jp"],
+            "en": "",
+            "box": b["box"],
+            "vertical": b["vertical"],
+            "font_size": b["font_size"],
+        }
+        for i, b in enumerate(ordered)
+    ]
+
+    ok, buf = cv2.imencode(".png", result["mask_refined"])
+    mask_png = base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
+
+    return {
+        "img_width": result["img_width"],
+        "img_height": result["img_height"],
+        "lines": lines,
+        "panels": result.get("panels", []),
+        "mask_png": mask_png,
+    }
+
+
+def _clean_image(
+    raw: bytes,
+    regions: str,
+    mask_png: str,
+    method: str,
+    flux: bool,
+    uniform_threshold: float,
+) -> dict:
+    import cv2
+    import numpy as np
+
+    from . import clean as cleaner
+
+    arr = np.frombuffer(raw, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="could not decode image")
+    H, W = img.shape[:2]
+
+    try:
+        region_list = json.loads(regions) if regions else []
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"bad regions json: {e}") from e
+
+    # The global default only applies to textured regions, where only the
+    # OpenCV inpaint flavours make sense.
+    if method not in ("telea", "ns"):
+        method = "telea"
+
+    mask = cleaner._decode_mask(mask_png, img.shape)
+
+    # Fall back to re-detection when the client didn't pass a mask/regions
+    # (e.g. cleaning without a prior /analyze round-trip).
+    if mask is None or not region_list:
+        from . import detect
+
+        try:
+            result = detect.analyze(img, do_ocr=False, do_panels=False)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"detect failed: {e}") from e
+        if mask is None:
+            mask = np.where(result["mask_refined"] > 127, 255, 0).astype(np.uint8)
+        if not region_list:
+            region_list = [
+                {"n": i + 1, "box": b["box"]}
+                for i, b in enumerate(result["blocks"])
+            ]
+
+    try:
+        layers = cleaner.clean_regions(
+            img,
+            mask,
+            region_list,
+            default_inpaint=method,
+            uniform_threshold=uniform_threshold,
+            flux=flux,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"clean failed: {e}") from e
+
+    return {"img_width": W, "img_height": H, "layers": layers}
+
+
+def _brush_inpaint(raw: bytes, mask_png: str, method: str, flux: bool) -> dict:
+    import cv2
+    import numpy as np
+
+    from . import clean as cleaner
+
+    arr = np.frombuffer(raw, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="could not decode image")
+
+    mask = cleaner._decode_mask(mask_png, img.shape)
+    if mask is None or not np.any(mask):
+        raise HTTPException(status_code=400, detail="empty brush mask")
+
+    flux_inpainter = cleaner._load_flux_inpainter() if flux else None
+    try:
+        layer = cleaner.inpaint_brush(
+            img, mask, method=method, flux=flux, flux_inpainter=flux_inpainter
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"brush inpaint failed: {e}") from e
+    if layer is None:
+        raise HTTPException(status_code=400, detail="brush mask covered no pixels")
+    return layer
 
 
 def _assign_types(blocks: list) -> None:
