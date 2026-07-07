@@ -139,6 +139,20 @@ export const app = $state({
   cleaning: false, // a /clean request is in flight
   selectedLayerId: null, // active clean patch layer
   flux: { available: false, reason: null, checking: false, downloading: false }, // opt-in inpaint
+  // Phase 4 manual brush tools (clean mode only). Every stroke becomes its own
+  // brush patch layer (page.clean.layers, kind:'brush'), so it toggles/deletes
+  // like an auto region. `tool` is the active sub-tool; brush is the engaged
+  // editor tool when app.tool === 'brush'.
+  brush: {
+    tool: 'inpaint', // 'inpaint' | 'clone' | 'fill' | 'erase'
+    size: 40, // brush diameter in IMAGE px
+    hardness: 0.7, // 0 = fully soft, 1 = hard edge
+    color: '#ffffff', // solid/sampled fill colour
+    method: 'telea', // content-aware fill flavour (telea | ns)
+    flux: false, // opt into FLUX for brush inpaint
+    cloneSource: null, // {x,y} image-space anchor for the clone tool
+    busy: false, // a brush-inpaint request is in flight
+  },
   // BYOK LLM translation (reuses MangaTranslator's provider set). Keys are kept
   // locally (localStorage) for convenience; never leave the machine except in
   // the loopback request the Rust side proxies to the sidecar.
@@ -294,6 +308,7 @@ export function setPageDims(w, h) {
 // ---------- tool mode ----------
 export function setTool(t) {
   app.tool = t;
+  if (t !== 'brush') app.brush.cloneSource = null;
 }
 
 // ---------- apply sidecar detection result to the current page ----------
@@ -345,6 +360,7 @@ export function applyClean(result, { replace = true, target = null } = {}) {
   p.clean.base = p.raw ?? p.clean.base;
   const incoming = (result.layers ?? []).map((L) => ({
     id: 'L' + layerSeq++,
+    kind: 'region', // auto layer from a detected text region (vs 'brush')
     n: L.n,
     box: L.box, // [x, y, w, h] in image coords
     method: L.method,
@@ -385,13 +401,89 @@ export function deleteLayer(id) {
   const l = p.clean?.layers.find((x) => x.id === id);
   if (!l) return;
   p.clean.layers = p.clean.layers.filter((x) => x.id !== id);
-  setCleanStatus(l.n, 'pending');
+  // Region layers return their detected line to the cleaning queue; brush layers
+  // (no `n`) have no queue entry to restore.
+  if (l.n != null) setCleanStatus(l.n, 'pending');
   if (app.selectedLayerId === id) app.selectedLayerId = null;
   markUnsaved();
-  toast(`Deleted clean layer · line ${l.n} back to queue`);
+  toast(l.n != null ? `Deleted clean layer · line ${l.n} back to queue` : `Deleted ${l.label ?? 'brush'} layer`);
 }
 export const layerByLine = (n) => page().clean?.layers.find((x) => x.n === n) ?? null;
 export const patchSrc = (layer) => (layer?.patchPng ? 'data:image/png;base64,' + layer.patchPng : null);
+
+// ---------- brush patch layers (Phase 4) ----------
+// A brush stroke commits to its own layer, composited by box exactly like an
+// auto region. `op` records the tool; brush layers carry no detected `n`.
+let brushSeq = 1;
+const BRUSH_LABEL = { inpaint: 'Fill', clone: 'Clone', fill: 'Paint', erase: 'Erase' };
+
+export function addBrushLayer({ op, box, patchPng, method = null, fellBack = false }) {
+  const p = page();
+  if (!p.clean) p.clean = { base: null, maskPng: null, status: {}, layers: [] };
+  p.clean.base = p.raw ?? p.clean.base;
+  const layer = {
+    id: 'L' + layerSeq++,
+    kind: 'brush',
+    op,
+    n: null,
+    label: `${BRUSH_LABEL[op] ?? 'Brush'} ${brushSeq++}`,
+    box, // [x, y, w, h] in image coords
+    method: method ?? op, // drives the panel badge
+    fellBack: !!fellBack,
+    patchPng,
+    visible: true,
+  };
+  p.clean.layers.push(layer);
+  app.selectedLayerId = layer.id;
+  markUnsaved();
+  pushBrushUndo({ type: 'add', id: layer.id });
+  return layer;
+}
+
+// Replace a layer's patch pixels in place (used by the eraser, which subtracts
+// from the selected layer's alpha). Box is unchanged.
+export function updateLayerPatch(id, patchPng) {
+  const l = page().clean?.layers.find((x) => x.id === id);
+  if (!l) return;
+  l.patchPng = patchPng;
+  markUnsaved();
+}
+
+// ---------- brush undo (per-stroke) ----------
+// Lightweight page-agnostic stack. Additive strokes (add layer) undo by delete;
+// erase strokes undo by restoring the prior patch. deleteLayer already covers
+// manual layer removal, so this only backs the brush overlay's Cmd/Ctrl-Z.
+export const brushUndo = $state({ stack: [] });
+export function pushBrushUndo(entry) {
+  brushUndo.stack.push(entry);
+  if (brushUndo.stack.length > 50) brushUndo.stack.shift();
+}
+export function undoBrush() {
+  const e = brushUndo.stack.pop();
+  if (!e) {
+    toast('Nothing to undo');
+    return;
+  }
+  const p = page();
+  const layers = p.clean?.layers ?? [];
+  if (e.type === 'add') {
+    p.clean.layers = layers.filter((x) => x.id !== e.id);
+    if (app.selectedLayerId === e.id) app.selectedLayerId = null;
+    toast('Undid brush stroke');
+  } else if (e.type === 'erase') {
+    const l = layers.find((x) => x.id === e.id);
+    if (l) l.patchPng = e.prevPatchPng;
+    toast('Undid erase');
+  }
+  markUnsaved();
+}
+
+// ---------- brush tool selection ----------
+export function setBrushTool(t) {
+  app.tool = 'brush';
+  app.brush.tool = t;
+  if (t !== 'clone') app.brush.cloneSource = null;
+}
 
 // ---------- translation ----------
 // Apply a /translate result ({ lines:[{n,en}] }) onto the current page's lines.

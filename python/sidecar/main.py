@@ -172,6 +172,47 @@ def create_app() -> FastAPI:
 
         return {"img_width": W, "img_height": H, "layers": layers}
 
+    @app.post("/clean/brush")
+    async def clean_brush(
+        image: UploadFile = File(...),
+        mask_png: str = Form(""),
+        method: str = Form("telea"),
+        flux: bool = Form(False),
+    ):
+        """Content-aware fill over a user-painted brush mask.
+
+        `image` is the current clean composite (raw + visible patches, so residue
+        can be touched up); `mask_png` is the base64 painted alpha (full-page).
+        Returns a single patch layer { box:[x,y,w,h], patch_png, method, fell_back }
+        the client turns into a brush layer. Mirrors /clean but for one hand-
+        painted region instead of the detected set.
+        """
+        import cv2
+        import numpy as np
+
+        from . import clean as cleaner
+
+        raw = await image.read()
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(status_code=400, detail="could not decode image")
+
+        mask = cleaner._decode_mask(mask_png, img.shape)
+        if mask is None or not np.any(mask):
+            raise HTTPException(status_code=400, detail="empty brush mask")
+
+        flux_inpainter = cleaner._load_flux_inpainter() if flux else None
+        try:
+            layer = cleaner.inpaint_brush(
+                img, mask, method=method, flux=flux, flux_inpainter=flux_inpainter
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"brush inpaint failed: {e}") from e
+        if layer is None:
+            raise HTTPException(status_code=400, detail="brush mask covered no pixels")
+        return layer
+
     @app.get("/translate/providers")
     async def translate_providers():
         from . import translate as tr

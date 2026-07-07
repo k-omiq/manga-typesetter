@@ -1,5 +1,5 @@
 // Native-resolution raster export via canvas 2D. PNG is lossless.
-import { app, page, toast, boxText, saveExportPrefs } from './store.svelte.js';
+import { app, page, toast, boxText, saveExportPrefs, patchSrc, markUnsaved } from './store.svelte.js';
 import { familyFor, fontShorthand, applyCase, wrapLinesDOM, arcLayout, maxLineWidth } from './measure.js';
 
 function loadImage(src) {
@@ -351,6 +351,72 @@ export function renderBoxLayer(box, W, H, scratch, p, scale = 1) {
     bottom: minY + h,
     opacity: box.style.opacity ?? 1,
   };
+}
+
+// Composite a page's clean layers onto its raw base exactly as the editor shows
+// them in clean mode: raw page + ordered *visible* patch layers, each drawn at
+// its box. This is the same math Editor.svelte renders and it backs both the
+// brush tools' source image and Flatten. Returns a canvas (untainted — raw is a
+// blob URL, patches are data URLs, both same-origin).
+export async function compositeCleanCanvas(p, scale = 1) {
+  const W = p.w,
+    H = p.h;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(W * scale);
+  canvas.height = Math.round(H * scale);
+  const ctx = canvas.getContext('2d');
+  if (scale !== 1) ctx.scale(scale, scale);
+  ctx.imageSmoothingQuality = 'high';
+  const base = p.raw ?? p.clean?.base;
+  if (base) {
+    try {
+      const img = await loadImage(base);
+      ctx.drawImage(img, 0, 0, W, H);
+    } catch {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+  for (const l of p.clean?.layers ?? []) {
+    if (!l.visible) continue;
+    const src = patchSrc(l);
+    if (!src) continue;
+    try {
+      const img = await loadImage(src);
+      ctx.drawImage(img, l.box[0], l.box[1], l.box[2], l.box[3]);
+    } catch {
+      /* skip a patch that fails to decode */
+    }
+  }
+  return canvas;
+}
+
+function canvasToBlob(canvas, fmt = 'PNG') {
+  return new Promise((res) => canvas.toBlob(res, MIME[fmt], QUALITY[fmt]));
+}
+
+// Bake the clean composite (raw + visible patch layers) into p.cleaned so the
+// cleaning actually feeds translate mode and the exporter (both read p.cleaned).
+// Without this, auto/brush clean layers only ever render in clean mode.
+export async function flattenClean(p = page()) {
+  if (!p.raw && !p.clean?.base) {
+    toast('No raw page to flatten');
+    return false;
+  }
+  try {
+    const canvas = await compositeCleanCanvas(p);
+    const blob = await canvasToBlob(canvas, 'PNG');
+    if (!blob) throw new Error('encode failed');
+    if (p.cleaned && p.cleaned.startsWith('blob:')) URL.revokeObjectURL(p.cleaned);
+    p.cleaned = URL.createObjectURL(blob);
+    markUnsaved();
+    const n = (p.clean?.layers ?? []).filter((l) => l.visible).length;
+    toast(`Flattened ${n} clean layer(s) → cleaned page`);
+    return true;
+  } catch (e) {
+    toast('Flatten failed: ' + (e?.message || e));
+    return false;
+  }
 }
 
 // Render one page to a Blob in the requested raster format (native resolution).

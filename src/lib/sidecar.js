@@ -141,6 +141,17 @@ export async function recleanRegion(n, method) {
   }
 }
 
+// Content-aware fill over a user-painted brush mask. `image` is a Blob of the
+// current clean composite (raw + visible patches); `maskPng` is the base64
+// painted alpha (no data: prefix). Returns one patch layer
+// { box:[x,y,w,h], patch_png, method, fell_back }. Requires Tauri + a sidecar.
+export async function brushInpaint(image, maskPng, { method = 'telea', flux = false } = {}) {
+  const invoke = await getInvoke();
+  if (!invoke) throw new Error('sidecar unavailable (no Tauri runtime)');
+  const bytes = Array.from(new Uint8Array(await image.arrayBuffer()));
+  return invoke('sidecar_clean_brush', { image: bytes, maskPng, method, flux });
+}
+
 // ---- opt-in FLUX inpainter ------------------------------------------------
 export async function refreshFluxStatus() {
   const invoke = await getInvoke();

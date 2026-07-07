@@ -9,7 +9,7 @@
   import Toast from './lib/Toast.svelte';
   import Resizer from './lib/Resizer.svelte';
   import { onMount } from 'svelte';
-  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast } from './lib/store.svelte.js';
+  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast, undoBrush } from './lib/store.svelte.js';
   import { restoreFonts } from './lib/fonts.js';
   import { checkSidecar } from './lib/sidecar.js';
 
@@ -38,8 +38,19 @@
       else if (fontModalOpen) fontModalOpen = false;
       else deselect();
     }
+    // Brush stroke undo (clean mode) — per-stroke = per-layer.
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z') && app.mode === 'clean') {
+      e.preventDefault();
+      undoBrush();
+      return;
+    }
     if (e.key === 'v' || e.key === 'V') setTool('place');
     if (e.key === 't' || e.key === 'T') setTool('text');
+    // Brush size nudge while a brush tool is active.
+    if (app.tool === 'brush' && (e.key === '[' || e.key === ']')) {
+      const d = e.key === ']' ? 4 : -4;
+      app.brush.size = Math.max(4, Math.min(240, app.brush.size + d));
+    }
     if (e.key === 'ArrowRight' && !e.shiftKey) nextPage();
     if (e.key === 'ArrowLeft' && !e.shiftKey) prevPage();
   }

@@ -166,6 +166,67 @@ def clean_region(
     }
 
 
+def inpaint_brush(
+    img_bgr: np.ndarray,
+    mask: np.ndarray,
+    *,
+    method: str = "telea",
+    flux: bool = False,
+    flux_inpainter=None,
+) -> Optional[dict]:
+    """Content-aware fill over a user-painted brush mask.
+
+    Unlike `clean_region`, the region + method here are chosen by the user (the
+    painted mask *is* the selection), so there's no ring sampling / auto method
+    choice — we just inpaint the mask's bounding box. `mask` is a full-page uint8
+    0/255 array (the painted alpha). Returns a patch dict shaped like
+    `clean_region`'s (minus the auto-classification fields) or None if empty.
+    """
+    H, W = img_bgr.shape[:2]
+    ys, xs = np.where(mask > 0)
+    if xs.size == 0:
+        return None
+
+    # Pad the painted bbox so inpaint has surrounding context to sample from.
+    bw, bh = int(xs.max() - xs.min()), int(ys.max() - ys.min())
+    pad = max(8, int(round(0.08 * max(bw, bh))))
+    x1 = max(0, int(xs.min()) - pad)
+    y1 = max(0, int(ys.min()) - pad)
+    x2 = min(W, int(xs.max()) + 1 + pad)
+    y2 = min(H, int(ys.max()) + 1 + pad)
+
+    roi = img_bgr[y1:y2, x1:x2]
+    m = mask[y1:y2, x1:x2]
+    # Dilate a touch so soft brush edges are fully covered by the fill.
+    edge_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    m_dil = cv2.dilate(np.where(m > 0, 255, 0).astype(np.uint8), edge_k, iterations=1)
+
+    requested = (method or "telea").lower()
+    if requested == "flux" or flux:
+        requested = "flux"
+    method = requested
+    fell_back = False
+
+    patch = None
+    if method == "flux":
+        patch = _run_flux(roi, m_dil, flux_inpainter)
+        if patch is None:  # FLUX unavailable -> graceful OpenCV fallback
+            fell_back = True
+            method = "telea"
+    if method not in _OPENCV_INPAINT:
+        method = "telea"
+    if patch is None:
+        patch = cv2.inpaint(roi, m_dil, inpaintRadius=3, flags=_OPENCV_INPAINT[method])
+
+    return {
+        "box": [x1, y1, x2 - x1, y2 - y1],
+        "method": method,
+        "requested": requested,
+        "fell_back": fell_back,
+        "patch_png": _encode_patch(patch),
+    }
+
+
 def _run_flux(roi_bgr, mask_dil, flux_inpainter):
     """Run the opt-in FLUX inpainter on a region crop. Returns BGR patch or None."""
     if flux_inpainter is None:

@@ -225,6 +225,45 @@ pub async fn sidecar_clean(
     resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
+/// Proxy a brush-inpaint request to the sidecar `/clean/brush`.
+///
+/// `image` is the current clean composite (raw + visible patches); `mask_png` is
+/// the base64 painted alpha mask; `method` is the OpenCV inpaint flavour
+/// ("telea"/"ns") and `flux` opts into the heavy path. Returns one patch layer.
+#[tauri::command]
+pub async fn sidecar_clean_brush(
+    state: tauri::State<'_, Sidecar>,
+    image: Vec<u8>,
+    mask_png: String,
+    method: String,
+    flux: bool,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/clean/brush", state.base_url());
+    let part = reqwest::multipart::Part::bytes(image).file_name("page.png");
+    let form = reqwest::multipart::Form::new()
+        .part("image", part)
+        .text("mask_png", mask_png)
+        .text("method", method)
+        .text("flux", flux.to_string());
+
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("x-mt-token", &state.token)
+        // FLUX brush fill can be slow; cap so a hung run can't block forever.
+        .timeout(std::time::Duration::from_secs(1800))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("sidecar {code}: {body}"));
+    }
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
 /// Report whether the opt-in FLUX inpainter can run on this machine.
 #[tauri::command]
 pub async fn sidecar_flux_status(

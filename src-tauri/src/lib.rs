@@ -12,6 +12,7 @@ pub fn run() {
       sidecar::sidecar_health,
       sidecar::sidecar_analyze,
       sidecar::sidecar_clean,
+      sidecar::sidecar_clean_brush,
       sidecar::sidecar_flux_status,
       sidecar::sidecar_flux_download,
       sidecar::sidecar_translate,
