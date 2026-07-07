@@ -298,6 +298,11 @@ pub async fn sidecar_flux_download(
         .send()
         .await
         .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("sidecar {code}: {body}"));
+    }
     resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 

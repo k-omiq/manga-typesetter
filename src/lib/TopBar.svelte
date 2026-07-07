@@ -1,5 +1,5 @@
 <script>
-  import { app, prevPage, nextPage, setMode, page } from './store.svelte.js';
+  import { app, prevPage, nextPage, setMode, page, toast } from './store.svelte.js';
   import { pickJson, pickImages } from './importer.js';
   import { pickPsd } from './psd.js';
   import { detectCurrentPage, sidecarReady } from './sidecar.js';

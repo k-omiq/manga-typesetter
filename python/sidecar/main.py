@@ -12,6 +12,7 @@ import statistics
 import json
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 
 from . import __version__, config
 
@@ -37,9 +38,12 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def _auth(request, call_next):
         # When the app sets a token, require it on every request except /health.
+        # NOTE: raising HTTPException inside a Starlette @middleware does NOT map
+        # to a 401 — it escapes the exception-handler layer and becomes a 500.
+        # Return the response directly so the client sees a real 401.
         if config.TOKEN and request.url.path != "/health":
             if request.headers.get("x-mt-token") != config.TOKEN:
-                raise HTTPException(status_code=401, detail="bad sidecar token")
+                return JSONResponse(status_code=401, content={"detail": "bad sidecar token"})
         return await call_next(request)
 
     @app.get("/health")
@@ -255,10 +259,12 @@ def create_app() -> FastAPI:
             # validation (bad provider, missing key field)
             raise HTTPException(status_code=400, detail=str(e)) from e
         except RuntimeError as e:
-            # TranslationError: a missing key is the client's fault (400); an
-            # upstream provider/HTTP failure is not (502, so the UI can say "retry").
+            # TranslationError: a missing key / missing base URL is the client's
+            # fault (400); an upstream provider/HTTP failure is not (502, so the
+            # UI can say "retry" rather than telling the user to fix config).
             msg = str(e)
-            code = 400 if "api key" in msg.lower() else 502
+            low = msg.lower()
+            code = 400 if ("api key" in low or "url is missing" in low) else 502
             raise HTTPException(status_code=code, detail=msg) from e
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"translate failed: {e}") from e

@@ -59,7 +59,9 @@ export async function detectCurrentPage({ ocr = true } = {}) {
   app.detecting = true;
   try {
     const result = await analyzeImage(p.raw, { ocr });
-    applyDetection(result);
+    // Pin to the page detection was launched for — the user may have navigated
+    // while the sidecar ran (mirrors clean/translate's target pattern).
+    applyDetection(result, p);
     toast(`Detected ${result.lines.length} text region(s)`);
   } catch (e) {
     toast(`Detection failed: ${e}`);

@@ -294,7 +294,7 @@ function textLayerFor(p, box, rendered, scale = 1) {
 // list = top in Photoshop):
 //   Flattened preview (hidden) — exact app composite
 //   Text     — one editable text layer per box
-//   Brush    — reserved slot for Phase 4 brush layers (empty for now)
+//   Brush    — one layer per manual brush stroke (inpaint/clone/paint)
 //   Cleaning — one masked patch per clean layer + hidden full-page AI mask
 //   Base     — Cleaned (if any) over Raw
 //

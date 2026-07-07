@@ -2,7 +2,7 @@
   // Clean-mode right panel.
   //  - Cleaning Queue: per-detected-text progress + method badge + retry
   //  - Layers: one editable patch layer per region (toggle / select / redo / delete)
-  //  - Brush Tools: Phase 4 (skipped)
+  //  - Brush Tools: manual clean-up (inpaint / clone / paint / erase)
   import { onMount } from 'svelte';
   import {
     app,

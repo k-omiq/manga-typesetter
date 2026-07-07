@@ -313,8 +313,8 @@ export function setTool(t) {
 
 // ---------- apply sidecar detection result to the current page ----------
 // result = { img_width, img_height, lines:[{n,type,jp,en,box,vertical,font_size}], mask_png }
-export function applyDetection(result) {
-  const p = page();
+export function applyDetection(result, target = null) {
+  const p = target ?? page();
   if (result.img_width && result.img_height) {
     p.w = result.img_width;
     p.h = result.img_height;
@@ -417,8 +417,10 @@ export const patchSrc = (layer) => (layer?.patchPng ? 'data:image/png;base64,' +
 let brushSeq = 1;
 const BRUSH_LABEL = { inpaint: 'Fill', clone: 'Clone', fill: 'Paint', erase: 'Erase' };
 
-export function addBrushLayer({ op, box, patchPng, method = null, fellBack = false }) {
-  const p = page();
+export function addBrushLayer({ op, box, patchPng, method = null, fellBack = false }, target = null) {
+  // Pin to the page the stroke was made on — a client tool's compositing or the
+  // sidecar inpaint may resolve after the user navigated away.
+  const p = target ?? page();
   if (!p.clean) p.clean = { base: null, maskPng: null, status: {}, layers: [] };
   p.clean.base = p.raw ?? p.clean.base;
   const layer = {
@@ -436,23 +438,24 @@ export function addBrushLayer({ op, box, patchPng, method = null, fellBack = fal
   p.clean.layers.push(layer);
   app.selectedLayerId = layer.id;
   markUnsaved();
-  pushBrushUndo({ type: 'add', id: layer.id });
+  pushBrushUndo({ type: 'add', id: layer.id, page: p });
   return layer;
 }
 
 // Replace a layer's patch pixels in place (used by the eraser, which subtracts
-// from the selected layer's alpha). Box is unchanged.
-export function updateLayerPatch(id, patchPng) {
-  const l = page().clean?.layers.find((x) => x.id === id);
+// from the selected layer's alpha). Box is unchanged. `target` pins the page.
+export function updateLayerPatch(id, patchPng, target = null) {
+  const l = (target ?? page()).clean?.layers.find((x) => x.id === id);
   if (!l) return;
   l.patchPng = patchPng;
   markUnsaved();
 }
 
 // ---------- brush undo (per-stroke) ----------
-// Lightweight page-agnostic stack. Additive strokes (add layer) undo by delete;
-// erase strokes undo by restoring the prior patch. deleteLayer already covers
-// manual layer removal, so this only backs the brush overlay's Cmd/Ctrl-Z.
+// Additive strokes (add layer) undo by delete; erase strokes undo by restoring
+// the prior patch. Each entry pins the page it was made on, so undo after
+// navigating away still edits the right page. deleteLayer covers manual removal;
+// this only backs the brush overlay's Cmd/Ctrl-Z.
 export const brushUndo = $state({ stack: [] });
 export function pushBrushUndo(entry) {
   brushUndo.stack.push(entry);
@@ -464,7 +467,7 @@ export function undoBrush() {
     toast('Nothing to undo');
     return;
   }
-  const p = page();
+  const p = e.page ?? page();
   const layers = p.clean?.layers ?? [];
   if (e.type === 'add') {
     p.clean.layers = layers.filter((x) => x.id !== e.id);

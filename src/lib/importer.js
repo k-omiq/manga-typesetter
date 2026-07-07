@@ -119,6 +119,9 @@ export async function importImageFiles(files, kind) {
   }
   list.forEach((file, i) => {
     const url = URL.createObjectURL(file);
+    // Revoke the blob URL we're replacing so re-importing doesn't orphan it.
+    const prev = kind === 'cleaned' ? app.pages[i].cleaned : app.pages[i].raw;
+    if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
     if (kind === 'cleaned') app.pages[i].cleaned = url;
     else app.pages[i].raw = url;
   });

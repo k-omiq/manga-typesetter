@@ -172,7 +172,15 @@
     } catch {
       /* pointer already released */
     }
-    await commitStroke(app.brush.tool);
+    // Busy for the whole commit (all tools await something), so onBrushDown
+    // blocks a second stroke and can't race — e.g. two erases lost-updating a
+    // layer's patch. Cleared even if the commit throws.
+    app.brush.busy = true;
+    try {
+      await commitStroke(app.brush.tool);
+    } finally {
+      app.brush.busy = false;
+    }
   }
 
   async function commitStroke(tool) {
@@ -203,17 +211,14 @@
       mctx.putImageData(md, 0, 0);
       const maskB64 = mask.toDataURL('image/png').split(',')[1];
       clear();
-      app.brush.busy = true;
       try {
         const comp = await compositeCleanCanvas(p2);
         const blob = await new Promise((r) => comp.toBlob(r, 'image/png'));
         const layer = await brushInpaint(blob, maskB64, { method: app.brush.method, flux: app.brush.flux });
-        addBrushLayer({ op: 'inpaint', box: layer.box, patchPng: layer.patch_png, method: layer.method, fellBack: layer.fell_back });
+        addBrushLayer({ op: 'inpaint', box: layer.box, patchPng: layer.patch_png, method: layer.method, fellBack: layer.fell_back }, p2);
         toast(`Brush fill → ${layer.method}${layer.fell_back ? ' (flux→cv2)' : ''}`);
       } catch (err) {
         toast('Brush fill failed: ' + (err?.message || err));
-      } finally {
-        app.brush.busy = false;
       }
       return;
     }
@@ -230,7 +235,7 @@
       pctx.globalCompositeOperation = 'destination-in';
       pctx.drawImage(brushEl, minX, minY, bw, bh, 0, 0, bw, bh);
       clear();
-      addBrushLayer({ op: 'clone', box: [minX, minY, bw, bh], patchPng: patch.toDataURL('image/png').split(',')[1] });
+      addBrushLayer({ op: 'clone', box: [minX, minY, bw, bh], patchPng: patch.toDataURL('image/png').split(',')[1] }, p2);
       toast('Cloned → new layer');
       return;
     }
@@ -245,7 +250,7 @@
       pctx.globalCompositeOperation = 'destination-in';
       pctx.drawImage(brushEl, minX, minY, bw, bh, 0, 0, bw, bh);
       clear();
-      addBrushLayer({ op: 'fill', box: [minX, minY, bw, bh], patchPng: patch.toDataURL('image/png').split(',')[1] });
+      addBrushLayer({ op: 'fill', box: [minX, minY, bw, bh], patchPng: patch.toDataURL('image/png').split(',')[1] }, p2);
       toast('Painted → new layer');
       return;
     }
@@ -269,8 +274,8 @@
       pctx.globalCompositeOperation = 'destination-out';
       pctx.drawImage(brushEl, lx, ly, lw, lh, 0, 0, lw, lh);
       clear();
-      pushBrushUndo({ type: 'erase', id: l.id, prevPatchPng: l.patchPng });
-      updateLayerPatch(l.id, patch.toDataURL('image/png').split(',')[1]);
+      pushBrushUndo({ type: 'erase', id: l.id, prevPatchPng: l.patchPng, page: p2 });
+      updateLayerPatch(l.id, patch.toDataURL('image/png').split(',')[1], p2);
       toast('Erased from layer');
       return;
     }
