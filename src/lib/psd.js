@@ -170,6 +170,9 @@ function serializePage(p) {
           status: { ...(p.clean.status ?? {}) },
           layers: (p.clean.layers ?? []).map((L) => ({
             n: L.n,
+            kind: L.kind ?? 'region', // 'region' | 'brush' — keep brush layers losslessly
+            op: L.op, // brush op: inpaint | clone | fill | erase
+            label: L.label, // brush display label
             box: L.box,
             method: L.method,
             requested: L.requested,
@@ -336,11 +339,12 @@ export async function buildPagePsd(p, scale = 2) {
     children: (p.boxes ?? []).map((b) => textLayerFor(p, b, renderBoxLayer(b, W, H, scratch, p, scale), scale)),
   });
 
-  // Brush group — reserved for Phase 4, empty for now.
-  children.push({ name: 'Brush', opened: true, children: [] });
-
-  // Cleaning group
+  // Brush + Cleaning groups. Auto region patches carry a mask cropped from the
+  // detected-text mask (non-destructive over the original text); brush patches
+  // are freeform, so their own alpha IS the mask and they land in the Brush
+  // group named by their label.
   const cleanChildren = [];
+  const brushChildren = [];
   let fullMask = null;
   if (p.clean?.maskPng) {
     try {
@@ -362,8 +366,9 @@ export async function buildPagePsd(p, scale = 2) {
     } catch {
       continue;
     }
+    const isBrush = L.kind === 'brush';
     const layer = {
-      name: `clean-${L.n} (${L.method})`,
+      name: isBrush ? (L.label ?? 'brush') : `clean-${L.n} (${L.method})`,
       hidden: !L.visible,
       left: lx,
       top: ly,
@@ -371,18 +376,23 @@ export async function buildPagePsd(p, scale = 2) {
       bottom: ly + lh,
       imageData: patch,
     };
-    // Non-destructive: mask the patch to the detected text region so it only
-    // covers the original text, cropped from the full-page mask.
-    if (fullMask) {
-      try {
-        const maskData = cropImageData(fullMask, lx, ly, lw, lh);
-        layer.mask = { left: lx, top: ly, imageData: maskData, defaultColor: 0 };
-      } catch {
-        /* skip mask on failure — patch still exports */
+    if (isBrush) {
+      brushChildren.push(layer);
+    } else {
+      // Non-destructive: mask the patch to the detected text region so it only
+      // covers the original text, cropped from the full-page mask.
+      if (fullMask) {
+        try {
+          const maskData = cropImageData(fullMask, lx, ly, lw, lh);
+          layer.mask = { left: lx, top: ly, imageData: maskData, defaultColor: 0 };
+        } catch {
+          /* skip mask on failure — patch still exports */
+        }
       }
+      cleanChildren.push(layer);
     }
-    cleanChildren.push(layer);
   }
+  if (brushChildren.length) children.push({ name: 'Brush', opened: true, children: brushChildren });
   if (fullMask) {
     cleanChildren.push({
       name: 'AI inpaint mask',
