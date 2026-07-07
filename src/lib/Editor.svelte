@@ -234,12 +234,19 @@
 
     if (tool === 'clone') {
       if (!app.brush.cloneSource) return clear();
-      const off = { x: strokeStart.x - app.brush.cloneSource.x, y: strokeStart.y - app.brush.cloneSource.y };
+      // Snap the offset to whole pixels: a fractional source origin makes
+      // drawImage bilinearly resample the cloned pixels (visible blur). With an
+      // integer offset the copy is 1:1 and byte-sharp. Smoothing off as a guard.
+      const off = {
+        x: Math.round(strokeStart.x - app.brush.cloneSource.x),
+        y: Math.round(strokeStart.y - app.brush.cloneSource.y),
+      };
       const comp = await compositeCleanCanvas(p2);
       const patch = document.createElement('canvas');
       patch.width = bw;
       patch.height = bh;
       const pctx = patch.getContext('2d');
+      pctx.imageSmoothingEnabled = false;
       pctx.drawImage(comp, minX - off.x, minY - off.y, bw, bh, 0, 0, bw, bh);
       pctx.globalCompositeOperation = 'destination-in';
       pctx.drawImage(brushEl, minX, minY, bw, bh, 0, 0, bw, bh);
