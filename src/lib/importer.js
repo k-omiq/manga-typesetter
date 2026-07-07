@@ -61,8 +61,21 @@ function blankPage(lines, prev) {
     w: prev?.w ?? PAGE_W,
     h: prev?.h ?? PAGE_H,
     lines,
-    boxes: [],
-    clean: prev?.clean ?? { base: null, layers: [] },
+    // Preserve placed boxes across a JSON re-import so re-importing a lines file
+    // (e.g. updated translations) doesn't discard existing typesetting.
+    boxes: (prev?.boxes ?? []).map((b) => ({ ...b, style: { ...b.style } })),
+    // Copy (never alias) prev.clean, in the full canonical shape — a bare
+    // { base, layers } left maskPng/status undefined and shared the object with
+    // the discarded page.
+    clean: prev?.clean
+      ? {
+          base: prev.clean.base ?? null,
+          maskPng: prev.clean.maskPng ?? null,
+          status: { ...(prev.clean.status ?? {}) },
+          layers: (prev.clean.layers ?? []).map((l) => ({ ...l })),
+        }
+      : { base: null, maskPng: null, status: {}, layers: [] },
+    detect: prev?.detect ?? null,
     activeLineN: null,
   };
   p.activeLineN = firstUnplaced(p);

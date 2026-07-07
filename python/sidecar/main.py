@@ -218,7 +218,11 @@ def _analyze_image(raw: bytes, ocr: bool) -> dict:
     ]
 
     ok, buf = cv2.imencode(".png", result["mask_refined"])
-    mask_png = base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
+    if not ok:
+        # Don't silently return mask_png:null — /clean would then re-run the whole
+        # detector to recover a mask. Surface it so the client sees the failure.
+        raise HTTPException(status_code=500, detail="failed to encode text mask")
+    mask_png = base64.b64encode(buf.tobytes()).decode("ascii")
 
     return {
         "img_width": result["img_width"],

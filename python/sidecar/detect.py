@@ -139,7 +139,13 @@ def _split_into_chunks(img, mask_refined, blk, line_idx, textheight, max_ratio, 
     anchors = np.linspace(0, w, num_chunks + 1)[1:-1]
 
     line_density = np.convolve(line_mask.sum(axis=0), k, "same")
-    line_density /= line_density.max()
+    peak = line_density.max()
+    if peak <= 0:
+        # Empty line mask: normalizing by 0 yields all-NaN, so every argmin
+        # collapses to the window start → duplicate/out-of-order cut points and
+        # zero-width crops that break OCR. Nothing to split here.
+        return [line_crop]
+    line_density /= peak
     win = anchor_window * textheight
 
     cut_points = []

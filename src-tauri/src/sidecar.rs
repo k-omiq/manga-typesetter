@@ -4,9 +4,9 @@
 //! Prod: runs the bundled `mt-sidecar` binary placed next to the app executable
 //! (produced by PyInstaller; wired as a Tauri sidecar in a later phase).
 
-use std::process::{Child, Command};
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::Manager;
 
@@ -34,10 +34,32 @@ impl Sidecar {
             }
         }
     }
+
+    /// Liveness of the spawned child, without blocking:
+    /// - `Some(true)`  — running
+    /// - `Some(false)` — exited (spawn failed to stay up)
+    /// - `None`        — never spawned (no python env / binary)
+    pub fn child_running(&self) -> Option<bool> {
+        let mut guard = self.child.lock().ok()?;
+        let child = guard.as_mut()?;
+        match child.try_wait() {
+            Ok(Some(_status)) => Some(false), // has exited
+            Ok(None) => Some(true),           // still running
+            Err(_) => Some(true),             // can't tell → assume alive
+        }
+    }
 }
 
-/// Cheap, dependency-free token: hex of nanos since epoch + pid.
+/// Unguessable loopback secret from the OS CSPRNG (falls back to time+pid only
+/// if getrandom somehow fails). This gates /analyze, /clean, /translate — the
+/// last of which forwards the user's BYOK API key — so it must not be
+/// enumerable by another local process from launch time + pid.
 fn make_token() -> String {
+    let mut bytes = [0u8; 24];
+    if getrandom::getrandom(&mut bytes).is_ok() {
+        return bytes.iter().map(|b| format!("{b:02x}")).collect();
+    }
+    use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -107,7 +129,10 @@ fn build_command(app: &tauri::AppHandle, token: &str) -> Option<Command> {
 fn apply_env(cmd: &mut Command, token: &str) {
     cmd.env("MT_SIDECAR_HOST", "127.0.0.1")
         .env("MT_SIDECAR_PORT", SIDECAR_PORT.to_string())
-        .env("MT_SIDECAR_TOKEN", token);
+        .env("MT_SIDECAR_TOKEN", token)
+        // The sidecar's watchdog exits itself if this PID goes away, so a hard
+        // app crash (no graceful shutdown) can't orphan it holding the port.
+        .env("MT_SIDECAR_PARENT_PID", std::process::id().to_string());
 }
 
 /// Spawn the sidecar and store the child in managed state. Idempotent-ish: a
@@ -117,15 +142,28 @@ pub fn spawn(app: &tauri::AppHandle) {
     state.shutdown();
 
     match build_command(app, &state.token) {
-        Some(mut cmd) => match cmd.spawn() {
-            Ok(child) => {
-                log::info!("sidecar spawned on port {SIDECAR_PORT}");
-                if let Ok(mut guard) = state.child.lock() {
-                    *guard = Some(child);
+        Some(mut cmd) => {
+            // Pipe stderr so startup failures (port already in use from an
+            // orphan, import errors) reach the log instead of vanishing — in a
+            // windowed release build there's no inherited console to see them.
+            cmd.stderr(Stdio::piped());
+            match cmd.spawn() {
+                Ok(mut child) => {
+                    log::info!("sidecar spawned on port {SIDECAR_PORT}");
+                    if let Some(stderr) = child.stderr.take() {
+                        std::thread::spawn(move || {
+                            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                                log::warn!("[sidecar] {line}");
+                            }
+                        });
+                    }
+                    if let Ok(mut guard) = state.child.lock() {
+                        *guard = Some(child);
+                    }
                 }
+                Err(e) => log::error!("failed to spawn sidecar: {e}"),
             }
-            Err(e) => log::error!("failed to spawn sidecar: {e}"),
-        },
+        }
         None => log::warn!("no sidecar binary or python env found; ML features disabled"),
     }
 }
@@ -142,7 +180,19 @@ pub async fn sidecar_health(
     // (dylib load + macOS first-launch verification).
     let mut last_err = String::from("unreachable");
     for _ in 0..120 {
-        match client.get(&url).send().await {
+        // Bail immediately if the child never started or has already exited,
+        // instead of polling a dead port for the full 30s.
+        match state.child_running() {
+            Some(false) => return Err("sidecar process exited during startup".into()),
+            None => return Err("sidecar was not started (no python env or binary found)".into()),
+            Some(true) => {}
+        }
+        match client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await
+        {
             Ok(resp) => match resp.json::<serde_json::Value>().await {
                 Ok(v) => return Ok(v),
                 Err(e) => last_err = e.to_string(),

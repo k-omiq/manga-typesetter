@@ -51,7 +51,25 @@
     ringVisible = $state(false);
   let strokeActive = false;
   let strokeStart = { x: 0, y: 0 };
+  // Painted bounds accumulated during the stroke (each dab ± radius), so commit
+  // never scans the whole p.w×p.h canvas — that was O(page area) per stroke and
+  // lagged on large scans.
+  let strokeBox = null;
   const ringSize = $derived(app.brush.size * app.zoom);
+
+  function expandStrokeBox(x, y, rad) {
+    const nx0 = x - rad,
+      ny0 = y - rad,
+      nx1 = x + rad,
+      ny1 = y + rad;
+    if (!strokeBox) strokeBox = { minX: nx0, minY: ny0, maxX: nx1, maxY: ny1 };
+    else {
+      if (nx0 < strokeBox.minX) strokeBox.minX = nx0;
+      if (ny0 < strokeBox.minY) strokeBox.minY = ny0;
+      if (nx1 > strokeBox.maxX) strokeBox.maxX = nx1;
+      if (ny1 > strokeBox.maxY) strokeBox.maxY = ny1;
+    }
+  }
 
   function loadImg(src) {
     return new Promise((res, rej) => {
@@ -79,6 +97,7 @@
     ctx.beginPath();
     ctx.arc(x, y, rad, 0, Math.PI * 2);
     ctx.fill();
+    expandStrokeBox(x, y, rad);
   }
 
   function strokeTo(ctx, from, to) {
@@ -86,25 +105,6 @@
     const step = Math.max(1, app.brush.size * 0.2);
     const n = Math.max(1, Math.ceil(dist / step));
     for (let i = 1; i <= n; i++) dab(ctx, from.x + ((to.x - from.x) * i) / n, from.y + ((to.y - from.y) * i) / n);
-  }
-
-  function alphaBBox(data, W, H) {
-    let minX = W,
-      minY = H,
-      maxX = -1,
-      maxY = -1;
-    const d = data.data;
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (d[(y * W + x) * 4 + 3] > 0) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-    return maxX < 0 ? null : { minX, minY, maxX, maxY };
   }
 
   async function sampleColor(pt) {
@@ -148,6 +148,7 @@
     }
     strokeActive = true;
     strokeStart = pt;
+    strokeBox = null;
     const ctx = brushEl.getContext('2d');
     dab(ctx, pt.x, pt.y);
     brushEl._last = pt;
@@ -188,27 +189,35 @@
     const W = p2.w,
       H = p2.h;
     const octx = brushEl.getContext('2d');
-    const data = octx.getImageData(0, 0, W, H);
-    const bbox = alphaBBox(data, W, H);
     const clear = () => octx.clearRect(0, 0, W, H);
-    if (!bbox) return clear();
-    const { minX, minY, maxX, maxY } = bbox;
+    // Painted bounds tracked during the stroke — clamp to the page.
+    if (!strokeBox) return clear();
+    const minX = Math.max(0, Math.floor(strokeBox.minX));
+    const minY = Math.max(0, Math.floor(strokeBox.minY));
+    const maxX = Math.min(W - 1, Math.ceil(strokeBox.maxX));
+    const maxY = Math.min(H - 1, Math.ceil(strokeBox.maxY));
     const bw = maxX - minX + 1,
       bh = maxY - minY + 1;
+    if (bw <= 0 || bh <= 0) return clear();
 
     if (tool === 'inpaint') {
-      // Full-page grayscale mask (alpha → luminance) for the sidecar.
+      // Grayscale mask for the sidecar, built only over the painted bbox.
+      // Binarize (any painted alpha → 255): the sidecar thresholds the mask at
+      // >127, so a soft brush's sub-128 edge would otherwise be dropped and the
+      // filled area would be smaller than the cursor ring. Inpaint fills a
+      // region, so it wants the full painted footprint, not a soft falloff.
+      const region = octx.getImageData(minX, minY, bw, bh);
       const mask = document.createElement('canvas');
       mask.width = W;
       mask.height = H;
       const mctx = mask.getContext('2d');
-      const md = mctx.createImageData(W, H);
-      for (let i = 0; i < data.data.length; i += 4) {
-        const a = data.data[i + 3];
-        md.data[i] = md.data[i + 1] = md.data[i + 2] = a;
+      const md = mctx.createImageData(bw, bh);
+      for (let i = 0; i < region.data.length; i += 4) {
+        const on = region.data[i + 3] > 0 ? 255 : 0;
+        md.data[i] = md.data[i + 1] = md.data[i + 2] = on;
         md.data[i + 3] = 255;
       }
-      mctx.putImageData(md, 0, 0);
+      mctx.putImageData(md, minX, minY);
       const maskB64 = mask.toDataURL('image/png').split(',')[1];
       clear();
       try {
