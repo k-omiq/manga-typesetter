@@ -2,7 +2,7 @@
   // Clean-mode right panel.
   //  - Cleaning Queue: per-detected-text progress + method badge + retry
   //  - Layers: one editable patch layer per region (toggle / select / redo / delete)
-  //  - Brush Tools: Phase 4 (skipped)
+  //  - Brush Tools: manual clean-up (inpaint / clone / paint / erase)
   import { onMount } from 'svelte';
   import {
     app,
@@ -13,8 +13,10 @@
     deleteLayer,
     layerByLine,
     lineByN,
+    setBrushTool,
   } from './store.svelte.js';
   import { cleanCurrentPage, recleanRegion, refreshFluxStatus, downloadFlux } from './sidecar.js';
+  import { flattenClean } from './exporter.js';
 
   const p = $derived(page());
   const regions = $derived(p.detect?.boxes ?? []);
@@ -27,13 +29,45 @@
   const METHODS = ['fill', 'telea', 'ns', 'flux'];
   const jpFor = (n) => lineByN(p, n)?.jp ?? '';
 
+  // Phase 4 brush tools. Each entry: [id, label, one-line hint].
+  const BRUSH_TOOLS = [
+    ['inpaint', 'Fill', 'Content-aware fill (sidecar inpaint)'],
+    ['clone', 'Clone', 'Alt-click to set a source, then paint to stamp'],
+    ['fill', 'Paint', 'Solid colour — Alt-click canvas to eyedrop'],
+    ['erase', 'Erase', 'Subtract from the selected layer (non-destructive)'],
+  ];
+  const brushHint = $derived(BRUSH_TOOLS.find((t) => t[0] === app.brush.tool)?.[2] ?? '');
+  let flattening = $state(false);
+
   onMount(() => {
     refreshFluxStatus();
   });
 
-  function onFluxToggle(e) {
+  async function onFluxToggle(e) {
     flux = e.target.checked;
-    if (flux && !app.flux.available) downloadFlux();
+    if (flux && !app.flux.available) {
+      await downloadFlux();
+      // Reflect reality: if the opt-in install failed, don't leave FLUX "on".
+      flux = app.flux.available;
+    }
+  }
+
+  // Brush inpaint has its own FLUX opt-in but shares the availability/install flow.
+  async function onBrushFluxToggle(e) {
+    app.brush.flux = e.target.checked;
+    if (app.brush.flux && !app.flux.available) {
+      await downloadFlux();
+      app.brush.flux = app.flux.available;
+    }
+  }
+
+  async function onFlatten() {
+    flattening = true;
+    try {
+      await flattenClean(p);
+    } finally {
+      flattening = false;
+    }
   }
 </script>
 
@@ -116,13 +150,17 @@
                 {/if}
               </button>
               <button class="lname" onclick={() => selectCleanLayer(l.id)} title="Select layer">
-                <span class="badge sm">{l.n}</span>
-                <span class="mbadge {l.method}">{l.method}</span>
+                <span class="badge sm" class:brush={l.kind === 'brush'}>{l.kind === 'brush' ? '✎' : l.n}</span>
+                <span class="mbadge {l.method}">{l.kind === 'brush' ? l.label : l.method}</span>
                 {#if l.fellBack}<span class="warn">fallback</span>{/if}
               </button>
-              <select class="redo" value={l.method} title="Re-clean with method" onchange={(e) => recleanRegion(l.n, e.target.value)}>
-                {#each METHODS as m}<option value={m} disabled={m === 'flux' && !app.flux.available}>{m}</option>{/each}
-              </select>
+              {#if l.kind === 'brush'}
+                <span class="brushtag" title="Manual brush layer">brush</span>
+              {:else}
+                <select class="redo" value={l.method} title="Re-clean with method" onchange={(e) => recleanRegion(l.n, e.target.value)}>
+                  {#each METHODS as m}<option value={m} disabled={m === 'flux' && !app.flux.available}>{m}</option>{/each}
+                </select>
+              {/if}
               <button class="mini danger" title="Delete layer" onclick={() => deleteLayer(l.id)}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
               </button>
@@ -130,6 +168,9 @@
           {/each}
         </div>
       {/if}
+      <button class="btn flatten" disabled={flattening || !p.raw} title="Composite raw + visible layers into the cleaned page (feeds Translate + export)" onclick={onFlatten}>
+        {flattening ? 'Flattening…' : 'Bake / Flatten clean'}
+      </button>
     </div>
   </div>
 
@@ -140,7 +181,54 @@
       Brush Tools
     </div>
     <div class="section-body">
-      <div class="qhint">Clone &amp; content-aware fill (Rust-backed) — coming soon.</div>
+      <div class="tools">
+        {#each BRUSH_TOOLS as [id, label]}
+          <button class="tool" class:on={app.tool === 'brush' && app.brush.tool === id} onclick={() => setBrushTool(id)}>{label}</button>
+        {/each}
+      </div>
+      <div class="bhint">
+        {brushHint}
+        {#if app.brush.tool === 'clone'}
+          <span class="dim"> · source {app.brush.cloneSource ? 'set' : 'unset'}</span>
+        {/if}
+        {#if app.brush.busy}<span class="dim"> · filling…</span>{/if}
+      </div>
+
+      <label class="slider">
+        <span>Size</span>
+        <input type="range" min="4" max="240" step="1" bind:value={app.brush.size} />
+        <span class="val">{app.brush.size}</span>
+      </label>
+      <label class="slider">
+        <span>Hardness</span>
+        <input type="range" min="0" max="1" step="0.05" bind:value={app.brush.hardness} />
+        <span class="val">{Math.round(app.brush.hardness * 100)}%</span>
+      </label>
+
+      {#if app.brush.tool === 'inpaint'}
+        <div class="brow">
+          <select bind:value={app.brush.method} title="Content-aware fill method">
+            <option value="telea">Telea</option>
+            <option value="ns">Navier–Stokes</option>
+          </select>
+          <label class="fluxrow inline" title={app.flux.reason ?? ''}>
+            <input type="checkbox" checked={app.brush.flux} onchange={onBrushFluxToggle} disabled={app.flux.downloading} />
+            <span>FLUX</span>
+          </label>
+        </div>
+      {/if}
+
+      {#if app.brush.tool === 'fill'}
+        <label class="slider">
+          <span>Colour</span>
+          <input type="color" bind:value={app.brush.color} />
+          <span class="val">{app.brush.color}</span>
+        </label>
+      {/if}
+
+      {#if app.brush.tool === 'erase' && !app.selectedLayerId}
+        <div class="qhint">Select a layer above to erase from it.</div>
+      {/if}
     </div>
   </div>
 </div>
@@ -368,5 +456,94 @@
     flex: none;
     padding: 3px 4px;
     font-size: 11px;
+  }
+  .badge.brush {
+    background: #3a2f1f;
+    color: #e0c07f;
+  }
+  .brushtag {
+    flex: none;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted, #8b91a1);
+    padding: 0 2px;
+  }
+  .btn.flatten {
+    width: 100%;
+    margin-top: 8px;
+  }
+  .tools {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+  .tool {
+    padding: 6px 4px;
+    border-radius: 7px;
+    border: 1px solid var(--line, #2b2f3a);
+    background: var(--surface2, #20242e);
+    color: var(--text, #e6e8ee);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .tool.on {
+    background: var(--accent, #4b7bec);
+    border-color: var(--accent, #4b7bec);
+    color: #fff;
+    font-weight: 600;
+  }
+  .bhint {
+    font-size: 11px;
+    color: var(--muted, #8b91a1);
+    margin-bottom: 10px;
+    line-height: 1.4;
+  }
+  .slider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    margin-bottom: 8px;
+    color: var(--text, #e6e8ee);
+  }
+  .slider > span:first-child {
+    width: 58px;
+    flex: none;
+  }
+  .slider input[type='range'] {
+    flex: 1;
+    min-width: 0;
+  }
+  .slider input[type='color'] {
+    width: 34px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--line, #2b2f3a);
+    border-radius: 6px;
+    background: none;
+    cursor: pointer;
+  }
+  .slider .val {
+    width: 52px;
+    flex: none;
+    text-align: right;
+    font-size: 11px;
+    color: var(--muted, #8b91a1);
+  }
+  .brow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .brow select {
+    flex: 1;
+  }
+  .fluxrow.inline {
+    margin-bottom: 0;
+    flex: none;
   }
 </style>

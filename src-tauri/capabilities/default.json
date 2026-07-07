@@ -14,6 +14,12 @@
       "identifier": "fs:scope",
       "allow": [
         { "path": "**" }
+      ],
+      "deny": [
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.config/gh/**" }
       ]
     }
   ]

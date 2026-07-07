@@ -1,6 +1,7 @@
 <script>
-  import { app, prevPage, nextPage, setMode, page } from './store.svelte.js';
+  import { app, prevPage, nextPage, setMode, page, toast } from './store.svelte.js';
   import { pickJson, pickImages } from './importer.js';
+  import { pickPsd } from './psd.js';
   import { detectCurrentPage, sidecarReady } from './sidecar.js';
 
   let { onFontLib } = $props();
@@ -44,6 +45,9 @@
       <button class="btn" onclick={() => pickImages('raw')}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>Raw
       </button>
+      <button class="btn" onclick={() => pickPsd()} data-tip="Import layered PSD (lossless if exported here)" data-tip-pos="down">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M7 8h4a2 2 0 0 1 0 4H7zM7 8v8" /><path d="M15 8v8h2a2 2 0 0 0 0-4h-2" /></svg>PSD
+      </button>
       <button class="btn" disabled={!canDetect} onclick={() => detectCurrentPage()} data-tip={sidecarReady() ? 'Detect text + OCR (sidecar)' : 'Sidecar not ready'} data-tip-pos="down">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" /><path d="M7 12h10" /></svg>{app.detecting ? 'Detecting…' : 'Detect'}
       </button>
@@ -51,7 +55,7 @@
     <span class="divider-v"></span>
     <div class="export-combo">
       <select class="fmt" bind:value={app.fmt} data-tip="Export format">
-        <option>PNG</option><option>JPG</option><option>WebP</option>
+        <option>PNG</option><option>JPG</option><option>WebP</option><option>PSD</option>
       </select>
       <button class="btn btn-accent" onclick={openExport}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" /></svg>Export

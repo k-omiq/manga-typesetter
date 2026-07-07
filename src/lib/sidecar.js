@@ -59,7 +59,9 @@ export async function detectCurrentPage({ ocr = true } = {}) {
   app.detecting = true;
   try {
     const result = await analyzeImage(p.raw, { ocr });
-    applyDetection(result);
+    // Pin to the page detection was launched for — the user may have navigated
+    // while the sidecar ran (mirrors clean/translate's target pattern).
+    applyDetection(result, p);
     toast(`Detected ${result.lines.length} text region(s)`);
   } catch (e) {
     toast(`Detection failed: ${e}`);
@@ -107,7 +109,7 @@ export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) 
   for (const r of regions) setCleanStatus(r.n, 'cleaning');
   try {
     const result = await cleanImage(p.raw, regions, { mask: p.clean?.maskPng ?? '', method, flux });
-    applyClean(result);
+    applyClean(result, { target: p });
     toast(`Cleaned ${result.layers.length} region(s)`);
   } catch (e) {
     for (const r of regions) setCleanStatus(r.n, 'error');
@@ -131,13 +133,25 @@ export async function recleanRegion(n, method) {
     const result = await cleanImage(p.raw, [{ n, box: b.box, method }], {
       mask: p.clean?.maskPng ?? '',
       method,
+      flux: method === 'flux', // the redo dropdown offers flux; actually engage it
     });
-    applyClean(result, { replace: false });
+    applyClean(result, { replace: false, target: p });
     toast(`Re-cleaned line ${n} → ${method}`);
   } catch (e) {
     setCleanStatus(n, 'error');
     toast(`Re-clean failed: ${e}`);
   }
+}
+
+// Content-aware fill over a user-painted brush mask. `image` is a Blob of the
+// current clean composite (raw + visible patches); `maskPng` is the base64
+// painted alpha (no data: prefix). Returns one patch layer
+// { box:[x,y,w,h], patch_png, method, fell_back }. Requires Tauri + a sidecar.
+export async function brushInpaint(image, maskPng, { method = 'telea', flux = false } = {}) {
+  const invoke = await getInvoke();
+  if (!invoke) throw new Error('sidecar unavailable (no Tauri runtime)');
+  const bytes = Array.from(new Uint8Array(await image.arrayBuffer()));
+  return invoke('sidecar_clean_brush', { image: bytes, maskPng, method, flux });
 }
 
 // ---- opt-in FLUX inpainter ------------------------------------------------
@@ -229,7 +243,7 @@ export async function translateCurrentPage() {
       special_instructions: t.special ?? '',
     };
     const result = await invoke('sidecar_translate', { payload });
-    applyTranslation(result);
+    applyTranslation(result, p);
     const n = (result.lines ?? []).filter((x) => x.en).length;
     toast(`Translated ${n} line(s)`);
   } catch (e) {

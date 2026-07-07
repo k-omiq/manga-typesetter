@@ -24,6 +24,9 @@
   });
 
   const keyFor = $derived(t.apiKeys?.[t.provider] ?? '');
+  // OpenAI-Compatible may be keyless (local servers); everything else needs a key.
+  const keyRequired = $derived(t.provider !== 'OpenAI-Compatible');
+  const keyMissing = $derived(keyRequired && !(t.apiKeys?.[t.provider] ?? '').trim());
   function setKey(v) {
     t.apiKeys = { ...t.apiKeys, [t.provider]: v };
     saveTranslatePrefs();
@@ -71,11 +74,15 @@
       <textarea rows="2" bind:value={t.special} oninput={saveTranslatePrefs} placeholder="e.g. keep 主人公 as 'Aoi'"></textarea>
     </label>
 
-    <button class="btn primary" disabled={t.translating || !translatable || !t.model} onclick={() => translateCurrentPage()}>
+    <button class="btn primary" disabled={t.translating || !translatable || !t.model || keyMissing} onclick={() => translateCurrentPage()}>
       {t.translating ? 'Translating…' : `Translate ${translatable} line${translatable === 1 ? '' : 's'}`}
     </button>
     {#if !translatable}
       <div class="hint">No detected JP text — run <b>Detect</b> first.</div>
+    {:else if keyMissing}
+      <div class="hint">Enter your {t.provider} API key to translate.</div>
+    {:else if !t.model}
+      <div class="hint">Set a model id to translate.</div>
     {/if}
   </div>
 </div>

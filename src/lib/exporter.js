@@ -1,5 +1,5 @@
 // Native-resolution raster export via canvas 2D. PNG is lossless.
-import { app, page, toast, boxText, saveExportPrefs } from './store.svelte.js';
+import { app, page, toast, boxText, saveExportPrefs, patchSrc, markUnsaved } from './store.svelte.js';
 import { familyFor, fontShorthand, applyCase, wrapLinesDOM, arcLayout, maxLineWidth } from './measure.js';
 
 function loadImage(src) {
@@ -52,16 +52,15 @@ function roughen(ctx, w, h, amount, detail, seed) {
   ctx.putImageData(dst, 0, 0);
 }
 
-// Render one box's text onto an offscreen canvas (native units).
-// The canvas is grown to contain the FULL text block, including any overflow
-// beyond the box rectangle on all sides — mirroring the editor's
-// `overflow:visible` centered layout so nothing gets clipped on export.
-// Returns {canvas, pad, leftExtra, topExtra}: leftExtra/topExtra are how far
-// the box's top-left sits inside the (padded) canvas, so the caller can pivot
-// rotation around the box center exactly like the app.
-function renderBox(box) {
+// Lay out a box's text and compute its canvas geometry WITHOUT drawing. The
+// footprint (cw×ch) grows to contain the full block incl. overflow beyond the
+// box rect on all sides — mirroring the editor's `overflow:visible` centered
+// layout so nothing clips on export. (ox,oy) is where the box's top-left sits
+// inside that footprint. Split out from painting so rotated text can be drawn
+// directly onto the page canvas (sharp glyphs) instead of rotating a raster.
+function layoutBox(box, p) {
   const s = box.style;
-  const text = applyCase(boxText(box), s);
+  const text = applyCase(boxText(box, p), s);
   const lineH = s.size * s.lineHeight;
   const pad = Math.ceil(
     Math.max(s.outlineWidth * 2, s.shadow.on ? Math.abs(s.shadow.x) + Math.abs(s.shadow.y) + s.shadow.blur : 0, s.roughen.on ? s.roughen.amount + 2 : 0) + 4,
@@ -69,9 +68,6 @@ function renderBox(box) {
 
   const isCurve = s.curve && s.curve !== 0 && text.trim() !== '';
 
-  // ---- 1. Lay out text and compute its real bounds relative to the box rect.
-  // Bounds are expressed as overflow distances beyond each edge of the box
-  // (0 when the text fits inside that edge).
   let lines = null;
   let layout = null;
   let leftExtra = 0,
@@ -80,8 +76,6 @@ function renderBox(box) {
     bottomExtra = 0;
 
   if (isCurve) {
-    // Curved single-line: glyphs are positioned around the box center. Find the
-    // glyph extent (incl. half a glyph's size as a rough cap for stroke/shape).
     layout = arcLayout(text, s, s.size);
     let minX = 0,
       maxX = 0,
@@ -94,63 +88,60 @@ function renderBox(box) {
       minY = Math.min(minY, g.y - half);
       maxY = Math.max(maxY, g.y + half);
     }
-    // Glyph coords are relative to box center; convert to per-edge overflow.
     leftExtra = Math.max(0, -minX - box.w / 2);
     rightExtra = Math.max(0, maxX - box.w / 2);
     topExtra = Math.max(0, -minY - box.h / 2);
     bottomExtra = Math.max(0, maxY - box.h / 2);
   } else {
-    // box.w - 4 = content width (the box has 2px horizontal padding each side),
-    // so export breaks lines exactly where the editor's CSS does.
+    // box.w - 4 = content width (2px horizontal padding each side), so export
+    // breaks lines exactly where the editor's CSS does.
     lines = wrapLinesDOM(text, s, s.size, box.w - 4);
     const blockH = lines.length * lineH;
     const blockW = maxLineWidth(lines, s, s.size);
 
-    // Vertical overflow depends on valign (mirrors flex align-items).
     if (s.valign === 'middle') {
       const o = Math.max(0, (blockH - box.h) / 2);
       topExtra = o;
       bottomExtra = o;
     } else if (s.valign === 'bottom') {
-      topExtra = Math.max(0, blockH - box.h); // block ends at box bottom
+      topExtra = Math.max(0, blockH - box.h);
     } else {
-      bottomExtra = Math.max(0, blockH - box.h); // top: block starts at box top
+      bottomExtra = Math.max(0, blockH - box.h);
     }
 
-    // Horizontal overflow depends on text-align (line wider than box.w spills).
     const hOver = Math.max(0, blockW - box.w);
     if (s.align === 'center') {
       leftExtra = hOver / 2;
       rightExtra = hOver / 2;
     } else if (s.align === 'right') {
-      leftExtra = hOver; // anchored at box right → spills left
+      leftExtra = hOver;
     } else {
-      rightExtra = hOver; // left: anchored at box left → spills right
+      rightExtra = hOver;
     }
   }
 
-  // ---- 2. Size the canvas to box + overflow + pad (for stroke/shadow/roughen).
   leftExtra = Math.ceil(leftExtra);
   rightExtra = Math.ceil(rightExtra);
   topExtra = Math.ceil(topExtra);
   bottomExtra = Math.ceil(bottomExtra);
-  const ox = leftExtra + pad; // box's top-left X inside the canvas
-  const oy = topExtra + pad; // box's top-left Y inside the canvas
+  const ox = leftExtra + pad; // box's top-left X inside the footprint
+  const oy = topExtra + pad; // box's top-left Y inside the footprint
   const cw = Math.ceil(box.w + leftExtra + rightExtra + pad * 2);
   const ch = Math.ceil(box.h + topExtra + bottomExtra + pad * 2);
+  return { s, lineH, pad, isCurve, lines, layout, leftExtra, topExtra, ox, oy, cw, ch };
+}
 
-  const cnv = document.createElement('canvas');
-  cnv.width = cw;
-  cnv.height = ch;
-  const ctx = cnv.getContext('2d');
-  const family = familyFor(s);
-  ctx.font = fontShorthand(s, s.size, family);
+// Paint a laid-out box (L from layoutBox) onto `ctx`, with the box's top-left at
+// (L.ox, L.oy) in the current transform. Works on either an offscreen canvas or
+// directly on a rotated page context.
+function paintBox(ctx, box, L) {
+  const s = L.s;
+  ctx.font = fontShorthand(s, s.size, familyFor(s));
   ctx.textBaseline = 'top';
   ctx.lineJoin = 'round';
   ctx.miterLimit = 2;
 
   const strokeFill = (drawFns) => {
-    // shadow pass
     if (s.shadow.on) {
       ctx.save();
       ctx.shadowColor = hexToRgba(s.shadow.color, s.shadow.opacity);
@@ -161,7 +152,6 @@ function renderBox(box) {
       drawFns.fill();
       ctx.restore();
     }
-    // outline
     if (s.outlineWidth > 0) {
       ctx.strokeStyle = s.outline;
       ctx.lineWidth = s.outlineWidth * 2;
@@ -171,15 +161,13 @@ function renderBox(box) {
     drawFns.fill();
   };
 
-  if (isCurve) {
-    // curved single-line layout along a circular arc, centered on the box.
-    const cx = ox + box.w / 2;
-    const cy = oy + box.h / 2;
-    const prevBaseline = ctx.textBaseline;
+  if (L.isCurve) {
+    const cx = L.ox + box.w / 2;
+    const cy = L.oy + box.h / 2;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
     const place = (cb) => {
-      for (const g of layout) {
+      for (const g of L.layout) {
         ctx.save();
         ctx.translate(cx + g.x, cy + g.y);
         ctx.rotate(g.rot);
@@ -188,45 +176,65 @@ function renderBox(box) {
       }
     };
     strokeFill({
-      stroke: () => place((ch, x, y) => ctx.strokeText(ch, x, y)),
-      fill: () => place((ch, x, y) => ctx.fillText(ch, x, y)),
+      stroke: () => place((c, x, y) => ctx.strokeText(c, x, y)),
+      fill: () => place((c, x, y) => ctx.fillText(c, x, y)),
     });
-    ctx.textBaseline = prevBaseline;
   } else {
-    // straight multi-line layout. The text block is positioned relative to the
-    // box rectangle (whose top-left sits at ox,oy inside the enlarged canvas).
     if ('letterSpacing' in ctx) ctx.letterSpacing = `${s.letterSpacing}px`;
-    const blockH = lines.length * lineH;
-    let startY = oy;
-    if (s.valign === 'middle') startY = oy + (box.h - blockH) / 2;
-    else if (s.valign === 'bottom') startY = oy + (box.h - blockH);
+    const blockH = L.lines.length * L.lineH;
+    let startY = L.oy;
+    if (s.valign === 'middle') startY = L.oy + (box.h - blockH) / 2;
+    else if (s.valign === 'bottom') startY = L.oy + (box.h - blockH);
     ctx.textAlign = s.align;
-    const anchorX = s.align === 'left' ? ox : s.align === 'right' ? ox + box.w : ox + box.w / 2;
+    const anchorX = s.align === 'left' ? L.ox : s.align === 'right' ? L.ox + box.w : L.ox + box.w / 2;
     const drawAll = (fn) => {
-      lines.forEach((ln, i) => fn(ln, anchorX, startY + i * lineH + (lineH - s.size) / 2));
+      L.lines.forEach((ln, i) => fn(ln, anchorX, startY + i * L.lineH + (L.lineH - s.size) / 2));
     };
     strokeFill({
       stroke: () => drawAll((ln, x, y) => ctx.strokeText(ln, x, y)),
       fill: () => drawAll((ln, x, y) => ctx.fillText(ln, x, y)),
     });
   }
-
-  if (s.roughen.on) roughen(ctx, cw, ch, s.roughen.amount, s.roughen.detail, s.roughen.seed);
-  return { canvas: cnv, pad, leftExtra, topExtra };
 }
 
-const MIME = { PNG: 'image/png', JPG: 'image/jpeg', WebP: 'image/webp' };
-const EXT = { PNG: 'png', JPG: 'jpg', WebP: 'webp' };
-const QUALITY = { PNG: undefined, JPG: 0.95, WebP: 0.92 };
+// Render a box to its own supersampled offscreen canvas. Used for un-rotated
+// boxes and for rotated+roughened boxes (whose pixel-space displacement needs
+// an axis-aligned raster). Non-roughened text is supersampled 2x so the
+// downscale-on-composite yields crisp edges.
+function renderBox(box, p) {
+  const L = layoutBox(box, p);
+  const s = L.s;
+  const SS = s.roughen.on ? 1 : 2;
+  const cnv = document.createElement('canvas');
+  cnv.width = L.cw * SS;
+  cnv.height = L.ch * SS;
+  const ctx = cnv.getContext('2d');
+  ctx.scale(SS, SS); // all drawing stays in native units; SS handled here
+  ctx.imageSmoothingQuality = 'high';
+  paintBox(ctx, box, L);
+  if (s.roughen.on) roughen(ctx, L.cw, L.ch, s.roughen.amount, s.roughen.detail, s.roughen.seed);
+  return { canvas: cnv, pad: L.pad, leftExtra: L.leftExtra, topExtra: L.topExtra, cw: L.cw, ch: L.ch };
+}
 
-// Render one page to a Blob in the requested format (native resolution).
-async function renderPageBlob(p, fmt) {
+const MIME = { PNG: 'image/png', JPG: 'image/jpeg', WebP: 'image/webp', PSD: 'image/vnd.adobe.photoshop' };
+const EXT = { PNG: 'png', JPG: 'jpg', WebP: 'webp', PSD: 'psd' };
+const QUALITY = { PNG: undefined, JPG: 0.95, WebP: 0.92, PSD: undefined };
+
+// Render one page to a canvas: white base + cleaned image (if any) + all text
+// boxes composited exactly as the editor shows them. Split out from
+// renderPageBlob so the PSD exporter can grab the exact composite ImageData
+// (for the flattened preview / merged image) without a Blob round-trip.
+// `scale` supersamples the whole page (2 = 2x pixel dims); because text is
+// already rendered 2x internally, an outer scale maps that bitmap 1:1 to device
+// pixels — so 2x output stays genuinely sharp, not a soft upscale.
+export async function renderPageCanvas(p, scale = 1) {
   const W = p.w,
     H = p.h;
   const canvas = document.createElement('canvas');
-  canvas.width = W;
-  canvas.height = H;
+  canvas.width = Math.round(W * scale);
+  canvas.height = Math.round(H * scale);
   const ctx = canvas.getContext('2d');
+  if (scale !== 1) ctx.scale(scale, scale);
   // white base (JPG has no alpha; manga pages are white anyway)
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
@@ -238,20 +246,182 @@ async function renderPageBlob(p, fmt) {
       /* draw text on white if image fails */
     }
   }
+  ctx.imageSmoothingQuality = 'high'; // crisp downscale of the supersampled text
   for (const box of p.boxes) {
-    const { canvas: bc, pad, leftExtra, topExtra } = renderBox(box);
     ctx.save();
     ctx.globalAlpha = box.style.opacity ?? 1;
-    const cx = box.x + box.w / 2;
-    const cy = box.y + box.h / 2;
-    ctx.translate(cx, cy);
-    ctx.rotate((box.style.rotation * Math.PI) / 180);
-    // Draw so the BOX center (which sits at leftExtra+pad+w/2, topExtra+pad+h/2
-    // inside the enlarged canvas) lands on the origin — keeping the rotation
-    // pivot at the box center, exactly like the editor rotates .tbox.
-    ctx.drawImage(bc, -(box.w / 2 + leftExtra + pad), -(box.h / 2 + topExtra + pad));
+    paintBoxOnPage(ctx, box, p);
     ctx.restore();
   }
+  return canvas;
+}
+
+// Draw one box's glyphs onto `ctx` at page coordinates, exactly as the page
+// composite does — sharp direct-angle draw for rotated opaque text, raster
+// fallback for roughened/translucent. Opacity is applied by the caller (via
+// ctx.globalAlpha or a layer opacity), NOT here, so the same pixels can back a
+// translucent PSD layer.
+function paintBoxOnPage(ctx, box, p) {
+  const s = box.style;
+  const rot = s.rotation || 0;
+  const opaque = (s.opacity ?? 1) >= 0.999;
+  if (rot !== 0 && !s.roughen.on && opaque) {
+    // Rotated text: paint glyphs DIRECTLY at the angle so they rasterize sharp
+    // (rotating a pre-rendered bitmap would resample and soften it). Pivot
+    // around the box center like the editor rotates .tbox. Roughened or
+    // translucent boxes fall through to the raster path so their pixel filter
+    // / alpha compositing stays correct.
+    const L = layoutBox(box, p);
+    ctx.save();
+    ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
+    ctx.rotate((rot * Math.PI) / 180);
+    ctx.translate(-box.w / 2 - L.ox, -box.h / 2 - L.oy);
+    paintBox(ctx, box, L);
+    ctx.restore();
+  } else {
+    const { canvas: bc, pad, leftExtra, topExtra, cw, ch } = renderBox(box, p);
+    if (rot === 0) {
+      // Integer-snap the bitmap origin so a sub-pixel box position doesn't
+      // force a bilinear resample of the whole text block (the primary blur).
+      const originX = Math.round(box.x - leftExtra - pad);
+      const originY = Math.round(box.y - topExtra - pad);
+      ctx.drawImage(bc, originX, originY, cw, ch);
+    } else {
+      // Rotated raster fallback (roughened/translucent): downsample the SSx
+      // bitmap into its native footprint, pivoting at the box center.
+      ctx.save();
+      ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
+      ctx.rotate((rot * Math.PI) / 180);
+      ctx.drawImage(bc, -(box.w / 2 + leftExtra + pad), -(box.h / 2 + topExtra + pad), cw, ch);
+      ctx.restore();
+    }
+  }
+}
+
+// Render a single box to its own compact, transparent canvas with the exact
+// sharp pixels the page composite would show for it (opacity NOT baked in —
+// returned as `opacity`). Used as the cached rasterization of an editable PSD
+// text layer so it displays pixel-identical to the app even when the manga
+// font is missing in Photoshop. Returns null for a box that paints nothing.
+// `scratch` is an optional reusable (W*scale)×(H*scale) canvas to avoid per-box
+// allocations. `p` is the box's page (so line-backed text resolves correctly).
+// `scale` supersamples to match a scaled document; returned bounds are in the
+// scaled (device) pixel space.
+export function renderBoxLayer(box, W, H, scratch, p, scale = 1) {
+  const SW = Math.round(W * scale);
+  const SH = Math.round(H * scale);
+  const cnv = scratch || document.createElement('canvas');
+  if (cnv.width !== SW) cnv.width = SW;
+  if (cnv.height !== SH) cnv.height = SH;
+  const ctx = cnv.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, SW, SH);
+  if (scale !== 1) ctx.scale(scale, scale);
+  ctx.imageSmoothingQuality = 'high';
+  paintBoxOnPage(ctx, box, p); // full opacity; layer opacity applied by consumer
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const full = ctx.getImageData(0, 0, SW, SH);
+  const d = full.data;
+  let minX = SW,
+    minY = SH,
+    maxX = -1,
+    maxY = -1;
+  for (let y = 0; y < SH; y++) {
+    for (let x = 0; x < SW; x++) {
+      if (d[(y * SW + x) * 4 + 3] !== 0) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return null; // nothing drawn (empty text)
+  const w = maxX - minX + 1;
+  const h = maxY - minY + 1;
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  out.getContext('2d').putImageData(full, -minX, -minY);
+  return {
+    imageData: out.getContext('2d').getImageData(0, 0, w, h),
+    left: minX,
+    top: minY,
+    right: minX + w,
+    bottom: minY + h,
+    opacity: box.style.opacity ?? 1,
+  };
+}
+
+// Composite a page's clean layers onto its raw base exactly as the editor shows
+// them in clean mode: raw page + ordered *visible* patch layers, each drawn at
+// its box. This is the same math Editor.svelte renders and it backs both the
+// brush tools' source image and Flatten. Returns a canvas (untainted — raw is a
+// blob URL, patches are data URLs, both same-origin).
+export async function compositeCleanCanvas(p, scale = 1) {
+  const W = p.w,
+    H = p.h;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(W * scale);
+  canvas.height = Math.round(H * scale);
+  const ctx = canvas.getContext('2d');
+  if (scale !== 1) ctx.scale(scale, scale);
+  ctx.imageSmoothingQuality = 'high';
+  const base = p.raw ?? p.clean?.base;
+  if (base) {
+    try {
+      const img = await loadImage(base);
+      ctx.drawImage(img, 0, 0, W, H);
+    } catch {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+  for (const l of p.clean?.layers ?? []) {
+    if (!l.visible) continue;
+    const src = patchSrc(l);
+    if (!src) continue;
+    try {
+      const img = await loadImage(src);
+      ctx.drawImage(img, l.box[0], l.box[1], l.box[2], l.box[3]);
+    } catch {
+      /* skip a patch that fails to decode */
+    }
+  }
+  return canvas;
+}
+
+function canvasToBlob(canvas, fmt = 'PNG') {
+  return new Promise((res) => canvas.toBlob(res, MIME[fmt], QUALITY[fmt]));
+}
+
+// Bake the clean composite (raw + visible patch layers) into p.cleaned so the
+// cleaning actually feeds translate mode and the exporter (both read p.cleaned).
+// Without this, auto/brush clean layers only ever render in clean mode.
+export async function flattenClean(p = page()) {
+  if (!p.raw && !p.clean?.base) {
+    toast('No raw page to flatten');
+    return false;
+  }
+  try {
+    const canvas = await compositeCleanCanvas(p);
+    const blob = await canvasToBlob(canvas, 'PNG');
+    if (!blob) throw new Error('encode failed');
+    if (p.cleaned && p.cleaned.startsWith('blob:')) URL.revokeObjectURL(p.cleaned);
+    p.cleaned = URL.createObjectURL(blob);
+    markUnsaved();
+    const n = (p.clean?.layers ?? []).filter((l) => l.visible).length;
+    toast(`Flattened ${n} clean layer(s) → cleaned page`);
+    return true;
+  } catch (e) {
+    toast('Flatten failed: ' + (e?.message || e));
+    return false;
+  }
+}
+
+// Render one page to a Blob in the requested raster format (native resolution).
+async function renderPageBlob(p, fmt) {
+  const canvas = await renderPageCanvas(p);
   return new Promise((res) => canvas.toBlob(res, MIME[fmt], QUALITY[fmt]));
 }
 
@@ -316,7 +486,17 @@ export async function exportImages(fmt, scope) {
     const ext = EXT[fmt];
     const items = [];
     for (const p of pages) {
-      const blob = await renderPageBlob(p, fmt);
+      let blob;
+      if (fmt === 'PSD') {
+        // Layered, editable PSD carrying the full project as embedded JSON so
+        // it round-trips losslessly (one .psd per page). Lazily imported so
+        // ag-psd isn't pulled into the raster-export path.
+        const { buildPagePsd } = await import('./psd.js');
+        const bytes = await buildPagePsd(p);
+        blob = new Blob([bytes], { type: MIME.PSD });
+      } else {
+        blob = await renderPageBlob(p, fmt);
+      }
       items.push({ name: `${app.exportName}-${p.id}.${ext}`, blob, page: p });
     }
     if (isTauri()) {

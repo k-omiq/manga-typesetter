@@ -12,6 +12,7 @@ import {
 export { PAGE_W, PAGE_H };
 
 let boxSeq = 1;
+let pageLoadSeq = 5000; // page ids for imported projects that carry none
 
 function clonePage(p) {
   const cloned = {
@@ -24,8 +25,17 @@ function clonePage(p) {
     // Clean-mode state: each detected text becomes its own editable patch layer.
     // composite = raw + ordered visible patches. Populated by the clean pipeline.
     clean: p.clean
-      ? { base: p.clean.base ?? null, layers: p.clean.layers.map((l) => ({ ...l })) }
-      : { base: null, layers: [] },
+      ? {
+          base: p.clean.base ?? null,
+          maskPng: p.clean.maskPng ?? null,
+          status: { ...(p.clean.status ?? {}) },
+          layers: p.clean.layers.map((l) => ({ ...l })),
+        }
+      : { base: null, maskPng: null, status: {}, layers: [] },
+    // Detection geometry (drives the cleaning queue + box auto-placement).
+    detect: p.detect
+      ? { panels: (p.detect.panels ?? []).slice(), boxes: p.detect.boxes.map((b) => ({ ...b })) }
+      : null,
     boxes: p.boxes.map((b) => ({
       id: 'b' + boxSeq++,
       lineN: b.lineN,
@@ -40,6 +50,54 @@ function clonePage(p) {
   };
   cloned.activeLineN = firstUnplaced(cloned);
   return cloned;
+}
+
+// Replace all pages from an imported project (e.g. a lossless PSD). Mirrors
+// clonePage but assigns fresh box AND clean-layer ids from the store's own
+// sequences (so nothing collides with existing state) and normalizes styles up
+// to the current schema. Object URLs (raw/cleaned/clean.base) are passed
+// through as-is — the caller regenerates them from the source.
+export function loadProjectPages(rawPages) {
+  app.pages = rawPages.map((p) => {
+    const cp = {
+      id: p.id ?? pageLoadSeq++,
+      raw: p.raw ?? null,
+      cleaned: p.cleaned ?? null,
+      w: p.w ?? PAGE_W,
+      h: p.h ?? PAGE_H,
+      lines: (p.lines ?? []).map((l) => ({ ...l })),
+      clean: p.clean
+        ? {
+            base: p.clean.base ?? null,
+            maskPng: p.clean.maskPng ?? null,
+            status: { ...(p.clean.status ?? {}) },
+            layers: (p.clean.layers ?? []).map((l) => ({ ...l, id: 'L' + layerSeq++ })),
+          }
+        : { base: null, maskPng: null, status: {}, layers: [] },
+      detect: p.detect
+        ? { panels: (p.detect.panels ?? []).slice(), boxes: p.detect.boxes.map((b) => ({ ...b })) }
+        : null,
+      boxes: (p.boxes ?? []).map((b) => ({
+        id: 'b' + boxSeq++,
+        lineN: b.lineN,
+        text: b.text ?? null,
+        x: b.x,
+        y: b.y,
+        w: b.w,
+        h: b.h,
+        style: normalizeStyle(b.style),
+      })),
+      activeLineN: null,
+    };
+    cp.activeLineN = firstUnplaced(cp);
+    return cp;
+  });
+  app.pageIndex = 0;
+  app.selectedId = null;
+  app.selectedLayerId = null;
+  app.editingId = null;
+  app.loaded = true;
+  markUnsaved();
 }
 
 export function firstUnplaced(p) {
@@ -81,6 +139,20 @@ export const app = $state({
   cleaning: false, // a /clean request is in flight
   selectedLayerId: null, // active clean patch layer
   flux: { available: false, reason: null, checking: false, downloading: false }, // opt-in inpaint
+  // Phase 4 manual brush tools (clean mode only). Every stroke becomes its own
+  // brush patch layer (page.clean.layers, kind:'brush'), so it toggles/deletes
+  // like an auto region. `tool` is the active sub-tool; brush is the engaged
+  // editor tool when app.tool === 'brush'.
+  brush: {
+    tool: 'inpaint', // 'inpaint' | 'clone' | 'fill' | 'erase'
+    size: 40, // brush diameter in IMAGE px
+    hardness: 0.7, // 0 = fully soft, 1 = hard edge
+    color: '#ffffff', // solid/sampled fill colour
+    method: 'telea', // content-aware fill flavour (telea | ns)
+    flux: false, // opt into FLUX for brush inpaint
+    cloneSource: null, // {x,y} image-space anchor for the clone tool
+    busy: false, // a brush-inpaint request is in flight
+  },
   // BYOK LLM translation (reuses MangaTranslator's provider set). Keys are kept
   // locally (localStorage) for convenience; never leave the machine except in
   // the loopback request the Rust side proxies to the sidecar.
@@ -105,9 +177,12 @@ export const lineText = (ln) => {
   if (!ln) return '';
   return ln.en ?? ln.natural ?? ln.stylised ?? ln.text ?? '';
 };
-export const boxText = (b) => {
+// Resolve a box's display text. Line-backed boxes (text == null) look up their
+// line on `p` — defaulting to the current page, but callers rendering another
+// page (e.g. export-all) must pass that page so glyphs resolve correctly.
+export const boxText = (b, p = page()) => {
   if (b.text != null) return b.text;
-  return lineText(lineByN(page(), b.lineN));
+  return lineText(lineByN(p ?? page(), b.lineN));
 };
 export function setMode(m) {
   app.mode = m === 'clean' ? 'clean' : 'translate';
@@ -182,6 +257,7 @@ export function gotoPage(i) {
   if (i < 0 || i > app.pages.length - 1) return;
   app.pageIndex = i;
   app.selectedId = null;
+  app.selectedLayerId = null; // layer ids are per-page; don't leak selection across pages
   const p = page();
   if (p.activeLineN == null) p.activeLineN = firstUnplaced(p);
 }
@@ -232,12 +308,13 @@ export function setPageDims(w, h) {
 // ---------- tool mode ----------
 export function setTool(t) {
   app.tool = t;
+  if (t !== 'brush') app.brush.cloneSource = null;
 }
 
 // ---------- apply sidecar detection result to the current page ----------
 // result = { img_width, img_height, lines:[{n,type,jp,en,box,vertical,font_size}], mask_png }
-export function applyDetection(result) {
-  const p = page();
+export function applyDetection(result, target = null) {
+  const p = target ?? page();
   if (result.img_width && result.img_height) {
     p.w = result.img_width;
     p.h = result.img_height;
@@ -277,12 +354,13 @@ export function setCleanStatus(n, s) {
 
 // Merge cleaned layers from a /clean result. replace=true swaps the whole set;
 // replace=false updates only the regions present in the result (single-region redo).
-export function applyClean(result, { replace = true } = {}) {
-  const p = page();
+export function applyClean(result, { replace = true, target = null } = {}) {
+  const p = target ?? page();
   if (!p.clean) p.clean = { base: null, layers: [] };
   p.clean.base = p.raw ?? p.clean.base;
   const incoming = (result.layers ?? []).map((L) => ({
     id: 'L' + layerSeq++,
+    kind: 'region', // auto layer from a detected text region (vs 'brush')
     n: L.n,
     box: L.box, // [x, y, w, h] in image coords
     method: L.method,
@@ -300,7 +378,11 @@ export function applyClean(result, { replace = true } = {}) {
     p.clean.layers = p.clean.layers.map((l) => byN.get(l.n) ?? l);
     for (const l of incoming) if (!p.clean.layers.some((x) => x.n === l.n)) p.clean.layers.push(l);
   }
-  for (const l of incoming) setCleanStatus(l.n, 'done');
+  // Mark status on the target page directly (not page(), which may have changed
+  // if the user navigated while the request was in flight).
+  const st = { ...(p.clean.status ?? {}) };
+  for (const l of incoming) st[l.n] = 'done';
+  p.clean.status = st;
   markUnsaved();
 }
 
@@ -319,18 +401,97 @@ export function deleteLayer(id) {
   const l = p.clean?.layers.find((x) => x.id === id);
   if (!l) return;
   p.clean.layers = p.clean.layers.filter((x) => x.id !== id);
-  setCleanStatus(l.n, 'pending');
+  // Region layers return their detected line to the cleaning queue; brush layers
+  // (no `n`) have no queue entry to restore.
+  if (l.n != null) setCleanStatus(l.n, 'pending');
   if (app.selectedLayerId === id) app.selectedLayerId = null;
   markUnsaved();
-  toast(`Deleted clean layer · line ${l.n} back to queue`);
+  toast(l.n != null ? `Deleted clean layer · line ${l.n} back to queue` : `Deleted ${l.label ?? 'brush'} layer`);
 }
 export const layerByLine = (n) => page().clean?.layers.find((x) => x.n === n) ?? null;
 export const patchSrc = (layer) => (layer?.patchPng ? 'data:image/png;base64,' + layer.patchPng : null);
 
+// ---------- brush patch layers (Phase 4) ----------
+// A brush stroke commits to its own layer, composited by box exactly like an
+// auto region. `op` records the tool; brush layers carry no detected `n`.
+let brushSeq = 1;
+const BRUSH_LABEL = { inpaint: 'Fill', clone: 'Clone', fill: 'Paint', erase: 'Erase' };
+
+export function addBrushLayer({ op, box, patchPng, method = null, fellBack = false }, target = null) {
+  // Pin to the page the stroke was made on — a client tool's compositing or the
+  // sidecar inpaint may resolve after the user navigated away.
+  const p = target ?? page();
+  if (!p.clean) p.clean = { base: null, maskPng: null, status: {}, layers: [] };
+  p.clean.base = p.raw ?? p.clean.base;
+  const layer = {
+    id: 'L' + layerSeq++,
+    kind: 'brush',
+    op,
+    n: null,
+    label: `${BRUSH_LABEL[op] ?? 'Brush'} ${brushSeq++}`,
+    box, // [x, y, w, h] in image coords
+    method: method ?? op, // drives the panel badge
+    fellBack: !!fellBack,
+    patchPng,
+    visible: true,
+  };
+  p.clean.layers.push(layer);
+  app.selectedLayerId = layer.id;
+  markUnsaved();
+  pushBrushUndo({ type: 'add', id: layer.id, page: p });
+  return layer;
+}
+
+// Replace a layer's patch pixels in place (used by the eraser, which subtracts
+// from the selected layer's alpha). Box is unchanged. `target` pins the page.
+export function updateLayerPatch(id, patchPng, target = null) {
+  const l = (target ?? page()).clean?.layers.find((x) => x.id === id);
+  if (!l) return;
+  l.patchPng = patchPng;
+  markUnsaved();
+}
+
+// ---------- brush undo (per-stroke) ----------
+// Additive strokes (add layer) undo by delete; erase strokes undo by restoring
+// the prior patch. Each entry pins the page it was made on, so undo after
+// navigating away still edits the right page. deleteLayer covers manual removal;
+// this only backs the brush overlay's Cmd/Ctrl-Z.
+export const brushUndo = $state({ stack: [] });
+export function pushBrushUndo(entry) {
+  brushUndo.stack.push(entry);
+  if (brushUndo.stack.length > 50) brushUndo.stack.shift();
+}
+export function undoBrush() {
+  const e = brushUndo.stack.pop();
+  if (!e) {
+    toast('Nothing to undo');
+    return;
+  }
+  const p = e.page ?? page();
+  const layers = p.clean?.layers ?? [];
+  if (e.type === 'add') {
+    p.clean.layers = layers.filter((x) => x.id !== e.id);
+    if (app.selectedLayerId === e.id) app.selectedLayerId = null;
+    toast('Undid brush stroke');
+  } else if (e.type === 'erase') {
+    const l = layers.find((x) => x.id === e.id);
+    if (l) l.patchPng = e.prevPatchPng;
+    toast('Undid erase');
+  }
+  markUnsaved();
+}
+
+// ---------- brush tool selection ----------
+export function setBrushTool(t) {
+  app.tool = 'brush';
+  app.brush.tool = t;
+  if (t !== 'clone') app.brush.cloneSource = null;
+}
+
 // ---------- translation ----------
 // Apply a /translate result ({ lines:[{n,en}] }) onto the current page's lines.
-export function applyTranslation(result) {
-  const p = page();
+export function applyTranslation(result, target = null) {
+  const p = target ?? page();
   const byN = new Map((result.lines ?? []).map((l) => [l.n, l.en]));
   for (const ln of p.lines) {
     if (byN.has(ln.n) && byN.get(ln.n) != null) ln.en = byN.get(ln.n);

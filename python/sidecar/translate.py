@@ -20,10 +20,18 @@ MangaTranslator is Apache-2.0 (compatible with this GPL-3 sidecar).
 
 from __future__ import annotations
 
+import re
 import sys
 import types
 from pathlib import Path
 from typing import Optional
+
+# Sentinel strings MangaTranslator emits for unparseable/missing items. We blank
+# these so they never get typeset into a bubble as if they were a translation.
+_SENTINEL = re.compile(
+    r"^\s*\[[^\]]*(?:Missing item|Parse error|OCR FAILED|API failed|Empty response)[^\]]*\]\s*$",
+    re.IGNORECASE,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MT_DIR = _REPO_ROOT / "external" / "MangaTranslator"
@@ -79,6 +87,19 @@ def _ensure_mt():
     from core.config import TranslationConfig
     from core.llm_defaults import get_provider_sampling_defaults
     from core.services import translation
+
+    # MangaTranslator dumps the raw LLM response (the user's manga dialogue) to
+    # stdout via log_message(..., always_print=True), ignoring `verbose`. Replace
+    # the module's log_message with one that honours verbose only, so page text
+    # never leaks to the sidecar log unless explicitly debugging.
+    _orig_log = translation.log_message
+
+    def _verbose_only_log(*args, **kwargs):
+        if kwargs.get("verbose"):
+            return _orig_log(*args, **kwargs)
+        return None
+
+    translation.log_message = _verbose_only_log
 
     _mt = (translation, TranslationConfig, get_provider_sampling_defaults)
     return _mt
@@ -185,6 +206,8 @@ def translate_lines(
     parsed = translation._parse_llm_response_unified(
         response_text, total, provider + "-Translate", debug
     )
+    # Drop missing-item / parse-error sentinels so they aren't typeset verbatim.
+    parsed = ["" if _SENTINEL.match(p or "") else p for p in parsed]
 
     by_n = {src[i][0]: parsed[i] for i in range(total)}
     return [{"n": n, "en": by_n.get(n, "")} for (n, _, _) in items]

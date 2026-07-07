@@ -8,6 +8,7 @@
     placeActiveAt,
     addEmptyBox,
     setTool,
+    setBrushTool,
     setPageDims,
     deselect,
     lineByN,
@@ -16,8 +17,14 @@
     zoomReset,
     openBulk,
     patchSrc,
+    addBrushLayer,
+    updateLayerPatch,
+    pushBrushUndo,
+    toast,
   } from './store.svelte.js';
   import { pickJson, pickImages } from './importer.js';
+  import { compositeCleanCanvas } from './exporter.js';
+  import { brushInpaint } from './sidecar.js';
 
   let scrollEl;
   let pageFrameEl;
@@ -30,6 +37,258 @@
   const cleanMode = $derived(app.mode === 'clean');
   const baseSrc = $derived(cleanMode ? (p.raw ?? p.clean?.base) : p.cleaned);
   const patches = $derived(cleanMode ? (p.clean?.layers ?? []).filter((l) => l.visible) : []);
+
+  // ---- Phase 4 brush overlay -------------------------------------------------
+  // Painted in IMAGE space: the overlay canvas backing store is p.w×p.h and CSS-
+  // scaled to the zoomed frame, so pointer coords ÷ zoom map straight to canvas
+  // pixels (no DPR math — the image-res store is already ≥ display res). Every
+  // stroke commits to its own clean.layers patch (kind:'brush').
+  const brushActive = $derived(cleanMode && app.tool === 'brush');
+  const ACCENT = '75,123,236';
+  let brushEl;
+  let ringX = $state(0),
+    ringY = $state(0),
+    ringVisible = $state(false);
+  let strokeActive = false;
+  let strokeStart = { x: 0, y: 0 };
+  // Painted bounds accumulated during the stroke (each dab ± radius), so commit
+  // never scans the whole p.w×p.h canvas — that was O(page area) per stroke and
+  // lagged on large scans.
+  let strokeBox = null;
+  const ringSize = $derived(app.brush.size * app.zoom);
+
+  function expandStrokeBox(x, y, rad) {
+    const nx0 = x - rad,
+      ny0 = y - rad,
+      nx1 = x + rad,
+      ny1 = y + rad;
+    if (!strokeBox) strokeBox = { minX: nx0, minY: ny0, maxX: nx1, maxY: ny1 };
+    else {
+      if (nx0 < strokeBox.minX) strokeBox.minX = nx0;
+      if (ny0 < strokeBox.minY) strokeBox.minY = ny0;
+      if (nx1 > strokeBox.maxX) strokeBox.maxX = nx1;
+      if (ny1 > strokeBox.maxY) strokeBox.maxY = ny1;
+    }
+  }
+
+  function loadImg(src) {
+    return new Promise((res, rej) => {
+      const im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload = () => res(im);
+      im.onerror = rej;
+      im.src = src;
+    });
+  }
+
+  function brushCoords(e) {
+    const r = brushEl.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / app.zoom, y: (e.clientY - r.top) / app.zoom };
+  }
+
+  function dab(ctx, x, y) {
+    const rad = Math.max(0.5, app.brush.size / 2);
+    const h = Math.max(0, Math.min(1, app.brush.hardness));
+    const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+    g.addColorStop(0, `rgba(${ACCENT},1)`);
+    g.addColorStop(Math.min(0.999, h), `rgba(${ACCENT},1)`);
+    g.addColorStop(1, `rgba(${ACCENT},0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, rad, 0, Math.PI * 2);
+    ctx.fill();
+    expandStrokeBox(x, y, rad);
+  }
+
+  function strokeTo(ctx, from, to) {
+    const dist = Math.hypot(to.x - from.x, to.y - from.y);
+    const step = Math.max(1, app.brush.size * 0.2);
+    const n = Math.max(1, Math.ceil(dist / step));
+    for (let i = 1; i <= n; i++) dab(ctx, from.x + ((to.x - from.x) * i) / n, from.y + ((to.y - from.y) * i) / n);
+  }
+
+  async function sampleColor(pt) {
+    const p2 = page();
+    const comp = await compositeCleanCanvas(p2);
+    const x = Math.max(0, Math.min(p2.w - 1, Math.round(pt.x)));
+    const y = Math.max(0, Math.min(p2.h - 1, Math.round(pt.y)));
+    const [r, g, b] = comp.getContext('2d').getImageData(x, y, 1, 1).data;
+    const hex = '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
+    app.brush.color = hex;
+    toast(`Sampled ${hex}`);
+  }
+
+  function onBrushDown(e) {
+    if (!brushActive || app.brush.busy) return;
+    e.preventDefault();
+    try {
+      brushEl.setPointerCapture(e.pointerId);
+    } catch {
+      /* capture is best-effort — a stroke still works without it */
+    }
+    const pt = brushCoords(e);
+    const tool = app.brush.tool;
+    // Alt = anchor/eyedropper (no stroke).
+    if (e.altKey) {
+      if (tool === 'clone') {
+        app.brush.cloneSource = { x: pt.x, y: pt.y };
+        toast('Clone source set — paint to stamp');
+      } else if (tool === 'fill') {
+        sampleColor(pt);
+      }
+      return;
+    }
+    if (tool === 'clone' && !app.brush.cloneSource) {
+      toast('Alt-click to set a clone source first');
+      return;
+    }
+    if (tool === 'erase' && !app.selectedLayerId) {
+      toast('Select a layer to erase from');
+      return;
+    }
+    strokeActive = true;
+    strokeStart = pt;
+    strokeBox = null;
+    const ctx = brushEl.getContext('2d');
+    dab(ctx, pt.x, pt.y);
+    brushEl._last = pt;
+  }
+
+  function onBrushMove(e) {
+    if (!brushActive) return;
+    const pt = brushCoords(e);
+    ringX = pt.x * app.zoom;
+    ringY = pt.y * app.zoom;
+    if (!strokeActive) return;
+    const ctx = brushEl.getContext('2d');
+    strokeTo(ctx, brushEl._last, pt);
+    brushEl._last = pt;
+  }
+
+  async function onBrushUp(e) {
+    if (!strokeActive) return;
+    strokeActive = false;
+    try {
+      brushEl.releasePointerCapture(e.pointerId);
+    } catch {
+      /* pointer already released */
+    }
+    // Busy for the whole commit (all tools await something), so onBrushDown
+    // blocks a second stroke and can't race — e.g. two erases lost-updating a
+    // layer's patch. Cleared even if the commit throws.
+    app.brush.busy = true;
+    try {
+      await commitStroke(app.brush.tool);
+    } finally {
+      app.brush.busy = false;
+    }
+  }
+
+  async function commitStroke(tool) {
+    const p2 = page();
+    const W = p2.w,
+      H = p2.h;
+    const octx = brushEl.getContext('2d');
+    const clear = () => octx.clearRect(0, 0, W, H);
+    // Painted bounds tracked during the stroke — clamp to the page.
+    if (!strokeBox) return clear();
+    const minX = Math.max(0, Math.floor(strokeBox.minX));
+    const minY = Math.max(0, Math.floor(strokeBox.minY));
+    const maxX = Math.min(W - 1, Math.ceil(strokeBox.maxX));
+    const maxY = Math.min(H - 1, Math.ceil(strokeBox.maxY));
+    const bw = maxX - minX + 1,
+      bh = maxY - minY + 1;
+    if (bw <= 0 || bh <= 0) return clear();
+
+    if (tool === 'inpaint') {
+      // Grayscale mask for the sidecar, built only over the painted bbox.
+      // Binarize (any painted alpha → 255): the sidecar thresholds the mask at
+      // >127, so a soft brush's sub-128 edge would otherwise be dropped and the
+      // filled area would be smaller than the cursor ring. Inpaint fills a
+      // region, so it wants the full painted footprint, not a soft falloff.
+      const region = octx.getImageData(minX, minY, bw, bh);
+      const mask = document.createElement('canvas');
+      mask.width = W;
+      mask.height = H;
+      const mctx = mask.getContext('2d');
+      const md = mctx.createImageData(bw, bh);
+      for (let i = 0; i < region.data.length; i += 4) {
+        const on = region.data[i + 3] > 0 ? 255 : 0;
+        md.data[i] = md.data[i + 1] = md.data[i + 2] = on;
+        md.data[i + 3] = 255;
+      }
+      mctx.putImageData(md, minX, minY);
+      const maskB64 = mask.toDataURL('image/png').split(',')[1];
+      clear();
+      try {
+        const comp = await compositeCleanCanvas(p2);
+        const blob = await new Promise((r) => comp.toBlob(r, 'image/png'));
+        const layer = await brushInpaint(blob, maskB64, { method: app.brush.method, flux: app.brush.flux });
+        addBrushLayer({ op: 'inpaint', box: layer.box, patchPng: layer.patch_png, method: layer.method, fellBack: layer.fell_back }, p2);
+        toast(`Brush fill → ${layer.method}${layer.fell_back ? ' (flux→cv2)' : ''}`);
+      } catch (err) {
+        toast('Brush fill failed: ' + (err?.message || err));
+      }
+      return;
+    }
+
+    if (tool === 'clone') {
+      if (!app.brush.cloneSource) return clear();
+      const off = { x: strokeStart.x - app.brush.cloneSource.x, y: strokeStart.y - app.brush.cloneSource.y };
+      const comp = await compositeCleanCanvas(p2);
+      const patch = document.createElement('canvas');
+      patch.width = bw;
+      patch.height = bh;
+      const pctx = patch.getContext('2d');
+      pctx.drawImage(comp, minX - off.x, minY - off.y, bw, bh, 0, 0, bw, bh);
+      pctx.globalCompositeOperation = 'destination-in';
+      pctx.drawImage(brushEl, minX, minY, bw, bh, 0, 0, bw, bh);
+      clear();
+      addBrushLayer({ op: 'clone', box: [minX, minY, bw, bh], patchPng: patch.toDataURL('image/png').split(',')[1] }, p2);
+      toast('Cloned → new layer');
+      return;
+    }
+
+    if (tool === 'fill') {
+      const patch = document.createElement('canvas');
+      patch.width = bw;
+      patch.height = bh;
+      const pctx = patch.getContext('2d');
+      pctx.fillStyle = app.brush.color;
+      pctx.fillRect(0, 0, bw, bh);
+      pctx.globalCompositeOperation = 'destination-in';
+      pctx.drawImage(brushEl, minX, minY, bw, bh, 0, 0, bw, bh);
+      clear();
+      addBrushLayer({ op: 'fill', box: [minX, minY, bw, bh], patchPng: patch.toDataURL('image/png').split(',')[1] }, p2);
+      toast('Painted → new layer');
+      return;
+    }
+
+    if (tool === 'erase') {
+      const l = p2.clean?.layers.find((x) => x.id === app.selectedLayerId);
+      if (!l) return clear();
+      const [lx, ly, lw, lh] = l.box;
+      const patch = document.createElement('canvas');
+      patch.width = lw;
+      patch.height = lh;
+      const pctx = patch.getContext('2d');
+      const src = patchSrc(l);
+      if (src) {
+        try {
+          pctx.drawImage(await loadImg(src), 0, 0, lw, lh);
+        } catch {
+          /* draw nothing if the patch fails to decode */
+        }
+      }
+      pctx.globalCompositeOperation = 'destination-out';
+      pctx.drawImage(brushEl, lx, ly, lw, lh, 0, 0, lw, lh);
+      clear();
+      pushBrushUndo({ type: 'erase', id: l.id, prevPatchPng: l.patchPng, page: p2 });
+      updateLayerPatch(l.id, patch.toDataURL('image/png').split(',')[1], p2);
+      toast('Erased from layer');
+      return;
+    }
+  }
 
   function computeFit(force = false) {
     if (!scrollEl) return;
@@ -142,6 +401,11 @@
       <button class:on={app.tool === 'text'} class:bulkon={app.bulk.active} onclick={() => setTool('text')} ondblclick={openBulk} data-tip="Text tool — drag to pan, click to add · double-click for bulk style">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7V5h16v2" /><path d="M12 5v14" /><path d="M9 19h6" /></svg>
       </button>
+      {#if cleanMode}
+        <button class:on={app.tool === 'brush'} onclick={() => setBrushTool(app.brush.tool)} data-tip="Brush tools — manual clean-up (pick a tool in the Brush panel)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.06 11.9l8.07-8.06a1.9 1.9 0 0 1 2.7 2.7l-8.06 8.07" /><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z" /></svg>
+        </button>
+      {/if}
     </div>
 
     <div class="editor-scroll" bind:this={scrollEl} onmousemove={onMouseMove}>
@@ -165,6 +429,27 @@
               <TextBox {box} {pageFrameEl} />
             {/each}
           </div>
+          {#if cleanMode}
+            <!-- Brush overlay: image-res canvas, CSS-scaled to the zoomed frame.
+                 Captures pointer events only while a brush tool is active, so it
+                 never steals clicks from place/text or translate mode. -->
+            <canvas
+              class="brushoverlay"
+              class:active={brushActive}
+              bind:this={brushEl}
+              width={p.w}
+              height={p.h}
+              style="width:{p.w * app.zoom}px; height:{p.h * app.zoom}px;"
+              onpointerdown={onBrushDown}
+              onpointermove={onBrushMove}
+              onpointerup={onBrushUp}
+              onpointerenter={() => (ringVisible = true)}
+              onpointerleave={() => (ringVisible = false)}
+            ></canvas>
+            {#if brushActive && ringVisible}
+              <div class="brushring" style="left:{ringX}px; top:{ringY}px; width:{ringSize}px; height:{ringSize}px;"></div>
+            {/if}
+          {/if}
         </div>
       </div>
     </div>
@@ -206,5 +491,28 @@
   .patch.sel {
     outline: 2px solid var(--accent, #4b7bec);
     outline-offset: -1px;
+  }
+  /* Brush overlay: transparent except during a stroke; only grabs pointer events
+     while a brush tool is engaged, so place/text/translate stay untouched. */
+  .brushoverlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+    image-rendering: auto;
+    touch-action: none;
+  }
+  .brushoverlay.active {
+    pointer-events: auto;
+    cursor: crosshair;
+  }
+  /* Live brush cursor ring (image-scaled diameter). */
+  .brushring {
+    position: absolute;
+    border: 1.5px solid rgba(75, 123, 236, 0.9);
+    border-radius: 50%;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   }
 </style>
