@@ -5,6 +5,7 @@
   import RightPanel from './lib/RightPanel.svelte';
   import StatusBar from './lib/StatusBar.svelte';
   import FontModal from './lib/FontModal.svelte';
+  import SettingsModal from './lib/SettingsModal.svelte';
   import ExportDialog from './lib/ExportDialog.svelte';
   import Toast from './lib/Toast.svelte';
   import Resizer from './lib/Resizer.svelte';
@@ -14,6 +15,7 @@
   import { checkSidecar } from './lib/sidecar.js';
 
   let fontModalOpen = $state(false);
+  let settingsOpen = $state(false);
 
   onMount(() => {
     restoreFonts();
@@ -35,6 +37,7 @@
     if (e.key === 'Escape') {
       if (app.exportOpen) app.exportOpen = false;
       else if (app.bulk.active) closeBulk();
+      else if (settingsOpen) settingsOpen = false;
       else if (fontModalOpen) fontModalOpen = false;
       else deselect();
     }
@@ -59,7 +62,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="app">
-  <TopBar onFontLib={() => (fontModalOpen = true)} />
+  <TopBar onFontLib={() => (fontModalOpen = true)} onSettings={() => (settingsOpen = true)} />
 
   <div class="main">
     <RawPanel />
@@ -73,5 +76,6 @@
 </div>
 
 <FontModal bind:open={fontModalOpen} />
+<SettingsModal bind:open={settingsOpen} />
 <ExportDialog />
 <Toast />
