@@ -1,9 +1,11 @@
 """Opt-in FLUX inpainting (one-click download).
 
-OpenCV Telea/NS is the always-available default. FLUX is a heavy, opt-in
-upgrade: it needs the diffusers/sdnq stack and a multi-GB model that we do NOT
-ship or install by default. This module gates that behind an explicit download
-so the base cleaning pipeline stays light.
+FLUX is the AI redraw used for textured regions (the auto-clean default when a
+region's surround isn't a solid colour); OpenCV Telea/NS is the always-available
+*fallback* when it isn't installed. FLUX is heavy and opt-in: it needs the
+diffusers/sdnq stack and a multi-GB model that we do NOT ship or install by
+default. This module gates that behind an explicit download (see the Settings
+panel) so the base cleaning pipeline stays light.
 
 It wraps MangaTranslator's `FluxKleinInpainter` (Apache-2.0) -- the Klein variant
 runs on CPU/MPS via the SDNQ backend, unlike the CUDA-only Kontext/Nunchaku path.

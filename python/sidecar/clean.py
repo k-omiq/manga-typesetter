@@ -1,13 +1,18 @@
 """Smart cleaning engine.
 
-Cleans each detected text region while *minimizing* inpaint-model use:
+Cleans each detected text region by classifying its surroundings:
 
 - Sample the pixel ring just OUTSIDE the text mask and measure its colour
   uniformity.
-- **Uniform surround** (flat tone / inside a bubble) -> a cheap OpenCV colour
-  fill: paint the text pixels with the surrounding mean colour. No model.
-- **Textured surround** (art, screentone, gradients) -> inpaint. OpenCV Telea /
-  Navier-Stokes by default; FLUX is opt-in (see `flux.py`) and best-effort.
+- **Uniform surround** (flat tone: speech bubbles, boxes, one-colour
+  backgrounds) -> a cheap OpenCV colour fill: paint the text pixels with the
+  surrounding mean colour. No model.
+- **Textured surround** (art, screentone, gradients) -> **AI redraw** via the
+  FLUX inpainter (see `flux.py`). When FLUX isn't installed it falls back to
+  OpenCV Telea / Navier-Stokes (`default_inpaint`), flagged as `fell_back`.
+
+FLUX is loaded lazily and only when at least one region actually resolves to it,
+so an all-bubbles page never pays the model-load cost.
 
 Each region is cleaned independently and returned as its **own patch** (the
 cleaned bounding-box pixels), so the editor can treat every text block as a
@@ -65,7 +70,7 @@ def _encode_patch(patch_bgr: np.ndarray) -> Optional[str]:
     return base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
 
 
-def clean_region(
+def _classify_region(
     img_bgr: np.ndarray,
     mask: np.ndarray,
     box,
@@ -73,21 +78,14 @@ def clean_region(
     default_inpaint: str = "telea",
     force_method: Optional[str] = None,
     uniform_threshold: float = 12.0,
-    flux: bool = False,
-    flux_inpainter=None,
+    force_ai: bool = False,
 ) -> Optional[dict]:
-    """Clean one text region and return an editable patch layer.
+    """Cheap first pass: crop the region, measure surround uniformity, and RESOLVE
+    the method (fill / telea / ns / flux) without running the (expensive) clean.
 
-    Returns a dict::
-
-        { box: [x, y, w, h],          # patch placement in image coords
-          method: "fill"|"telea"|"ns"|"flux",
-          requested: <method asked for>,
-          fell_back: bool,            # FLUX requested but unavailable
-          uniform: bool, ring_std: float,
-          patch_png: <base64 PNG> }
-
-    or None if the region has no text pixels to clean.
+    Split out from `_apply_region` so `clean_regions` can decide up front whether
+    any region needs FLUX and load the model only then. Returns None if the region
+    has no text pixels.
     """
     H, W = img_bgr.shape[:2]
     bw, bh = int(box[2] - box[0]), int(box[3] - box[1])
@@ -125,45 +123,102 @@ def clean_region(
         fill_color = tuple(int(v) for v in np.median(ring_px.reshape(-1, chans), axis=0))
     uniform = ring_std <= uniform_threshold
 
-    # Decide method: explicit per-region override wins, else uniform->fill /
-    # textured->inpaint. `requested` records what was asked ("auto" when not
-    # forced) so the response never misreports the resolved method as the ask.
+    # Policy: explicit per-region override wins; otherwise a uniform (solid-colour)
+    # surround -> cheap fill, anything textured -> AI redraw (FLUX). `force_ai`
+    # pushes even uniform regions through FLUX. `requested` records the ask
+    # ("auto" when not forced) so the response never misreports the resolved
+    # method. `default_inpaint` is only the classical fallback if FLUX is absent.
     forced = (force_method or "").lower() or None
     if forced and forced not in _VALID_METHODS:
         forced = None
-    requested = forced or ("flux" if flux else "auto")
     if forced:
+        requested = forced
         method = forced
-    elif flux:
-        method = "flux"
-    elif uniform:
-        method = "fill"
     else:
-        method = default_inpaint if default_inpaint in _OPENCV_INPAINT else "telea"
+        requested = "auto"
+        method = "fill" if (uniform and not force_ai) else "flux"
 
+    fallback = default_inpaint if default_inpaint in _OPENCV_INPAINT else "telea"
+    return {
+        "roi": roi,
+        "m_dil": m_dil,
+        "fill_color": fill_color,
+        "box": [x1, y1, x2 - x1, y2 - y1],
+        "method": method,
+        "requested": requested,
+        "fallback": fallback,
+        "uniform": bool(uniform),
+        "ring_std": round(ring_std, 2),
+    }
+
+
+def _apply_region(cls: dict, *, flux_inpainter=None) -> dict:
+    """Second pass: run the resolved method and return the editable patch layer::
+
+        { box: [x, y, w, h], method, requested, fell_back, uniform, ring_std,
+          patch_png }
+
+    FLUX regions fall back to the classical inpainter (`cls['fallback']`) when the
+    inpainter is unavailable, flagged as `fell_back`.
+    """
+    roi = cls["roi"]
+    m_dil = cls["m_dil"]
+    method = cls["method"]
     fell_back = False
+    patch = None
 
     if method == "flux":
         patch = _run_flux(roi, m_dil, flux_inpainter)
         if patch is None:  # FLUX unavailable -> graceful OpenCV fallback
             fell_back = True
-            method = "telea"
+            method = cls["fallback"]
 
     if method == "fill":
         patch = roi.copy()
-        patch[m_dil > 0] = fill_color
+        patch[m_dil > 0] = cls["fill_color"]
     elif method in _OPENCV_INPAINT:
         patch = cv2.inpaint(roi, m_dil, inpaintRadius=3, flags=_OPENCV_INPAINT[method])
 
     return {
-        "box": [x1, y1, x2 - x1, y2 - y1],
+        "box": cls["box"],
         "method": method,
-        "requested": requested,
+        "requested": cls["requested"],
         "fell_back": fell_back,
-        "uniform": bool(uniform),
-        "ring_std": round(ring_std, 2),
+        "uniform": cls["uniform"],
+        "ring_std": cls["ring_std"],
         "patch_png": _encode_patch(patch),
     }
+
+
+def clean_region(
+    img_bgr: np.ndarray,
+    mask: np.ndarray,
+    box,
+    *,
+    default_inpaint: str = "telea",
+    force_method: Optional[str] = None,
+    uniform_threshold: float = 12.0,
+    flux: bool = False,
+    flux_inpainter=None,
+) -> Optional[dict]:
+    """Classify + clean one region (eager: uses the passed `flux_inpainter`).
+
+    Kept for direct callers; `clean_regions` uses the classify/apply split so it
+    only loads FLUX when a region actually needs it. `flux` forces AI even for
+    uniform regions.
+    """
+    cls = _classify_region(
+        img_bgr,
+        mask,
+        box,
+        default_inpaint=default_inpaint,
+        force_method=force_method,
+        uniform_threshold=uniform_threshold,
+        force_ai=flux,
+    )
+    if cls is None:
+        return None
+    return _apply_region(cls, flux_inpainter=flux_inpainter)
 
 
 def inpaint_brush(
@@ -250,10 +305,14 @@ def clean_regions(
     uniform_threshold: float = 12.0,
     flux: bool = False,
 ) -> list:
-    """Clean every region. `regions` = [{n, box, method?}]. Returns layer dicts."""
-    flux_inpainter = _load_flux_inpainter() if flux else None
+    """Clean every region. `regions` = [{n, box, method?}]. Returns layer dicts.
 
-    layers = []
+    Policy: solid-colour surround -> fill, textured -> AI (FLUX) with OpenCV
+    fallback. `flux=True` forces AI even for uniform regions. FLUX is loaded
+    lazily and only if at least one region actually resolves to it.
+    """
+    # Pass 1 — classify every region (cheap: ring sampling only, no cleaning).
+    classifications = []
     for r in regions:
         box = r.get("box")
         if not box or len(box) != 4:
@@ -262,19 +321,30 @@ def clean_regions(
         # bogus 1px patches.
         if box[2] <= box[0] or box[3] <= box[1]:
             continue
-        layer = clean_region(
+        cls = _classify_region(
             img_bgr,
             mask,
             box,
             default_inpaint=default_inpaint,
             force_method=r.get("method"),
             uniform_threshold=uniform_threshold,
-            flux=flux,
-            flux_inpainter=flux_inpainter,
+            force_ai=flux,
         )
-        if layer is None:
+        if cls is None:
             continue
-        layer["n"] = r.get("n")
+        cls["n"] = r.get("n")
+        classifications.append(cls)
+
+    # Load FLUX once, only if a textured (or forced-flux) region needs it — an
+    # all-bubbles page never pays the multi-GB model-load cost.
+    needs_flux = any(c["method"] == "flux" for c in classifications)
+    flux_inpainter = _load_flux_inpainter() if needs_flux else None
+
+    # Pass 2 — apply.
+    layers = []
+    for cls in classifications:
+        layer = _apply_region(cls, flux_inpainter=flux_inpainter)
+        layer["n"] = cls["n"]
         layers.append(layer)
     return layers
 

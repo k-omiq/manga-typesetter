@@ -23,8 +23,7 @@
   const layers = $derived(p.clean?.layers ?? []);
   const doneCount = $derived(regions.filter((r) => cleanStatus(r.n) === 'done').length);
 
-  let method = $state('telea'); // default inpaint flavour for textured regions
-  let flux = $state(false); // opt into the heavy FLUX path
+  let method = $state('telea'); // classical fallback when the AI model isn't installed
 
   const METHODS = ['fill', 'telea', 'ns', 'flux'];
   const jpFor = (n) => lineByN(p, n)?.jp ?? '';
@@ -42,15 +41,6 @@
   onMount(() => {
     refreshFluxStatus();
   });
-
-  async function onFluxToggle(e) {
-    flux = e.target.checked;
-    if (flux && !app.flux.available) {
-      await downloadFlux();
-      // Reflect reality: if the opt-in install failed, don't leave FLUX "on".
-      flux = app.flux.available;
-    }
-  }
 
   // Brush inpaint has its own FLUX opt-in but shares the availability/install flow.
   async function onBrushFluxToggle(e) {
@@ -81,22 +71,25 @@
     </div>
     <div class="section-body">
       <div class="cleanbar">
-        <button class="btn primary" disabled={app.cleaning || !regions.length} onclick={() => cleanCurrentPage({ method, flux })}>
+        <button class="btn primary" disabled={app.cleaning || !regions.length} onclick={() => cleanCurrentPage({ method })}>
           {app.cleaning ? 'Cleaning…' : 'Clean All'}
         </button>
-        <select bind:value={method} title="Inpaint method for textured regions">
+        <select bind:value={method} title="Classical fallback used when the AI model isn't installed">
           <option value="telea">Telea</option>
           <option value="ns">Navier–Stokes</option>
         </select>
       </div>
 
-      <label class="fluxrow" title={app.flux.reason ?? ''}>
-        <input type="checkbox" checked={flux} onchange={onFluxToggle} disabled={app.flux.downloading} />
-        <span>FLUX inpaint</span>
-        <span class="fluxstate">
-          {#if app.flux.downloading}installing…{:else if app.flux.available}ready{:else}opt-in download{/if}
-        </span>
-      </label>
+      <div class="policy" title={app.flux.reason ?? ''}>
+        Solid areas (bubbles, boxes) → <b>fill</b> · textured art → <b>AI redraw</b>
+        {#if app.flux.downloading}
+          <span class="pstate">· installing AI…</span>
+        {:else if app.flux.available}
+          <span class="pstate ok">· AI ready</span>
+        {:else}
+          <span class="pstate warn">· AI not installed — textured areas use the {method} fallback. Install it in Settings.</span>
+        {/if}
+      </div>
 
       {#if regions.length === 0}
         <div class="qhint">No detected text. Run <b>Detect</b> in the top bar first — cleaning works on the detected regions.</div>
@@ -280,10 +273,21 @@
     color: var(--text, #e6e8ee);
     cursor: pointer;
   }
-  .fluxstate {
-    margin-left: auto;
+  .policy {
     font-size: 11px;
+    line-height: 1.5;
     color: var(--muted, #8b91a1);
+    margin-bottom: 10px;
+  }
+  .policy b {
+    color: var(--text, #e6e8ee);
+    font-weight: 600;
+  }
+  .pstate.ok {
+    color: #7fe0a3;
+  }
+  .pstate.warn {
+    color: #e0a87f;
   }
   .qlist {
     display: flex;
@@ -365,6 +369,15 @@
   .mbadge.flux {
     background: #2f1f3d;
     color: #c79fe0;
+  }
+  .mbadge.inpaint,
+  .mbadge.clone {
+    background: #24304a;
+    color: #9fb6e0;
+  }
+  .mbadge.erase {
+    background: #3d1f2b;
+    color: #e09fb0;
   }
   .warn {
     color: #e0a87f;

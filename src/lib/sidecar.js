@@ -110,7 +110,11 @@ export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) 
   try {
     const result = await cleanImage(p.raw, regions, { mask: p.clean?.maskPng ?? '', method, flux });
     applyClean(result, { target: p });
-    toast(`Cleaned ${result.layers.length} region(s)`);
+    // Surface, in the completion summary, when textured regions wanted AI but
+    // fell back to the classical inpaint (FLUX not installed) — otherwise it's
+    // only visible per-layer.
+    const fell = (result.layers ?? []).filter((l) => l.fell_back).length;
+    toast(`Cleaned ${result.layers.length} region(s)` + (fell ? ` · ${fell} used ${method} (AI not installed)` : ''));
   } catch (e) {
     for (const r of regions) setCleanStatus(r.n, 'error');
     toast(`Clean failed: ${e}`);
