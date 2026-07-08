@@ -21,14 +21,30 @@ import subprocess
 import sys
 from pathlib import Path
 
-# diffusers/sdnq stack required by MangaTranslator's Flux inpainters.
+# Deps required by MangaTranslator's Flux inpainters. NOTE: importing
+# core.image.inpainting transitively pulls in MangaTranslator's core/utils
+# (model manager, metadata, rendering), so this needs more than the raw
+# diffusers/sdnq stack — spandrel, pyoxipng, scikit-learn and skia-python are all
+# reached on import. Mirrors external/MangaTranslator/requirements.txt (minus the
+# web-UI-only packages like gradio).
 _FLUX_DEPS = [
     "diffusers>=0.37.0",
     "transformers>=5.0.0",
     "safetensors>=0.4.0",
     "accelerate>=0.30",
     "sdnq>=0.1.3",
+    "spandrel>=0.3.0",
+    "pyoxipng>=9.1.1",
+    "scikit-learn>=1.3.0",
+    "skia-python>=87.7",
+    "uharfbuzz>=0.48.0",
+    "fonttools>=4.56.0",
 ]
+
+# Import names to probe for readiness (some differ from the pip name:
+# pyoxipng->oxipng, scikit-learn->sklearn, skia-python->skia). Covers the whole
+# transitive chain so `status()` can't report "ready" while the import fails.
+_FLUX_IMPORTS = ("diffusers", "sdnq", "transformers", "spandrel", "oxipng", "sklearn", "skia")
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MT_DIR = _REPO_ROOT / "external" / "MangaTranslator"
@@ -39,7 +55,7 @@ _inpainter = None  # lazy singleton
 def _deps_available() -> tuple[bool, str]:
     import importlib.util
 
-    missing = [m for m in ("diffusers", "sdnq", "transformers") if importlib.util.find_spec(m) is None]
+    missing = [m for m in _FLUX_IMPORTS if importlib.util.find_spec(m) is None]
     if missing:
         return False, f"missing python deps: {', '.join(missing)}"
     if not (_MT_DIR / "core" / "image" / "inpainting.py").is_file():
@@ -93,14 +109,18 @@ def load_inpainter():
 
     try:
         from core.image.inpainting import FluxKleinInpainter
+        from core.device import get_best_device
 
-        device = _device()
+        # The inpainter expects a torch.device (it does `device.type` internally);
+        # passing a bare string crashes get_best_dtype. Reuse MangaTranslator's own
+        # detector so cuda/mps/cpu + dtype line up.
+        device = get_best_device()
         _inpainter = FluxKleinInpainter(
             variant="4b",
             device=device,
             backend="sdnq",
             num_inference_steps=4,
-            low_vram=(device != "cuda"),
+            low_vram=(getattr(device, "type", str(device)) != "cuda"),
         )
         return _inpainter
     except Exception:

@@ -21,6 +21,9 @@ python/**/__pycache__
 python/_*.json
 python/_*.txt
 
+# Downloaded ML model caches (multi-GB HF snapshots — never commit)
+python/models/
+
 # Vendored upstream clones (GPL; re-fetched from their own repos / added as submodules later)
 external/
 
