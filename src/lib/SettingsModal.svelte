@@ -1,21 +1,97 @@
 <script>
-  // Settings → Models. Lets the user install the opt-in MangaTranslator FLUX
-  // AI-redraw model (heavy diffusers/sdnq deps; weights stream on first use).
-  // Reuses the existing sidecar bridges — no new backend.
-  import { app } from './store.svelte.js';
-  import { refreshFluxStatus, downloadFlux, checkSidecar } from './sidecar.js';
+  // Settings. Model management (opt-in FLUX install + cache), the default export
+  // directory, and sidecar controls. Reuses the sidecar bridges + Tauri dialog.
+  import { app, saveExportPrefs, toast } from './store.svelte.js';
+  import {
+    refreshFluxStatus,
+    downloadFlux,
+    checkSidecar,
+    modelsCacheInfo,
+    clearModelsCache,
+    restartSidecar,
+  } from './sidecar.js';
 
   let { open = $bindable() } = $props();
+
+  let cache = $state(null); // { entries:[{path,exists,bytes}], total_bytes } | null
+  let cacheLoading = $state(false);
+  let clearing = $state(false);
+  let confirmClear = $state(false); // inline two-step confirm (webviews may block window.confirm)
+  let restarting = $state(false);
 
   function onOverlayClick(e) {
     if (e.target.classList.contains('modal-overlay')) open = false;
   }
 
-  // Refresh live sidecar + model status each time the panel opens.
+  function isTauri() {
+    return typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
+  }
+
+  function fmtBytes(n) {
+    if (!n || n < 1) return '0 B';
+    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+    return (n / 1024 ** i).toFixed(i ? 1 : 0) + ' ' + u[i];
+  }
+
+  async function loadCache() {
+    cacheLoading = true;
+    cache = await modelsCacheInfo();
+    cacheLoading = false;
+  }
+
+  async function onClearCache() {
+    if (!confirmClear) {
+      confirmClear = true;
+      return;
+    }
+    confirmClear = false;
+    clearing = true;
+    try {
+      const r = await clearModelsCache();
+      toast(r?.ok ? `Cleared cache · freed ${fmtBytes(r.freed_bytes)}` : 'Cache clear had errors — see logs');
+      await loadCache();
+    } catch (e) {
+      toast(`Clear cache failed: ${e}`);
+    } finally {
+      clearing = false;
+    }
+  }
+
+  async function onRestart() {
+    restarting = true;
+    try {
+      await restartSidecar();
+      await loadCache();
+    } finally {
+      restarting = false;
+    }
+  }
+
+  async function onChangeExportDir() {
+    if (!isTauri()) {
+      toast('Choosing a folder needs the desktop app');
+      return;
+    }
+    try {
+      const { open: pickDir } = await import('@tauri-apps/plugin-dialog');
+      const dir = await pickDir({ directory: true, defaultPath: app.exportDir || undefined });
+      if (dir) {
+        saveExportPrefs(dir, app.exportName);
+        toast('Default export folder set');
+      }
+    } catch (e) {
+      toast(`Couldn't set folder: ${e}`);
+    }
+  }
+
+  // Refresh live sidecar + model status + cache size each time the panel opens.
   $effect(() => {
     if (open) {
+      confirmClear = false;
       checkSidecar();
       refreshFluxStatus();
+      loadCache();
     }
   });
 
@@ -57,11 +133,19 @@
     </div>
 
     <div class="modal-body">
-      <!-- Sidecar status -->
+      <!-- Sidecar status + restart -->
       <div class="srow">
         <span class="slabel">ML sidecar</span>
         <span class="dot {sidecarOk ? 'ok' : app.sidecar?.status === 'error' ? 'err' : 'off'}"></span>
-        <span class="sval">{sidecarLabel}</span>
+        <span class="sval">{restarting ? 'Restarting…' : sidecarLabel}</span>
+        <button
+          class="btn sm"
+          disabled={restarting || !isTauri()}
+          title={isTauri() ? 'Kill and respawn the Python sidecar' : 'Desktop app only'}
+          onclick={onRestart}
+        >
+          {restarting ? 'Restarting…' : 'Restart'}
+        </button>
       </div>
 
       <div class="group-label">Models</div>
@@ -129,6 +213,85 @@
           <span class="tag auto">Auto</span>
         </div>
         <p class="mc-desc">Downloaded automatically on first <b>Detect</b> and cached locally. No action needed.</p>
+      </div>
+
+      <!-- Model cache footprint + clear -->
+      <div class="model-card">
+        <div class="mc-top">
+          <div class="mc-title">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5" /><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3" /></svg>
+            <div>
+              <div class="mc-name">Model cache</div>
+              <div class="mc-sub">
+                {#if cacheLoading}Measuring…{:else if cache}{fmtBytes(cache.total_bytes)} on disk{:else}Size unavailable — desktop app only{/if}
+              </div>
+            </div>
+          </div>
+          {#if cache}<span class="tag">{fmtBytes(cache.total_bytes)}</span>{/if}
+        </div>
+
+        {#if cache?.entries?.length}
+          <div class="paths">
+            {#each cache.entries as e}
+              <div class="path-row">
+                <span class="path" title={e.path}>{e.path}</span>
+                <span class="path-size">{e.exists ? fmtBytes(e.bytes) : '—'}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        <p class="mc-desc">
+          Downloaded weights (FLUX redraw model, detector/OCR). Clearing frees disk;
+          the weights re-download on next use. This does <b>not</b> uninstall the FLUX
+          dependencies above.
+        </p>
+
+        <div class="mc-actions">
+          <button
+            class="btn"
+            class:danger={confirmClear}
+            disabled={clearing || !sidecarOk || !cache || cache.total_bytes === 0}
+            onclick={onClearCache}
+          >
+            {#if clearing}Clearing…{:else if confirmClear}Confirm — delete weights?{:else}Clear cache{/if}
+          </button>
+          {#if confirmClear}
+            <button class="btn" disabled={clearing} onclick={() => (confirmClear = false)}>Cancel</button>
+          {/if}
+          <button class="btn" disabled={cacheLoading || !isTauri()} onclick={loadCache}>Recheck</button>
+        </div>
+
+        {#if !sidecarOk}
+          <div class="qhint">The sidecar isn't running — cache actions need the desktop app.</div>
+        {/if}
+      </div>
+
+      <div class="group-label">Export</div>
+
+      <!-- Default export directory -->
+      <div class="model-card">
+        <div class="mc-top">
+          <div class="mc-title">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+            <div>
+              <div class="mc-name">Default export folder</div>
+              <div class="mc-sub path" title={app.exportDir || ''}>
+                {app.exportDir || 'Not set — the export dialog asks each time'}
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="mc-desc">Where <b>Export</b> saves by default. You can still choose a different folder at export time.</p>
+        <div class="mc-actions">
+          <button class="btn" disabled={!isTauri()} onclick={onChangeExportDir}>Change…</button>
+          {#if app.exportDir}
+            <button class="btn" onclick={() => { saveExportPrefs('', app.exportName); toast('Cleared default export folder'); }}>Clear</button>
+          {/if}
+        </div>
+        {#if !isTauri()}
+          <div class="qhint">Choosing a folder needs the desktop app; browser exports download to your default location.</div>
+        {/if}
       </div>
     </div>
   </div>
@@ -263,9 +426,46 @@
     color: #fff;
     font-weight: 600;
   }
+  .btn.sm {
+    margin-left: auto;
+    padding: 4px 10px;
+    font-size: 12px;
+  }
+  .btn.danger {
+    background: #4a2323;
+    border-color: #7a3a3a;
+    color: #f0b6b6;
+    font-weight: 600;
+  }
   .btn:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+  .paths {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .path-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 11.5px;
+  }
+  .path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+    font-family: ui-monospace, monospace;
+  }
+  .path-size {
+    flex: none;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
   }
   .qhint {
     font-size: 12px;

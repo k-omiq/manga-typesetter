@@ -356,6 +356,56 @@ pub async fn sidecar_flux_download(
     resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
+/// Report the on-disk size + location of the downloaded model caches.
+#[tauri::command]
+pub async fn sidecar_models_cache(
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/models/cache", state.base_url());
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .header("x-mt-token", &state.token)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("sidecar {code}: {body}"));
+    }
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Clear the downloaded model caches (frees disk; weights re-download lazily).
+#[tauri::command]
+pub async fn sidecar_models_cache_clear(
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/models/cache/clear", state.base_url());
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("x-mt-token", &state.token)
+        // A multi-GB rmtree can take a moment; give it room.
+        .timeout(std::time::Duration::from_secs(300))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("sidecar {code}: {body}"));
+    }
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Restart the sidecar child (kills the running one and respawns). Used by the
+/// Settings "Restart sidecar" action; callers should re-poll /health afterwards.
+#[tauri::command]
+pub async fn sidecar_restart(app: tauri::AppHandle) -> Result<(), String> {
+    spawn(&app);
+    Ok(())
+}
+
 /// List the BYOK translation providers the sidecar supports (id + default model).
 #[tauri::command]
 pub async fn sidecar_translate_providers(

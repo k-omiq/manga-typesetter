@@ -158,6 +158,20 @@ def create_app() -> FastAPI:
 
         return {"lines": result}
 
+    @app.get("/models/cache")
+    async def models_cache():
+        """On-disk size + location of the downloaded model caches (Settings panel)."""
+        from . import models as models_mod
+
+        return await run_in_threadpool(models_mod.cache_info)
+
+    @app.post("/models/cache/clear")
+    async def models_cache_clear():
+        """Delete the downloaded model weights to free disk. Weights re-download lazily."""
+        from . import models as models_mod
+
+        return await run_in_threadpool(models_mod.clear_cache)
+
     @app.get("/clean/flux-status")
     async def flux_status():
         from . import flux as flux_mod

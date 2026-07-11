@@ -16,7 +16,10 @@ pub fn run() {
       sidecar::sidecar_flux_status,
       sidecar::sidecar_flux_download,
       sidecar::sidecar_translate,
-      sidecar::sidecar_translate_providers
+      sidecar::sidecar_translate_providers,
+      sidecar::sidecar_models_cache,
+      sidecar::sidecar_models_cache_clear,
+      sidecar::sidecar_restart
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

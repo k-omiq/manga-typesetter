@@ -160,6 +160,9 @@ export const app = $state({
     provider: 'Anthropic',
     model: '',
     outputLanguage: 'English',
+    inputLanguage: 'Japanese', // source language the OCR'd text is in
+    readingDirection: 'rtl', // 'rtl' (manga) | 'ltr' (webtoon/western) — orders context
+    reasoningEffort: '', // '' none | 'low' | 'medium' | 'high' — reasoning-capable providers only
     baseUrl: '', // OpenAI-Compatible only
     special: '', // special instructions / glossary
     apiKeys: {}, // { [provider]: key }
@@ -217,6 +220,9 @@ try {
     provider: t.provider ?? app.translate.provider,
     model: t.model ?? app.translate.model,
     outputLanguage: t.outputLanguage ?? app.translate.outputLanguage,
+    inputLanguage: t.inputLanguage ?? app.translate.inputLanguage,
+    readingDirection: t.readingDirection ?? app.translate.readingDirection,
+    reasoningEffort: t.reasoningEffort ?? app.translate.reasoningEffort,
     baseUrl: t.baseUrl ?? app.translate.baseUrl,
     special: t.special ?? app.translate.special,
     apiKeys: t.apiKeys ?? app.translate.apiKeys,
@@ -518,6 +524,9 @@ export function saveTranslatePrefs() {
         provider: t.provider,
         model: t.model,
         outputLanguage: t.outputLanguage,
+        inputLanguage: t.inputLanguage,
+        readingDirection: t.readingDirection,
+        reasoningEffort: t.reasoningEffort,
         baseUrl: t.baseUrl,
         special: t.special,
         apiKeys: t.apiKeys,

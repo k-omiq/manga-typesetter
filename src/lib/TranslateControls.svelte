@@ -69,6 +69,30 @@
       <input type="text" bind:value={t.outputLanguage} oninput={saveTranslatePrefs} placeholder="English" />
     </label>
 
+    <label class="fld">
+      <span>Input language</span>
+      <input type="text" bind:value={t.inputLanguage} oninput={saveTranslatePrefs} placeholder="Japanese" />
+    </label>
+
+    <label class="fld">
+      <span>Reading dir.</span>
+      <select bind:value={t.readingDirection} onchange={saveTranslatePrefs}>
+        <option value="rtl">Right→Left (manga)</option>
+        <option value="ltr">Left→Right (webtoon)</option>
+      </select>
+    </label>
+
+    <label class="fld">
+      <span>Reasoning</span>
+      <select bind:value={t.reasoningEffort} onchange={saveTranslatePrefs}>
+        <option value="">None</option>
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+      </select>
+    </label>
+    <div class="hint sub">Reasoning effort applies only to reasoning-capable models (e.g. Anthropic, OpenAI o-series).</div>
+
     <label class="fld col">
       <span>Special instructions <em>(optional glossary)</em></span>
       <textarea rows="2" bind:value={t.special} oninput={saveTranslatePrefs} placeholder="e.g. keep 主人公 as 'Aoi'"></textarea>
@@ -158,5 +182,9 @@
   .hint {
     font-size: 11px;
     color: var(--muted, #8b91a1);
+  }
+  .hint.sub {
+    margin-top: -4px;
+    opacity: 0.85;
   }
 </style>

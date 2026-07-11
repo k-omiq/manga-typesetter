@@ -197,6 +197,53 @@ export async function downloadFlux() {
   }
 }
 
+// ---- model cache (Settings) -----------------------------------------------
+
+// Report the on-disk size/location of the downloaded model caches. Returns
+// { entries:[{path,exists,bytes}], total_bytes } or null when Tauri/the sidecar
+// isn't available (browser preview).
+export async function modelsCacheInfo() {
+  const invoke = await getInvoke();
+  if (!invoke) return null;
+  try {
+    return await invoke('sidecar_models_cache');
+  } catch {
+    return null;
+  }
+}
+
+// Delete the downloaded model weights to free disk. Returns the sidecar's
+// { ok, cleared, freed_bytes, errors } result, or throws.
+export async function clearModelsCache() {
+  const invoke = await getInvoke();
+  if (!invoke) throw new Error('sidecar unavailable (no Tauri runtime)');
+  return invoke('sidecar_models_cache_clear');
+}
+
+// ---- sidecar lifecycle (Settings) -----------------------------------------
+
+// Restart the Python sidecar child, then re-poll health + FLUX status. No-op in
+// the browser (nothing to restart).
+export async function restartSidecar() {
+  const invoke = await getInvoke();
+  if (!invoke) {
+    toast('Sidecar restart needs the desktop app');
+    return;
+  }
+  const s = ensureState();
+  s.status = 'unknown';
+  toast('Restarting sidecar…');
+  try {
+    await invoke('sidecar_restart');
+    await checkSidecar(); // polls /health until it comes back (up to ~30s)
+    await refreshFluxStatus();
+    toast(sidecarReady() ? 'Sidecar restarted' : 'Sidecar restart failed — see logs');
+  } catch (e) {
+    s.status = 'error';
+    toast(`Sidecar restart failed: ${e}`);
+  }
+}
+
 // ---- translation (BYOK) ---------------------------------------------------
 
 // Fetch the provider catalogue (id + suggested default model) into app.translate.
@@ -244,8 +291,13 @@ export async function translateCurrentPage() {
       api_key: t.apiKeys?.[t.provider] ?? '',
       base_url: t.baseUrl ?? '',
       output_language: t.outputLanguage || 'English',
+      input_language: t.inputLanguage || 'Japanese',
+      reading_direction: t.readingDirection || 'rtl',
       special_instructions: t.special ?? '',
     };
+    // reasoning_effort only matters for reasoning-capable providers; omit it
+    // entirely when unset so the sidecar keeps its own default.
+    if (t.reasoningEffort) payload.reasoning_effort = t.reasoningEffort;
     const result = await invoke('sidecar_translate', { payload });
     applyTranslation(result, p);
     const n = (result.lines ?? []).filter((x) => x.en).length;

@@ -11,7 +11,8 @@ core pipeline (detect → clean → translate → typeset → export) works.
 - **Phase 2** — Smart per-region cleaning as editable patch layers. Policy: solid-colour surround → OpenCV fill; textured → **AI redraw (FLUX)** with Telea/NS fallback.
 - **Phase 3** — BYOK LLM translation reusing MangaTranslator's provider set.
 - **Phase 4** — Manual brush tools (Fill / Clone / Paint / Erase), Bake/Flatten, PSD layered lossless round-trip.
-- **Settings panel** — installs the opt-in FLUX model (deps + weights).
+- **Settings panel** — installs the opt-in FLUX model (deps + weights); model-cache size/clear, default export directory, and sidecar restart (see P2 #5).
+- **Translation options** — input language, reading direction, and reasoning effort are wired from `TranslateControls.svelte` through to `/translate` (see P2 #4).
 - Cross-repo audit fixes: sidecar event-loop offload, parent-death watchdog, health early-bail, 401 auth, random token, brush page-pinning/undo, clone sharpness, importer/PSD hygiene.
 
 ---
@@ -54,17 +55,15 @@ environment. Before release, manually verify on real hardware:
 
 ## P2 — Feature gaps
 
-### 4. Translation options not wired to the UI
-The sidecar `/translate` accepts `input_language`, `reading_direction`, and
-`reasoning_effort`, but `TranslateControls.svelte` / `sidecar.js` never send
-them (they default server-side). Expose them (esp. `reasoning_effort` for the
-Anthropic/BYOK path).
-- Files: `src/lib/TranslateControls.svelte`, `src/lib/sidecar.js`, `python/sidecar/main.py`.
+_Items 4 and 5 are done (see "Shipped" above); the remaining candidates below
+are follow-ups gated on the P1 work._
 
-### 5. Settings panel is models-only
-Currently just the FLUX model + sidecar status. Candidates to add: model-cache
-location/size + "clear cache", theme, default export dir, sidecar restart, the
-HF token field (#2), the FLUX speed setting (#1).
+### 5a. Settings panel — remaining candidates
+The panel now covers the FLUX model + sidecar status, model-cache size/clear,
+default export directory, and sidecar restart. Still to add once their P1
+siblings land: the **HF token field** (P1 #2) and the **FLUX speed / quality**
+setting (P1 #1). A **theme** toggle is also a nice-to-have (the app is dark-only
+today).
 - File: `src/lib/SettingsModal.svelte`.
 
 ---
