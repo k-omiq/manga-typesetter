@@ -41,13 +41,62 @@ def _watch_parent(ppid: int) -> None:
             os._exit(0)
 
 
+def _watch_parent_windows(ppid: int) -> None:
+    """Windows equivalent of :func:`_watch_parent`.
+
+    ``getppid()`` isn't meaningful on Windows, so instead we open a handle to the
+    parent by PID *once* and block on it with ``WaitForSingleObject``. Holding the
+    handle pins the underlying process object, so PID reuse after the parent exits
+    can't fool us — the wait is signalled exactly when *that* process ends, at
+    which point we exit so we don't orphan (same rationale as the POSIX path).
+
+    (A Job Object with ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` assigned from the
+    Rust side is the more robust mechanism — the OS tears the child down with the
+    job even on a hard app crash — but it needs a Windows-only dependency and
+    unsafe FFI on the spawn side; this self-contained watchdog is the lighter
+    choice and mirrors the existing thread.)
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    SYNCHRONIZE = 0x00100000
+    WAIT_OBJECT_0 = 0x00000000
+    INFINITE = 0xFFFFFFFF
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+
+    handle = kernel32.OpenProcess(SYNCHRONIZE, False, ppid)
+    if not handle:
+        # Couldn't open the parent (already gone, or not permitted). Degrade to
+        # "no watchdog" and err on the side of staying alive, matching the POSIX
+        # path's treatment of ambiguous cases — Rust still kills us on a graceful
+        # app exit; only a hard crash can then orphan us.
+        return
+    try:
+        if kernel32.WaitForSingleObject(handle, INFINITE) == WAIT_OBJECT_0:
+            os._exit(0)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def main() -> None:
-    # Parent-death watchdog (POSIX only; getppid semantics differ on Windows,
-    # where a job object on the app side is the right mechanism instead).
-    if config.PARENT_PID > 1 and os.name == "posix":
-        threading.Thread(
-            target=_watch_parent, args=(config.PARENT_PID,), daemon=True
-        ).start()
+    # Parent-death watchdog: exit the sidecar if the host app that spawned us
+    # goes away, so a hard app crash can't orphan us holding the loopback port.
+    # POSIX watches getppid()/kill(0); Windows waits on a handle to the parent
+    # (getppid semantics don't carry over). See each watcher for details.
+    if config.PARENT_PID > 1:
+        watcher = _watch_parent if os.name == "posix" else (
+            _watch_parent_windows if os.name == "nt" else None
+        )
+        if watcher is not None:
+            threading.Thread(
+                target=watcher, args=(config.PARENT_PID,), daemon=True
+            ).start()
 
     uvicorn.run(
         "sidecar.main:app",

@@ -139,8 +139,18 @@ windowed release builds.
   won't hand one out). Verified: sidecar started on an OS-assigned port answers
   `/health` and a token-gated proxied call; the full path through the packaged
   Tauri app still wants a desktop run (see P1 #3).
-- **Windows sidecar watchdog** — the parent-death watchdog is POSIX-only
-  (`getppid`); Windows should use a Job Object. `python/sidecar/__main__.py`.
+- ~~**Windows sidecar watchdog** — the parent-death watchdog is POSIX-only.~~
+  **Done (needs Windows verification).** `python/sidecar/__main__.py` now has a
+  Windows path: `_watch_parent_windows` opens a `SYNCHRONIZE` handle to the parent
+  by PID (via ctypes/`kernel32`) once and blocks on `WaitForSingleObject`, exiting
+  the sidecar when that handle signals. Holding the handle pins the process
+  object, so PID reuse after the parent exits can't fool it. POSIX behaviour is
+  unchanged (verified: child exits rc 0 within ~2 s of parent death). The Windows
+  branch **cannot be exercised in this macOS environment** (`WinDLL` is
+  unavailable) — **manually verify on Windows** that killing the host app tears
+  the sidecar down. The Job-Object-from-Rust approach (`KILL_ON_JOB_CLOSE`) is
+  noted in the code as the heavier but more crash-robust alternative if the
+  handle-wait proves insufficient.
 - **Prod bundling of the FLUX path** — weights are multi-GB and opt-in; decide
   caching/first-run UX for packaged builds.
 - **CI** — no automated build/test pipeline; the checks in this repo are manual.
