@@ -7,23 +7,29 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
 
 use tauri::Manager;
 
-/// Loopback port the sidecar binds. Fixed for now; could become dynamic later.
+/// Fallback loopback port, used only if allocating a free one fails. Each spawn
+/// binds an OS-assigned free port (see `free_port`) and stores it in `Sidecar`,
+/// so a stale/other instance holding this number no longer causes a clash.
 pub const SIDECAR_PORT: u16 = 8765;
 
-/// Managed state: the running child plus the shared auth token.
+/// Managed state: the running child, the shared auth token, and the loopback
+/// port the current child was told to bind (0 until the first spawn).
 #[derive(Default)]
 pub struct Sidecar {
     child: Mutex<Option<Child>>,
+    port: AtomicU16,
     pub token: String,
 }
 
 impl Sidecar {
     pub fn base_url(&self) -> String {
-        format!("http://127.0.0.1:{SIDECAR_PORT}")
+        let port = self.port.load(Ordering::Relaxed);
+        format!("http://127.0.0.1:{port}")
     }
 
     /// Best-effort kill of the child process.
@@ -68,9 +74,22 @@ fn make_token() -> String {
     format!("{nanos:x}{:x}", std::process::id())
 }
 
+/// Ask the OS for a currently-free loopback port by binding `:0` and reading the
+/// assigned number back, then dropping the listener so the sidecar can claim it.
+/// There's a tiny window where another process could grab it first; that only
+/// means the child fails to bind and the health poll reports it — no orphan and
+/// no silent clash, which is the whole point over a fixed port.
+fn free_port() -> Option<u16> {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .ok()?
+        .local_addr()
+        .ok()
+        .map(|addr| addr.port())
+}
+
 /// Resolve how to launch the sidecar for the current build profile.
 /// Returns a ready-to-spawn `Command` or `None` if no sidecar is available.
-fn build_command(app: &tauri::AppHandle, token: &str) -> Option<Command> {
+fn build_command(app: &tauri::AppHandle, token: &str, port: u16) -> Option<Command> {
     let exe = if cfg!(windows) {
         "mt-sidecar.exe"
     } else {
@@ -85,7 +104,7 @@ fn build_command(app: &tauri::AppHandle, token: &str) -> Option<Command> {
         let bin = res_dir.join("binaries").join("mt-sidecar").join(exe);
         if bin.exists() {
             let mut cmd = Command::new(bin);
-            apply_env(&mut cmd, token);
+            apply_env(&mut cmd, token, port);
             return Some(cmd);
         }
     }
@@ -114,7 +133,7 @@ fn build_command(app: &tauri::AppHandle, token: &str) -> Option<Command> {
 
     let mut cmd = Command::new(py);
     cmd.arg("-m").arg("sidecar").current_dir(&py_root);
-    apply_env(&mut cmd, token);
+    apply_env(&mut cmd, token, port);
     Some(cmd)
 }
 
@@ -149,9 +168,9 @@ fn cwd_python_dir() -> Option<PathBuf> {
     }
 }
 
-fn apply_env(cmd: &mut Command, token: &str) {
+fn apply_env(cmd: &mut Command, token: &str, port: u16) {
     cmd.env("MT_SIDECAR_HOST", "127.0.0.1")
-        .env("MT_SIDECAR_PORT", SIDECAR_PORT.to_string())
+        .env("MT_SIDECAR_PORT", port.to_string())
         .env("MT_SIDECAR_TOKEN", token)
         // The sidecar's watchdog exits itself if this PID goes away, so a hard
         // app crash (no graceful shutdown) can't orphan it holding the port.
@@ -164,7 +183,13 @@ pub fn spawn(app: &tauri::AppHandle) {
     let state = app.state::<Sidecar>();
     state.shutdown();
 
-    match build_command(app, &state.token) {
+    // Pick a fresh free port for this child so we never clash with a stale
+    // instance (or an unrelated process) squatting on a fixed number. Fall back
+    // to the well-known default only if the OS won't hand one out.
+    let port = free_port().unwrap_or(SIDECAR_PORT);
+    state.port.store(port, Ordering::Relaxed);
+
+    match build_command(app, &state.token, port) {
         Some(mut cmd) => {
             // Pipe stdout+stderr so startup lines (uvicorn "Application startup
             // complete", import errors, port already in use from an orphan) reach
@@ -174,7 +199,7 @@ pub fn spawn(app: &tauri::AppHandle) {
             cmd.stderr(Stdio::piped());
             match cmd.spawn() {
                 Ok(mut child) => {
-                    log::info!("sidecar spawned on port {SIDECAR_PORT}");
+                    log::info!("sidecar spawned on port {port}");
                     if let Some(stdout) = child.stdout.take() {
                         std::thread::spawn(move || {
                             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -489,6 +514,7 @@ pub async fn sidecar_translate(
 pub fn new_state() -> Sidecar {
     Sidecar {
         child: Mutex::new(None),
+        port: AtomicU16::new(0), // set on first spawn
         token: make_token(),
     }
 }

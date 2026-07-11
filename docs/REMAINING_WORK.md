@@ -130,8 +130,15 @@ windowed release builds.
 
 ## P4 — Future / nice-to-have
 
-- **Dynamic sidecar port** instead of hardcoded 8765 (avoids clashes; comment at
-  `src-tauri/src/sidecar.rs:13`). Watchdog already prevents orphans holding it.
+- ~~**Dynamic sidecar port** instead of hardcoded 8765.~~ **Done.** Each spawn now
+  binds `127.0.0.1:0` to grab an OS-assigned free port (`free_port` in
+  `src-tauri/src/sidecar.rs`), stores it in the managed `Sidecar` state, passes it
+  via `MT_SIDECAR_PORT` (already read by `python/sidecar/config.py`), and reads it
+  back in `base_url()` so every proxy command targets the right port — no more
+  clash with a stale/other instance on 8765 (kept only as a fallback if the OS
+  won't hand one out). Verified: sidecar started on an OS-assigned port answers
+  `/health` and a token-gated proxied call; the full path through the packaged
+  Tauri app still wants a desktop run (see P1 #3).
 - **Windows sidecar watchdog** — the parent-death watchdog is POSIX-only
   (`getppid`); Windows should use a Job Object. `python/sidecar/__main__.py`.
 - **Prod bundling of the FLUX path** — weights are multi-GB and opt-in; decide
