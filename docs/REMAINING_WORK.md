@@ -151,8 +151,20 @@ windowed release builds.
   the sidecar down. The Job-Object-from-Rust approach (`KILL_ON_JOB_CLOSE`) is
   noted in the code as the heavier but more crash-robust alternative if the
   handle-wait proves insufficient.
-- **Prod bundling of the FLUX path** — weights are multi-GB and opt-in; decide
-  caching/first-run UX for packaged builds.
+- ~~**Prod bundling of the FLUX path** — weights are multi-GB and opt-in; decide
+  caching/first-run UX for packaged builds.~~ **Decided & documented** in
+  [FLUX_PACKAGING.md](FLUX_PACKAGING.md). Findings + fixes: (a) the detector/OCR
+  cache (`config.MODEL_DIR`, absolute) already resolves in prod; (b)
+  MangaTranslator's CWD-relative `./models` FLUX weight cache would have resolved
+  to an unwritable `/models` in a packaged build — now pinned to `MODEL_DIR` via a
+  `sys.frozen` chdir at startup (`python/sidecar/__main__.py`); (c) the pip-based
+  "Download & Install" can't run in a frozen build (no pip/venv), so `status()`
+  now reports `installable=false`/`frozen`, `download()` fails fast with guidance,
+  and Settings shows a "Run from source" state instead of a button that errors.
+  Weights are still never bundled (stream lazily). Bundling the torch/diffusers
+  stack is rejected; the packaged-FLUX story defers to the CUDA-endpoint offload
+  (P1 #1) or a separate optional download. Frozen paths verified by simulation
+  here; a real packaged build still needs on-target verification (P1 #3).
 - **CI** — no automated build/test pipeline; the checks in this repo are manual.
 
 ---

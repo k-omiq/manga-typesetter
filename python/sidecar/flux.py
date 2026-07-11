@@ -101,20 +101,41 @@ def _probe_flux() -> tuple[str, str]:
     return _probe
 
 
+def _is_frozen() -> bool:
+    """True when running as the packaged PyInstaller `mt-sidecar` binary.
+
+    A frozen build has no bundled pip and no venv, so the pip-based one-click
+    install can't run — `sys.executable` is the app binary, not an interpreter.
+    """
+    return bool(getattr(sys, "frozen", False))
+
+
 def status() -> dict:
     """Report whether the FLUX path can run, and — crucially — *why* not.
 
     `state` lets the UI tell "just not installed yet" (deps_missing) from a
     broken install (import_error) or a missing vendor tree (not_vendored), so a
-    failed install isn't silently read as "opt-in not taken".
+    failed install isn't silently read as "opt-in not taken". `installable` is
+    False in a packaged (frozen) build, where the pip-based install can't run —
+    the UI should then point at a source run instead of offering a button that
+    would fail (see docs/FLUX_PACKAGING.md).
     """
     state, reason = _probe_flux()
+    frozen = _is_frozen()
+    if frozen and state != "ready":
+        reason = (
+            "FLUX install isn't available in the packaged app (no bundled pip); "
+            "run from source to install it, or use classical Telea/NS cleaning. "
+            f"({reason})"
+        )
     return {
         "available": state == "ready",
         "state": state,
         "reason": reason,
         "backend": "flux_klein_4b/sdnq",
         "loaded": _inpainter is not None,
+        "frozen": frozen,
+        "installable": not frozen,
     }
 
 
@@ -129,6 +150,21 @@ def download() -> dict:
     # but broken install (import_error) should be repairable by reinstalling.
     if _probe_flux()[0] == "ready":
         return {"ok": True, "already": True, "message": "FLUX deps already installed"}
+
+    # A packaged build has no pip/venv to install into — `sys.executable` is the
+    # frozen app binary. Fail fast with guidance instead of running a broken
+    # `mt-sidecar -m pip install` (see docs/FLUX_PACKAGING.md for the rationale).
+    if _is_frozen():
+        return {
+            "ok": False,
+            "already": False,
+            "message": (
+                "FLUX install isn't available in the packaged app: it needs pip "
+                "and a Python environment that a frozen build doesn't ship. Run "
+                "the app from source to install FLUX, or use the always-available "
+                "OpenCV Telea/NS cleaning instead."
+            ),
+        }
 
     proc = subprocess.run(
         [sys.executable, "-m", "pip", "install", *_FLUX_DEPS],

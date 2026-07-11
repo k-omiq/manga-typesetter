@@ -111,6 +111,9 @@
   // vendor tree is absent (not_vendored) — distinct from "just not installed",
   // so a failed install doesn't read as opt-in-not-taken.
   const fluxBroken = $derived(app.flux.state === 'import_error' || app.flux.state === 'not_vendored');
+  // A packaged (frozen) build can't run the pip install — surface that instead of
+  // offering a button that would fail. Only relevant when FLUX isn't already ready.
+  const fluxPackaged = $derived(app.flux.installable === false && !app.flux.available);
   const fluxState = $derived(
     app.flux.downloading
       ? 'installing'
@@ -120,7 +123,9 @@
           ? 'ready'
           : fluxBroken
             ? 'broken'
-            : 'missing',
+            : fluxPackaged
+              ? 'packaged'
+              : 'missing',
   );
   const fluxLabel = $derived(
     {
@@ -128,6 +133,7 @@
       checking: 'Checking…',
       ready: 'Installed',
       broken: 'Install broken',
+      packaged: 'Run from source',
       missing: 'Not installed',
     }[fluxState],
   );
@@ -182,22 +188,24 @@
           stream from HuggingFace on the first FLUX clean.
         </p>
 
-        {#if app.flux.reason && (fluxState === 'missing' || fluxState === 'broken')}
+        {#if app.flux.reason && (fluxState === 'missing' || fluxState === 'broken' || fluxState === 'packaged')}
           <div class="mc-reason">
-            {#if fluxState === 'broken'}<b>Install looks broken:</b> {/if}{app.flux.reason}
+            {#if fluxState === 'broken'}<b>Install looks broken:</b> {/if}{#if fluxState === 'packaged'}<b>Packaged build:</b> {/if}{app.flux.reason}
           </div>
         {/if}
 
         <div class="mc-actions">
           <button
             class="btn primary"
-            disabled={!sidecarOk || app.flux.downloading || app.flux.available}
+            disabled={!sidecarOk || app.flux.downloading || app.flux.available || fluxPackaged}
             onclick={downloadFlux}
           >
             {#if app.flux.downloading}
               Installing…
             {:else if app.flux.available}
               Installed ✓
+            {:else if fluxState === 'packaged'}
+              Unavailable in packaged app
             {:else if fluxState === 'broken'}
               Repair install
             {:else}
@@ -426,7 +434,8 @@
     background: #4a2323;
     color: #f0b6b6;
   }
-  .tag.auto {
+  .tag.auto,
+  .tag.packaged {
     background: #24304a;
     color: #9fb6e0;
   }

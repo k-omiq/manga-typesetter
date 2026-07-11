@@ -168,7 +168,17 @@ export async function refreshFluxStatus() {
       return app.flux;
     }
     const s = await invoke('sidecar_flux_status');
-    app.flux = { ...app.flux, available: !!s.available, state: s.state ?? null, reason: s.reason ?? null };
+    // `installable` is false in a packaged (frozen) build where the pip-based
+    // install can't run — the UI disables the button and explains why. Default
+    // true when the sidecar predates the field (older backend).
+    app.flux = {
+      ...app.flux,
+      available: !!s.available,
+      state: s.state ?? null,
+      reason: s.reason ?? null,
+      installable: s.installable ?? true,
+      frozen: !!s.frozen,
+    };
     return app.flux;
   } catch (e) {
     app.flux = { ...app.flux, available: false, state: 'error', reason: String(e) };
