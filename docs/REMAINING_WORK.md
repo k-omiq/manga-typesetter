@@ -165,7 +165,18 @@ windowed release builds.
   stack is rejected; the packaged-FLUX story defers to the CUDA-endpoint offload
   (P1 #1) or a separate optional download. Frozen paths verified by simulation
   here; a real packaged build still needs on-target verification (P1 #3).
-- **CI** — no automated build/test pipeline; the checks in this repo are manual.
+- ~~**CI** — no automated build/test pipeline; the checks in this repo are
+  manual.~~ **Done.** `.github/workflows/ci.yml` runs on push to `main` / PR /
+  manual dispatch, with three jobs: **frontend** (`npm ci` + `npx vite build`),
+  **rust** (`cargo check` + `cargo clippy -D warnings`, with the Tauri Linux
+  system deps installed so the webkit/gtk sys-crates link), and **python**
+  (installs the base `requirements.txt` + httpx/pytest and runs
+  `python -c "import sidecar.main"` plus `python/tests/test_smoke.py` — import,
+  `/health`, and the token gate). It deliberately skips the heavy ML stack and the
+  `external/` vendor trees; the smoke test passes with base deps only because the
+  ML imports are lazy inside the route handlers. Verified locally: vite build,
+  clippy `-D warnings`, and the smoke tests all green in a base-only venv with
+  `external/` absent.
 
 ---
 
