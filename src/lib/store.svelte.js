@@ -138,7 +138,7 @@ export const app = $state({
   detecting: false, // detection/OCR request in flight
   cleaning: false, // a /clean request is in flight
   selectedLayerId: null, // active clean patch layer
-  flux: { available: false, reason: null, checking: false, downloading: false }, // opt-in inpaint
+  flux: { available: false, state: null, reason: null, checking: false, downloading: false }, // opt-in inpaint; state: ready|deps_missing|import_error|not_vendored|unavailable
   // Phase 4 manual brush tools (clean mode only). Every stroke becomes its own
   // brush patch layer (page.clean.layers, kind:'brush'), so it toggles/deletes
   // like an auto region. `tool` is the active sub-tool; brush is the engaged

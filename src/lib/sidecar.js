@@ -164,14 +164,14 @@ export async function refreshFluxStatus() {
   app.flux.checking = true;
   try {
     if (!invoke) {
-      app.flux = { ...app.flux, available: false, reason: 'no Tauri runtime' };
+      app.flux = { ...app.flux, available: false, state: 'unavailable', reason: 'no Tauri runtime' };
       return app.flux;
     }
     const s = await invoke('sidecar_flux_status');
-    app.flux = { ...app.flux, available: !!s.available, reason: s.reason ?? null };
+    app.flux = { ...app.flux, available: !!s.available, state: s.state ?? null, reason: s.reason ?? null };
     return app.flux;
   } catch (e) {
-    app.flux = { ...app.flux, available: false, reason: String(e) };
+    app.flux = { ...app.flux, available: false, state: 'error', reason: String(e) };
     return app.flux;
   } finally {
     app.flux.checking = false;

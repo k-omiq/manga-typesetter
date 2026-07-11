@@ -5,6 +5,7 @@
 //! (produced by PyInstaller; wired as a Tauri sidecar in a later phase).
 
 use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
@@ -89,22 +90,13 @@ fn build_command(app: &tauri::AppHandle, token: &str) -> Option<Command> {
         }
     }
 
-    // Dev: python -m sidecar from python/.venv next to the project root.
-    // src-tauri/ is the cwd in dev; the python project sits at ../python.
-    let py_root = app
-        .path()
-        .resource_dir()
-        .ok()
-        .map(|d| d.join("python"))
-        .filter(|d| d.exists())
-        .or_else(|| {
-            let dev = std::env::current_dir().ok()?.join("..").join("python");
-            if dev.exists() {
-                Some(dev)
-            } else {
-                None
-            }
-        })?;
+    // Dev: python -m sidecar from python/.venv. The python project sits next to
+    // the crate (../python), but we must not assume a particular cwd — the binary
+    // can be launched from anywhere. Resolve against the crate dir first, then
+    // fall back to walking up from the cwd, and only then to a resource-dir copy.
+    let py_root = resource_python_dir(app)
+        .or_else(crate_python_dir)
+        .or_else(cwd_python_dir)?;
 
     let py = py_root
         .join(".venv")
@@ -126,6 +118,37 @@ fn build_command(app: &tauri::AppHandle, token: &str) -> Option<Command> {
     Some(cmd)
 }
 
+/// Packaged copy of the python project unpacked into the app resource dir
+/// (secondary to the bundled `mt-sidecar` binary; supports a prod layout that
+/// ships the sources instead of the frozen binary).
+fn resource_python_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let dir = app.path().resource_dir().ok()?.join("python");
+    dir.exists().then_some(dir)
+}
+
+/// `<crate>/../python` — `CARGO_MANIFEST_DIR` is baked at compile time and points
+/// at `src-tauri/`, so this resolves the sibling `python/` no matter what the cwd
+/// is when the binary runs (the dev cwd is not guaranteed to be `src-tauri/`).
+fn crate_python_dir() -> Option<PathBuf> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).parent()?.join("python");
+    dir.exists().then_some(dir)
+}
+
+/// Last resort: walk up from the current dir looking for a `python/sidecar`
+/// package. Covers running the binary from an unusual cwd on a machine whose
+/// checkout layout differs from the build machine (stale `CARGO_MANIFEST_DIR`).
+fn cwd_python_dir() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        if dir.join("python").join("sidecar").is_dir() {
+            return Some(dir.join("python"));
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
 fn apply_env(cmd: &mut Command, token: &str) {
     cmd.env("MT_SIDECAR_HOST", "127.0.0.1")
         .env("MT_SIDECAR_PORT", SIDECAR_PORT.to_string())
@@ -143,13 +166,22 @@ pub fn spawn(app: &tauri::AppHandle) {
 
     match build_command(app, &state.token) {
         Some(mut cmd) => {
-            // Pipe stderr so startup failures (port already in use from an
-            // orphan, import errors) reach the log instead of vanishing — in a
-            // windowed release build there's no inherited console to see them.
+            // Pipe stdout+stderr so startup lines (uvicorn "Application startup
+            // complete", import errors, port already in use from an orphan) reach
+            // the log instead of vanishing — in a windowed release build there's
+            // no inherited console to see them.
+            cmd.stdout(Stdio::piped());
             cmd.stderr(Stdio::piped());
             match cmd.spawn() {
                 Ok(mut child) => {
                     log::info!("sidecar spawned on port {SIDECAR_PORT}");
+                    if let Some(stdout) = child.stdout.take() {
+                        std::thread::spawn(move || {
+                            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                                log::info!("[sidecar] {line}");
+                            }
+                        });
+                    }
                     if let Some(stderr) = child.stderr.take() {
                         std::thread::spawn(move || {
                             for line in BufReader::new(stderr).lines().map_while(Result::ok) {

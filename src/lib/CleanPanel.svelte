@@ -42,7 +42,11 @@
     refreshFluxStatus();
   });
 
-  // Brush inpaint has its own FLUX opt-in but shares the availability/install flow.
+  // Brush inpaint has its own FLUX opt-in but shares the availability/install
+  // flow. Opting in when it isn't installed kicks off a multi-minute install;
+  // reflect that as an "installing" state (see the row markup) rather than a
+  // stale checkbox, and reconcile to the real availability once it finishes
+  // (so a failed install ends unchecked, not falsely on).
   async function onBrushFluxToggle(e) {
     app.brush.flux = e.target.checked;
     if (app.brush.flux && !app.flux.available) {
@@ -204,9 +208,14 @@
             <option value="telea">Telea</option>
             <option value="ns">Navier–Stokes</option>
           </select>
-          <label class="fluxrow inline" title={app.flux.reason ?? ''}>
+          <label class="fluxrow inline" title={app.flux.downloading ? 'Installing FLUX — this can take several minutes' : (app.flux.reason ?? '')}>
             <input type="checkbox" checked={app.brush.flux} onchange={onBrushFluxToggle} disabled={app.flux.downloading} />
-            <span>FLUX</span>
+            {#if app.flux.downloading}
+              <span class="spin" aria-hidden="true"></span>
+              <span>Installing…</span>
+            {:else}
+              <span>FLUX</span>
+            {/if}
           </label>
         </div>
       {/if}
@@ -413,6 +422,20 @@
   @keyframes pulse {
     50% {
       opacity: 0.35;
+    }
+  }
+  .spin {
+    width: 11px;
+    height: 11px;
+    flex: none;
+    border-radius: 50%;
+    border: 2px solid var(--line, #2b2f3a);
+    border-top-color: #e0c07f;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
     }
   }
   .mini {

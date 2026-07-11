@@ -106,7 +106,11 @@
           : 'Checking…',
   );
 
-  // 'installing' | 'checking' | 'ready' | 'missing'
+  // 'installing' | 'checking' | 'ready' | 'broken' | 'missing'
+  // 'broken' = deps present but the import chain fails (import_error) or the
+  // vendor tree is absent (not_vendored) — distinct from "just not installed",
+  // so a failed install doesn't read as opt-in-not-taken.
+  const fluxBroken = $derived(app.flux.state === 'import_error' || app.flux.state === 'not_vendored');
   const fluxState = $derived(
     app.flux.downloading
       ? 'installing'
@@ -114,10 +118,18 @@
         ? 'checking'
         : app.flux.available
           ? 'ready'
-          : 'missing',
+          : fluxBroken
+            ? 'broken'
+            : 'missing',
   );
   const fluxLabel = $derived(
-    { installing: 'Installing…', checking: 'Checking…', ready: 'Installed', missing: 'Not installed' }[fluxState],
+    {
+      installing: 'Installing…',
+      checking: 'Checking…',
+      ready: 'Installed',
+      broken: 'Install broken',
+      missing: 'Not installed',
+    }[fluxState],
   );
 </script>
 
@@ -170,8 +182,10 @@
           stream from HuggingFace on the first FLUX clean.
         </p>
 
-        {#if app.flux.reason && fluxState === 'missing'}
-          <div class="mc-reason">{app.flux.reason}</div>
+        {#if app.flux.reason && (fluxState === 'missing' || fluxState === 'broken')}
+          <div class="mc-reason">
+            {#if fluxState === 'broken'}<b>Install looks broken:</b> {/if}{app.flux.reason}
+          </div>
         {/if}
 
         <div class="mc-actions">
@@ -184,6 +198,8 @@
               Installing…
             {:else if app.flux.available}
               Installed ✓
+            {:else if fluxState === 'broken'}
+              Repair install
             {:else}
               Download &amp; Install
             {/if}
@@ -405,6 +421,10 @@
   .tag.checking {
     background: #3a2f1f;
     color: #e0c07f;
+  }
+  .tag.broken {
+    background: #4a2323;
+    color: #f0b6b6;
   }
   .tag.auto {
     background: #24304a;

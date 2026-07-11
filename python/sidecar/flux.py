@@ -51,23 +51,67 @@ _MT_DIR = _REPO_ROOT / "external" / "MangaTranslator"
 
 _inpainter = None  # lazy singleton
 
+# Cached result of the heavy import probe (see _probe_flux). Only terminal
+# states are cached — a first-run "deps_missing" must re-evaluate after an
+# install without a restart.
+_probe: tuple[str, str] | None = None
 
-def _deps_available() -> tuple[bool, str]:
+
+def _missing_deps() -> list[str]:
+    """Cheap check (find_spec, no import) for deps that were never installed."""
     import importlib.util
 
-    missing = [m for m in _FLUX_IMPORTS if importlib.util.find_spec(m) is None]
+    return [m for m in _FLUX_IMPORTS if importlib.util.find_spec(m) is None]
+
+
+def _probe_flux() -> tuple[str, str]:
+    """Classify the FLUX install into (state, reason).
+
+    state ∈ {"ready", "deps_missing", "import_error", "not_vendored"}.
+
+    `find_spec` only proves a module is *findable*, not *importable* — a broken
+    build (ABI/version mismatch, half-finished install) has a spec but throws on
+    import. So when every dep is present we actually import the chain to tell
+    "installed & working" apart from "installed but broken". That import is heavy
+    (pulls torch et al.), so the working/broken verdict is cached; the cheap
+    "deps_missing" path is not, so a post-install recheck re-evaluates.
+    """
+    global _probe
+    if _probe is not None:
+        return _probe
+
+    missing = _missing_deps()
     if missing:
-        return False, f"missing python deps: {', '.join(missing)}"
+        return ("deps_missing", f"missing python deps: {', '.join(missing)}")
+
+    import importlib
+
+    for m in _FLUX_IMPORTS:
+        try:
+            importlib.import_module(m)
+        except Exception as e:  # present but broken (ABI/version mismatch, ...)
+            _probe = ("import_error", f"{m} import failed: {type(e).__name__}: {e}")
+            return _probe
+
     if not (_MT_DIR / "core" / "image" / "inpainting.py").is_file():
-        return False, "external/MangaTranslator not vendored"
-    return True, "ready"
+        _probe = ("not_vendored", "external/MangaTranslator not vendored")
+        return _probe
+
+    _probe = ("ready", "ready")
+    return _probe
 
 
 def status() -> dict:
-    """Report whether the FLUX path can run, and why not if it can't."""
-    available, reason = _deps_available()
+    """Report whether the FLUX path can run, and — crucially — *why* not.
+
+    `state` lets the UI tell "just not installed yet" (deps_missing) from a
+    broken install (import_error) or a missing vendor tree (not_vendored), so a
+    failed install isn't silently read as "opt-in not taken".
+    """
+    state, reason = _probe_flux()
     return {
-        "available": available,
+        "available": state == "ready",
+        "state": state,
         "reason": reason,
         "backend": "flux_klein_4b/sdnq",
         "loaded": _inpainter is not None,
@@ -80,8 +124,10 @@ def download() -> dict:
     Heavy and explicit -- only called when the user opts in. Model weights are
     fetched lazily on the first FLUX clean, not here.
     """
-    available, _ = _deps_available()
-    if available:
+    global _probe
+    # Only skip the (heavy) install when the chain actually imports — a present
+    # but broken install (import_error) should be repairable by reinstalling.
+    if _probe_flux()[0] == "ready":
         return {"ok": True, "already": True, "message": "FLUX deps already installed"}
 
     proc = subprocess.run(
@@ -90,6 +136,12 @@ def download() -> dict:
         text=True,
     )
     ok = proc.returncode == 0
+    # Reset the cached probe + importlib's finder caches so a following
+    # status() re-checks the freshly installed deps in this same process.
+    _probe = None
+    import importlib
+
+    importlib.invalidate_caches()
     tail = (proc.stdout + proc.stderr).strip().splitlines()[-12:]
     return {"ok": ok, "already": False, "message": "\n".join(tail)}
 
@@ -100,8 +152,7 @@ def load_inpainter():
     if _inpainter is not None:
         return _inpainter
 
-    available, _ = _deps_available()
-    if not available:
+    if _missing_deps():
         return None
 
     if str(_MT_DIR) not in sys.path:

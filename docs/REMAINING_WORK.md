@@ -70,19 +70,61 @@ today).
 
 ## P3 — Low-severity / cosmetic (from audits)
 
-- **fs scope** still `allow: "**"` (broad, needed for save-anywhere export;
-  credential dirs are denied). Narrowing safely needs verifying Tauri v2
-  dialog→fs runtime grants on real builds. `src-tauri/capabilities/default.json`.
-- **Brush FLUX checkbox** shows the pre-install value during a multi-minute
-  install (eventual state is correct). `src/lib/CleanPanel.svelte`.
-- **Detector model auto-download** uses only a connect timeout (no total cap); a
-  stalled mirror can hang the first `/analyze`. `python/sidecar/detect.py:60`.
-- **FLUX "not installed" vs "install broken"** are indistinguishable to the user
-  (both → Telea fallback); the completion toast now reports fallback counts, but
-  a clearer per-cause message would help. `python/sidecar/flux.py`, `sidecar.js`.
-- **Dev sidecar path resolution** assumes cwd = `src-tauri/`; fragile off the
-  standard layout. `src-tauri/src/sidecar.rs`.
-- **Child stdout** isn't captured (only stderr piped to log). `src-tauri/src/sidecar.rs`.
+Items 2–6 are **done** (this hardening pass); item 1 was investigated and left
+as-is deliberately, with the rationale recorded below.
+
+### 1. fs scope stays `allow: "**"` — deliberate (investigated)
+`src-tauri/capabilities/default.json` keeps the broad `allow: "**"` (with the
+credential-dir deny list). Investigated whether Tauri v2's dialog plugin
+runtime-grants fs access to user-picked paths, which would let the static scope
+narrow to the standard trees (`$HOME`, `$DOWNLOAD`, `$DESKTOP`, `$DOCUMENT`,
+`$TEMP`). It does **not**:
+- In Tauri v2 the dialog plugin returns a path but grants no fs scope. The fs
+  scope is static (capabilities) unless extended at runtime in Rust via
+  `tauri_plugin_fs::FsExt` (`app.fs_scope().allow_file` / `allow_directory`); a
+  path outside the static scope fails `writeFile` with a *forbidden path* error.
+  (Tauri v2 fs-plugin docs; tauri-apps/tauri discussion #9195, issue #12704.)
+- Our export flow (`saveNative` in `src/lib/exporter.js`) calls the JS `save()` /
+  `open()` dialog and then `writeFile` directly — the picked path never reaches
+  Rust, so nothing can `FsExt`-grant it. Narrowing to the standard trees would
+  break save-anywhere export (external drives `/Volumes/**`, any non-standard
+  root), which is the whole point of the picker.
+- Doing it safely would mean routing the picked path through a Rust command that
+  calls `FsExt::allow_directory` before the write, then verifying on a packaged
+  build (P1 #3). Not worth the export-regression risk for a cosmetic tightening;
+  the credential-dir deny list already covers the real exposure.
+
+### 2. Brush FLUX checkbox — fixed
+`src/lib/CleanPanel.svelte`. The brush **Fill** FLUX toggle now shows an explicit
+"Installing…" state (disabled + spinner) during the multi-minute install and
+reconciles to real availability on completion/failure (a failed install ends
+unchecked, not falsely on).
+
+### 3. Detector model auto-download total cap — fixed
+`python/sidecar/detect.py`. Added an overall wall-clock cap
+(`MT_DOWNLOAD_DEADLINE`, default 300 s) around the streamed loop, so a stalled
+mirror raises a clear `TimeoutError` instead of hanging the first `/analyze`. The
+stream now writes to a `.part` temp that's renamed on success (no truncated model
+left behind that would later read as "already present").
+
+### 4. FLUX "not installed" vs "install broken" — fixed
+`python/sidecar/flux.py`, `src/lib/sidecar.js`, `src/lib/SettingsModal.svelte`.
+`status()` now returns a `state` (`ready` / `deps_missing` / `import_error` /
+`not_vendored`) by probing the real import chain (not just `find_spec`), so a
+broken install (present but failing to import) is reported distinctly from "just
+not installed". Settings shows "Install broken" + the failing reason and offers a
+"Repair install" action.
+
+### 5. Dev sidecar path resolution — fixed
+`src-tauri/src/sidecar.rs`. The dev branch now resolves `python/` against the
+crate (`CARGO_MANIFEST_DIR`) and, failing that, walks up from the cwd for a
+`python/sidecar` package — it no longer assumes cwd = `src-tauri/`. The prod
+(bundled) path is unchanged.
+
+### 6. Child stdout capture — fixed
+`src-tauri/src/sidecar.rs`. The sidecar child's stdout is now piped to the log
+(same reader-thread pattern as stderr), so uvicorn/startup lines are visible in
+windowed release builds.
 
 ---
 

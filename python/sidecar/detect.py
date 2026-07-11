@@ -51,18 +51,46 @@ def _device() -> str:
     return "cpu"
 
 
+# Overall wall-clock cap for the first-run detector download. `requests`'
+# `timeout` only bounds connect + per-read gaps, so a mirror that dribbles bytes
+# (or stalls after each chunk resets the read clock) can hang /analyze forever.
+# This caps the whole streamed transfer. Override via MT_DOWNLOAD_DEADLINE.
+try:
+    _DOWNLOAD_DEADLINE_S = float(os.environ.get("MT_DOWNLOAD_DEADLINE", "300"))
+except ValueError:
+    _DOWNLOAD_DEADLINE_S = 300.0
+
+
 def _ensure_detector_model() -> Path:
     path = config.MODEL_DIR / "comictextdetector.pt"
-    if not path.is_file():
-        import requests
+    if path.is_file():
+        return path
 
-        config.ensure_dirs()
+    import time
+
+    import requests
+
+    config.ensure_dirs()
+    # Stream to a temp file and rename on success so an interrupted/timed-out
+    # download can't leave a truncated .pt that later reads as "already present".
+    tmp = path.with_suffix(path.suffix + ".part")
+    deadline = time.monotonic() + _DOWNLOAD_DEADLINE_S
+    try:
         with requests.get(_DETECTOR_URL, stream=True, timeout=60) as r:
             r.raise_for_status()
-            with path.open("wb") as f:
+            with tmp.open("wb") as f:
                 for chunk in r.iter_content(1 << 16):
+                    if time.monotonic() > deadline:
+                        raise TimeoutError(
+                            f"detector model download exceeded "
+                            f"{_DOWNLOAD_DEADLINE_S:.0f}s (stalled mirror?): {_DETECTOR_URL}"
+                        )
                     if chunk:
                         f.write(chunk)
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
 
 
