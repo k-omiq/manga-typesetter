@@ -391,17 +391,30 @@ pub async fn sidecar_flux_status(
     resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
-/// One-click install of the FLUX deps into the sidecar venv (heavy, opt-in).
+/// One-click provision of the external FLUX environment (heavy, opt-in).
+///
+/// `selection` is the chosen model (family/variant/backend/quant); `hf_token` is
+/// an optional HuggingFace token for gated/rate-limited weight downloads. Both
+/// are forwarded to the sidecar, which provisions the uv venv and persists the
+/// choice (see python/sidecar/flux.py).
 #[tauri::command]
 pub async fn sidecar_flux_download(
     state: tauri::State<'_, Sidecar>,
+    selection: Option<serde_json::Value>,
+    hf_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let url = format!("{}/clean/flux-download", state.base_url());
-    // pip install can take a while; allow a long timeout.
+    let body = serde_json::json!({
+        "selection": selection,
+        "hf_token": hf_token.unwrap_or_default(),
+    });
+    // Provisioning (uv venv + torch/diffusers install) can take many minutes;
+    // allow a long timeout.
     let resp = reqwest::Client::new()
         .post(&url)
         .header("x-mt-token", &state.token)
-        .timeout(std::time::Duration::from_secs(1800))
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(3600))
         .send()
         .await
         .map_err(|e| e.to_string())?;

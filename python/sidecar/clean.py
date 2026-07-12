@@ -350,7 +350,21 @@ def clean_regions(
 
 
 def _load_flux_inpainter():
-    """Best-effort load of the opt-in FLUX inpainter (see flux.py)."""
+    """Best-effort load of the opt-in FLUX inpainter.
+
+    Prefers the out-of-process ``mt-flux`` sidecar (the packaged-capable path via
+    an external uv-provisioned env). Falls back to the in-process inpainter when
+    the FLUX deps live in this interpreter (the dev fast path). Either object
+    exposes ``.inpaint_mask``; ``None`` means classical Telea/NS fallback.
+    """
+    try:
+        from . import flux_proxy
+
+        proxy = flux_proxy.get_proxy_inpainter()
+        if proxy is not None:
+            return proxy
+    except Exception:
+        pass
     try:
         from . import flux
 

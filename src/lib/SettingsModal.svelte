@@ -89,6 +89,7 @@
   $effect(() => {
     if (open) {
       confirmClear = false;
+      pickerInit = false; // re-seed the model picker from the latest persisted selection
       checkSidecar();
       refreshFluxStatus();
       loadCache();
@@ -106,14 +107,34 @@
           : 'Checking…',
   );
 
-  // 'installing' | 'checking' | 'ready' | 'broken' | 'missing'
-  // 'broken' = deps present but the import chain fails (import_error) or the
-  // vendor tree is absent (not_vendored) — distinct from "just not installed",
-  // so a failed install doesn't read as opt-in-not-taken.
-  const fluxBroken = $derived(app.flux.state === 'import_error' || app.flux.state === 'not_vendored');
-  // A packaged (frozen) build can't run the pip install — surface that instead of
-  // offering a button that would fail. Only relevant when FLUX isn't already ready.
-  const fluxPackaged = $derived(app.flux.installable === false && !app.flux.available);
+  // ---- FLUX model picker (mirrors MangaTranslator's choices) --------------
+  // The chosen model; initialised from the persisted selection (or the
+  // catalogue default) the first time the panel opens with data loaded.
+  let selection = $state({ family: 'klein', variant: '4b', backend: 'sdnq', quant: '' });
+  let hfToken = $state('');
+  let pickerInit = $state(false);
+
+  const families = $derived(app.flux.catalogue?.families ?? []);
+  const currentFamily = $derived(
+    families.find((f) => f.family === selection.family && f.variant === selection.variant) ?? families[0] ?? null,
+  );
+  const backends = $derived(currentFamily?.backends ?? []);
+  const quants = $derived(currentFamily?.quants ?? []);
+  const showQuant = $derived(selection.backend === 'sdcpp'); // only sdcpp/GGUF picks a quant
+  const needsToken = $derived(!!currentFamily?.gated); // Klein 9B is a gated repo
+
+  const persisted = $derived(app.flux.model);
+  const selectionChanged = $derived(
+    !persisted ||
+      persisted.family !== selection.family ||
+      (persisted.variant ?? '') !== (selection.variant ?? '') ||
+      persisted.backend !== selection.backend ||
+      (showQuant && (persisted.quant ?? '') !== (selection.quant ?? '')),
+  );
+
+  // uv drives provisioning; without it (e.g. browser / no uv on a source run) the
+  // external env can't be built. The in-process dev path can still be "available".
+  const canProvision = $derived(app.flux.uvAvailable !== false);
   const fluxState = $derived(
     app.flux.downloading
       ? 'installing'
@@ -121,22 +142,67 @@
         ? 'checking'
         : app.flux.available
           ? 'ready'
-          : fluxBroken
-            ? 'broken'
-            : fluxPackaged
-              ? 'packaged'
-              : 'missing',
+          : !canProvision
+            ? 'unavailable'
+            : 'missing',
   );
   const fluxLabel = $derived(
     {
-      installing: 'Installing…',
+      installing: 'Provisioning…',
       checking: 'Checking…',
       ready: 'Installed',
-      broken: 'Install broken',
-      packaged: 'Run from source',
+      unavailable: 'Unavailable',
       missing: 'Not installed',
     }[fluxState],
   );
+  // How it runs, for the subtitle: external uv env vs in-process dev deps.
+  const fluxHow = $derived(
+    app.flux.envProvisioned
+      ? app.flux.process?.running
+        ? 'External env · running'
+        : 'External env'
+      : app.flux.inProcess
+        ? 'In-process (dev)'
+        : '',
+  );
+
+  function initPicker() {
+    const m = app.flux.model ?? app.flux.catalogue?.default;
+    if (!m) return;
+    selection = {
+      family: m.family,
+      variant: m.variant ?? '',
+      backend: m.backend,
+      quant: m.quant ?? '',
+    };
+    pickerInit = true;
+  }
+
+  // Populate the picker once catalogue/model data is in.
+  $effect(() => {
+    if (open && !pickerInit && app.flux.catalogue) initPicker();
+  });
+
+  function onFamilyChange(e) {
+    const [family, variant = ''] = e.target.value.split(':');
+    const fam = families.find((f) => f.family === family && f.variant === variant);
+    const backend = fam?.backends?.includes(selection.backend) ? selection.backend : (fam?.backends?.[0] ?? 'sdnq');
+    selection = { family, variant, backend, quant: backend === 'sdcpp' ? (fam?.default_quant ?? '') : '' };
+  }
+
+  function onBackendChange(e) {
+    const backend = e.target.value;
+    selection = {
+      ...selection,
+      backend,
+      quant: backend === 'sdcpp' ? selection.quant || currentFamily?.default_quant || '' : '',
+    };
+  }
+
+  function onDownloadFlux() {
+    const sel = { ...selection, quant: showQuant ? selection.quant : '' };
+    downloadFlux(sel, hfToken.trim());
+  }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
@@ -168,14 +234,18 @@
 
       <div class="group-label">Models</div>
 
-      <!-- MangaTranslator FLUX AI redraw (the downloadable one) -->
+      <!-- MangaTranslator FLUX AI redraw (opt-in, model of your choice) -->
       <div class="model-card">
         <div class="mc-top">
           <div class="mc-title">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l2.09 6.26L20 9.27l-5 3.64L16.18 21 12 17.27 7.82 21 9 12.91l-5-3.64 5.91.01z" /></svg>
             <div>
               <div class="mc-name">AI Redraw — MangaTranslator FLUX</div>
-              <div class="mc-sub">FLUX Klein 4B · SDNQ backend (CPU/MPS/CUDA)</div>
+              <div class="mc-sub">
+                {currentFamily?.label ?? 'FLUX'} · {selection.backend?.toUpperCase()}{#if showQuant && selection.quant}
+                  · {selection.quant}{/if}{#if fluxHow}
+                  · {fluxHow}{/if}
+              </div>
             </div>
           </div>
           <span class="tag {fluxState}">{fluxLabel}</span>
@@ -184,32 +254,71 @@
         <p class="mc-desc">
           Diffusion inpainting that redraws artwork behind removed text — used by both auto-clean
           (choose <b>flux</b>) and the brush <b>Fill</b> tool. Optional: OpenCV Telea/NS handles
-          cleaning without it. Installs the diffusers/SDNQ deps now; the multi-GB model weights
-          stream from HuggingFace on the first FLUX clean.
+          cleaning without it. Runs in a separate, opt-in environment installed on demand; the
+          multi-GB model weights stream from HuggingFace on first use.
         </p>
 
-        {#if app.flux.reason && (fluxState === 'missing' || fluxState === 'broken' || fluxState === 'packaged')}
+        <!-- Model picker (same choices MangaTranslator offers) -->
+        <div class="picker">
+          <label class="field">
+            <span>Model</span>
+            <select value={`${selection.family}:${selection.variant}`} onchange={onFamilyChange} disabled={app.flux.downloading || !families.length}>
+              {#each families as f}
+                <option value={`${f.family}:${f.variant}`}>{f.label}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="field">
+            <span>Backend</span>
+            <select value={selection.backend} onchange={onBackendChange} disabled={app.flux.downloading || !backends.length}>
+              {#each backends as b}
+                <option value={b}>{b.toUpperCase()}</option>
+              {/each}
+            </select>
+          </label>
+          {#if showQuant}
+            <label class="field">
+              <span>Quant</span>
+              <select bind:value={selection.quant} disabled={app.flux.downloading || !quants.length}>
+                {#each quants as q}
+                  <option value={q}>{q}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
+        </div>
+
+        {#if needsToken}
+          <label class="field wide">
+            <span>HuggingFace token <em>(required — {currentFamily?.label} is a gated repo)</em></span>
+            <input type="password" placeholder="hf_…" bind:value={hfToken} disabled={app.flux.downloading} autocomplete="off" spellcheck="false" />
+          </label>
+        {/if}
+
+        {#if app.flux.reason && (fluxState === 'missing' || fluxState === 'unavailable')}
           <div class="mc-reason">
-            {#if fluxState === 'broken'}<b>Install looks broken:</b> {/if}{#if fluxState === 'packaged'}<b>Packaged build:</b> {/if}{app.flux.reason}
+            {#if fluxState === 'unavailable'}<b>Can't provision:</b> {/if}{app.flux.reason}
           </div>
         {/if}
 
         <div class="mc-actions">
           <button
             class="btn primary"
-            disabled={!sidecarOk || app.flux.downloading || app.flux.available || fluxPackaged}
-            onclick={downloadFlux}
+            disabled={!sidecarOk ||
+              app.flux.downloading ||
+              !canProvision ||
+              (needsToken && !hfToken.trim()) ||
+              (app.flux.available && !selectionChanged)}
+            onclick={onDownloadFlux}
           >
             {#if app.flux.downloading}
-              Installing…
-            {:else if app.flux.available}
-              Installed ✓
-            {:else if fluxState === 'packaged'}
-              Unavailable in packaged app
-            {:else if fluxState === 'broken'}
-              Repair install
-            {:else}
+              Provisioning…
+            {:else if !app.flux.envProvisioned && !app.flux.inProcess}
               Download &amp; Install
+            {:else if selectionChanged}
+              Apply model change
+            {:else}
+              Installed ✓
             {/if}
           </button>
           <button class="btn" disabled={!sidecarOk || app.flux.downloading || app.flux.checking} onclick={refreshFluxStatus}>
@@ -220,7 +329,11 @@
         {#if !sidecarOk}
           <div class="qhint">The sidecar isn't running — model install needs the desktop app.</div>
         {:else if app.flux.downloading}
-          <div class="qhint">Installing dependencies. This can take several minutes; you can keep working.</div>
+          <div class="qhint">Provisioning the FLUX environment (downloads torch/diffusers). This can take several minutes; you can keep working.</div>
+        {:else if needsToken && !hfToken.trim()}
+          <div class="qhint">{currentFamily?.label} is a gated model — paste a HuggingFace token above to enable install.</div>
+        {:else if selectionChanged && app.flux.available}
+          <div class="qhint">Model choice changed — click <b>Apply model change</b> to switch. New weights stream on the next FLUX clean.</div>
         {/if}
       </div>
 
@@ -408,6 +521,43 @@
     display: flex;
     gap: 8px;
     margin-top: 12px;
+  }
+  .picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11.5px;
+    color: var(--muted);
+    flex: 1;
+    min-width: 120px;
+  }
+  .field.wide {
+    margin-top: 10px;
+    flex-basis: 100%;
+  }
+  .field em {
+    font-style: normal;
+    color: #e0a87f;
+  }
+  .field select,
+  .field input {
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+  }
+  .field select:disabled,
+  .field input:disabled {
+    opacity: 0.5;
   }
   .tag {
     flex: none;

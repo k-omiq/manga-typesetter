@@ -175,16 +175,35 @@ def create_app() -> FastAPI:
     @app.get("/clean/flux-status")
     async def flux_status():
         from . import flux as flux_mod
+        from . import flux_models, flux_proxy
 
-        return await run_in_threadpool(flux_mod.status)
+        def _gather():
+            st = flux_mod.status()
+            st["catalogue"] = flux_models.catalogue()
+            st["process"] = flux_proxy.status()
+            return st
+
+        return await run_in_threadpool(_gather)
 
     @app.post("/clean/flux-download")
-    async def flux_download():
+    async def flux_download(payload: dict = Body(default={})):
         from . import flux as flux_mod
 
-        # A multi-minute `pip install` — must not run on the event loop or it
-        # freezes /health and every other request for the whole install.
-        return await run_in_threadpool(flux_mod.download)
+        # Provisioning the external uv venv (torch/diffusers) is many minutes —
+        # must not run on the event loop or it freezes /health and every other
+        # request for the whole install. The body carries the chosen model
+        # selection + optional HF token.
+        selection = payload.get("selection")
+        hf_token = payload.get("hf_token", "")
+        return await run_in_threadpool(flux_mod.download, selection, hf_token)
+
+    @app.on_event("shutdown")
+    async def _stop_flux():
+        # Tear down the out-of-process FLUX sidecar with us (its own watchdog is
+        # the backstop for a hard crash; this is the graceful path).
+        from . import flux_proxy
+
+        flux_proxy.shutdown()
 
     return app
 

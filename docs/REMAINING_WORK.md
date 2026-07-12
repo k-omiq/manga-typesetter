@@ -1,6 +1,6 @@
 # Remaining & planned work
 
-Status snapshot as of the latest `main` (`27ac224`). Phases 0–4 are implemented
+Status snapshot as of the latest `main` (`569a3f8`). Phases 0–4 are implemented
 and merged; this doc tracks what's left, known limitations, and future ideas.
 Nothing here is a blocker — the app builds (`vite build`, `cargo check`) and the
 core pipeline (detect → clean → translate → typeset → export) works.
@@ -31,25 +31,31 @@ so this can't be fixed with a kernel compiler. Practical levers:
 - Consider fp16 (non-SDNQ) on MPS if RAM allows (~8 GB for the 4B) — may be
   faster per-op by skipping dequant, at a memory cost.
 - Optional: offload FLUX to a CUDA endpoint (where Triton works) — architectural.
-- Files: `python/sidecar/flux.py`, `external/MangaTranslator/core/image/inpainting.py`.
+  A "quality ↔ speed" (resolution/steps) setting fits naturally alongside the new
+  Settings model picker, applied when constructing the inpainter.
+- Files: `python/flux_sidecar/inpainter.py`, `python/sidecar/flux.py`,
+  `external/MangaTranslator/core/image/inpainting.py`.
 
-### 2. HF token pass-through for model downloads
-FLUX weight downloads hit HuggingFace anonymous rate limits (stalled until an
-`HF_TOKEN` was supplied manually). The app has no way to provide one.
-- Read `HF_TOKEN` / a Settings field in `flux.load_inpainter()` and pass
-  `huggingface_token=` to `FluxKleinInpainter`; forward the env from Rust
-  (`apply_env`) like the other `MT_*` vars.
-- Add an optional token field to the Settings panel.
-- Files: `python/sidecar/flux.py`, `src-tauri/src/sidecar.rs`, `src/lib/SettingsModal.svelte`.
+### 2. HF token pass-through for model downloads — done (folded into the FLUX rework)
+FLUX weight downloads hit HuggingFace anonymous rate limits. The Settings panel
+now has an HF-token field (shown for gated repos like Klein 9B); the token is
+persisted (`~/.mangatypesetter/hf-token`), passed to the inpainter via
+`huggingface_token=` in both the external `mt-flux` spawn and the in-process dev
+path. Files: `python/sidecar/flux.py`, `python/flux_sidecar/`, `src/lib/SettingsModal.svelte`.
 
 ### 3. Full desktop end-to-end verification
 Everything was verified via the browser preview + direct Python/Rust checks, but
-the packaged **Tauri app** (`npm run tauri dev`) was never run in this
-environment. Before release, manually verify on real hardware:
+the packaged **Tauri app** (`npm run tauri dev` / a real bundle) was never run in
+this environment. Before release, manually verify on real hardware:
 - Detect → Clean (with FLUX installed) → Translate → Export on a real page.
+- **FLUX out-of-process path (new):** the packaged "Download & Install" provisions
+  the external uv venv; `mt-flux` spawns and serves under it; the bundled
+  `uv` / `flux_sidecar` / `MangaTranslator` resolve from `_MEIPASS` (and `uv`
+  keeps its exec bit); a genuine FLUX redraw completes through the UI for a chosen
+  model + quant; switching the model restarts `mt-flux`. See
+  [FLUX_PACKAGING.md](FLUX_PACKAGING.md).
 - FLUX auto-redraw of a genuinely textured region through the app UI.
 - PSD lossless round-trip opened in actual Photoshop.
-- The Settings "Download & Install" button end-to-end (deps + weights).
 
 ---
 
@@ -152,19 +158,19 @@ windowed release builds.
   noted in the code as the heavier but more crash-robust alternative if the
   handle-wait proves insufficient.
 - ~~**Prod bundling of the FLUX path** — weights are multi-GB and opt-in; decide
-  caching/first-run UX for packaged builds.~~ **Decided & documented** in
-  [FLUX_PACKAGING.md](FLUX_PACKAGING.md). Findings + fixes: (a) the detector/OCR
-  cache (`config.MODEL_DIR`, absolute) already resolves in prod; (b)
-  MangaTranslator's CWD-relative `./models` FLUX weight cache would have resolved
-  to an unwritable `/models` in a packaged build — now pinned to `MODEL_DIR` via a
-  `sys.frozen` chdir at startup (`python/sidecar/__main__.py`); (c) the pip-based
-  "Download & Install" can't run in a frozen build (no pip/venv), so `status()`
-  now reports `installable=false`/`frozen`, `download()` fails fast with guidance,
-  and Settings shows a "Run from source" state instead of a button that errors.
-  Weights are still never bundled (stream lazily). Bundling the torch/diffusers
-  stack is rejected; the packaged-FLUX story defers to the CUDA-endpoint offload
-  (P1 #1) or a separate optional download. Frozen paths verified by simulation
-  here; a real packaged build still needs on-target verification (P1 #3).
+  caching/first-run UX for packaged builds.~~ **Built & documented** in
+  [FLUX_PACKAGING.md](FLUX_PACKAGING.md). FLUX now runs **out of process** in a
+  separate `mt-flux` sidecar under an **external, uv-provisioned** venv, so a
+  packaged build *can* install and run it (into a real interpreter, not the frozen
+  app) — the old `installable=false` / "run from source" limitation is gone. The
+  Settings panel exposes a **model picker** (family / variant / backend / quant +
+  HF token) matching MangaTranslator, and "Download & Install" provisions the env
+  with a bundled `uv`. Weights are still never bundled (stream lazily); the
+  torch/diffusers stack lives in the user-provisioned env, not the base app. New:
+  `python/flux_sidecar/`, `python/sidecar/{flux,flux_proxy,flux_models}.py`;
+  `build-sidecar.sh` stages `uv` + `flux_sidecar` into the onedir. Verified here
+  by import/HTTP-contract/provisioning tests; a real packaged build still needs
+  on-target verification (P1 #3).
 - ~~**CI** — no automated build/test pipeline; the checks in this repo are
   manual.~~ **Done.** `.github/workflows/ci.yml` runs on push to `main` / PR /
   manual dispatch, with three jobs: **frontend** (`npm ci` + `npx vite build`),
@@ -183,7 +189,8 @@ windowed release builds.
 ## Known limitations (by design / environment)
 
 - **FLUX is opt-in and heavy** — classical fill/inpaint is the always-available
-  default; FLUX needs a ~5 GB model + is slow on Apple Silicon (see P1-1).
+  default; FLUX needs a ~5 GB model + is slow on Apple Silicon (see P1-1). It runs
+  out of process in a separate uv-provisioned env (see [FLUX_PACKAGING.md](FLUX_PACKAGING.md)).
 - **ML features need the desktop app** — the browser preview no-ops the sidecar
   gracefully (manual workflows only).
 - **Model weights are not committed** — cached under `python/models/`

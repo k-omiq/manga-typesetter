@@ -106,7 +106,7 @@ export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) 
     return;
   }
   app.cleaning = true;
-  for (const r of regions) setCleanStatus(r.n, 'cleaning');
+  for (const r of regions) setCleanStatus(r.n, 'cleaning', p);
   try {
     const result = await cleanImage(p.raw, regions, { mask: p.clean?.maskPng ?? '', method, flux });
     applyClean(result, { target: p });
@@ -116,7 +116,7 @@ export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) 
     const fell = (result.layers ?? []).filter((l) => l.fell_back).length;
     toast(`Cleaned ${result.layers.length} region(s)` + (fell ? ` · ${fell} used ${method} (AI not installed)` : ''));
   } catch (e) {
-    for (const r of regions) setCleanStatus(r.n, 'error');
+    for (const r of regions) setCleanStatus(r.n, 'error', p);
     toast(`Clean failed: ${e}`);
   } finally {
     app.cleaning = false;
@@ -132,7 +132,7 @@ export async function recleanRegion(n, method) {
     toast('Sidecar not ready');
     return;
   }
-  setCleanStatus(n, 'cleaning');
+  setCleanStatus(n, 'cleaning', p);
   try {
     const result = await cleanImage(p.raw, [{ n, box: b.box, method }], {
       mask: p.clean?.maskPng ?? '',
@@ -142,7 +142,7 @@ export async function recleanRegion(n, method) {
     applyClean(result, { replace: false, target: p });
     toast(`Re-cleaned line ${n} → ${method}`);
   } catch (e) {
-    setCleanStatus(n, 'error');
+    setCleanStatus(n, 'error', p);
     toast(`Re-clean failed: ${e}`);
   }
 }
@@ -164,40 +164,48 @@ export async function refreshFluxStatus() {
   app.flux.checking = true;
   try {
     if (!invoke) {
-      app.flux = { ...app.flux, available: false, state: 'unavailable', reason: 'no Tauri runtime' };
+      app.flux = { ...app.flux, available: false, reason: 'no Tauri runtime' };
       return app.flux;
     }
     const s = await invoke('sidecar_flux_status');
-    // `installable` is false in a packaged (frozen) build where the pip-based
-    // install can't run — the UI disables the button and explains why. Default
-    // true when the sidecar predates the field (older backend).
+    // FLUX now installs into an external uv-provisioned env, so `installable` is
+    // true wherever uv is present — no packaged-app limitation. `catalogue`
+    // drives the model picker; `model` is the persisted selection; `process`
+    // reflects the mt-flux child.
     app.flux = {
       ...app.flux,
       available: !!s.available,
-      state: s.state ?? null,
       reason: s.reason ?? null,
       installable: s.installable ?? true,
+      uvAvailable: s.uv_available ?? true,
+      envProvisioned: !!s.env_provisioned,
+      inProcess: !!s.in_process,
       frozen: !!s.frozen,
+      catalogue: s.catalogue ?? app.flux.catalogue,
+      model: s.model ?? app.flux.model,
+      process: s.process ?? null,
     };
     return app.flux;
   } catch (e) {
-    app.flux = { ...app.flux, available: false, state: 'error', reason: String(e) };
+    app.flux = { ...app.flux, available: false, reason: String(e) };
     return app.flux;
   } finally {
     app.flux.checking = false;
   }
 }
 
-export async function downloadFlux() {
+// `selection` = { family, variant, backend, quant } chosen in Settings; `hfToken`
+// is optional (gated 9B / rate-limited downloads).
+export async function downloadFlux(selection = null, hfToken = '') {
   const invoke = await getInvoke();
   if (!invoke) {
     toast('FLUX download needs the desktop app');
     return;
   }
   app.flux.downloading = true;
-  toast('Installing FLUX deps — this can take a while…');
+  toast('Provisioning FLUX — this can take a while…');
   try {
-    const res = await invoke('sidecar_flux_download');
+    const res = await invoke('sidecar_flux_download', { selection, hfToken });
     toast(res.ok ? 'FLUX ready' : 'FLUX install failed — see logs');
     await refreshFluxStatus();
   } catch (e) {
