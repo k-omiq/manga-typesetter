@@ -89,6 +89,24 @@ export async function cleanImage(imageUrl, regions, { mask = '', method = 'telea
   });
 }
 
+// Clean one page object's detected regions and apply the patch layers to it.
+// Returns { layers, fell } on success, { skipped } if the page has no regions,
+// or { error } on failure. Shared by the single-page and whole-chapter paths.
+async function cleanOnePage(p, { method = 'telea', flux = false } = {}) {
+  const regions = (p?.detect?.boxes ?? []).map((b) => ({ n: b.n, box: b.box }));
+  if (!p?.raw || !regions.length) return { skipped: true };
+  for (const r of regions) setCleanStatus(r.n, 'cleaning', p);
+  try {
+    const result = await cleanImage(p.raw, regions, { mask: p.clean?.maskPng ?? '', method, flux });
+    applyClean(result, { target: p });
+    const fell = (result.layers ?? []).filter((l) => l.fell_back).length;
+    return { layers: result.layers.length, fell };
+  } catch (e) {
+    for (const r of regions) setCleanStatus(r.n, 'error', p);
+    return { error: String(e) };
+  }
+}
+
 // Clean every detected region on the current page and apply the patch layers.
 export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) {
   const p = page();
@@ -96,8 +114,7 @@ export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) 
     toast('No raw page to clean — import a raw image first');
     return;
   }
-  const regions = (p.detect?.boxes ?? []).map((b) => ({ n: b.n, box: b.box }));
-  if (!regions.length) {
+  if (!(p.detect?.boxes ?? []).length) {
     toast('Run Detect first — no text regions');
     return;
   }
@@ -106,20 +123,55 @@ export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) 
     return;
   }
   app.cleaning = true;
-  for (const r of regions) setCleanStatus(r.n, 'cleaning');
   try {
-    const result = await cleanImage(p.raw, regions, { mask: p.clean?.maskPng ?? '', method, flux });
-    applyClean(result, { target: p });
+    const r = await cleanOnePage(p, { method, flux });
+    if (r.error) toast(`Clean failed: ${r.error}`);
     // Surface, in the completion summary, when textured regions wanted AI but
-    // fell back to the classical inpaint (FLUX not installed) — otherwise it's
-    // only visible per-layer.
-    const fell = (result.layers ?? []).filter((l) => l.fell_back).length;
-    toast(`Cleaned ${result.layers.length} region(s)` + (fell ? ` · ${fell} used ${method} (AI not installed)` : ''));
-  } catch (e) {
-    for (const r of regions) setCleanStatus(r.n, 'error');
-    toast(`Clean failed: ${e}`);
+    // fell back to the classical inpaint (FLUX not installed).
+    else toast(`Cleaned ${r.layers} region(s)` + (r.fell ? ` · ${r.fell} used ${method} (AI not installed)` : ''));
   } finally {
     app.cleaning = false;
+  }
+}
+
+// Clean the whole chapter: every page with detected regions, in order. The
+// FLUX process stays warm across pages (the proxy reuses one mt-flux), so only
+// the first page pays the model load. Pages without a Detect pass are skipped.
+export async function cleanAllPages({ method = 'telea', flux = false } = {}) {
+  if (!sidecarReady()) {
+    toast('Sidecar not ready');
+    return;
+  }
+  const targets = app.pages.filter((p) => p?.raw && (p.detect?.boxes ?? []).length);
+  if (!targets.length) {
+    toast('No detected pages to clean — run Detect first');
+    return;
+  }
+  app.cleaning = true;
+  app.cleanBatch = { done: 0, total: targets.length };
+  let regionsTotal = 0;
+  let fellTotal = 0;
+  let failed = 0;
+  try {
+    for (const p of targets) {
+      const r = await cleanOnePage(p, { method, flux });
+      if (r.error) failed++;
+      else {
+        regionsTotal += r.layers ?? 0;
+        fellTotal += r.fell ?? 0;
+      }
+      app.cleanBatch = { done: app.cleanBatch.done + 1, total: targets.length };
+    }
+    const skipped = app.pages.length - targets.length;
+    toast(
+      `Cleaned ${targets.length} page(s) · ${regionsTotal} region(s)` +
+        (fellTotal ? ` · ${fellTotal} used ${method} (AI not installed)` : '') +
+        (failed ? ` · ${failed} page(s) failed` : '') +
+        (skipped ? ` · ${skipped} skipped (no Detect)` : ''),
+    );
+  } finally {
+    app.cleaning = false;
+    app.cleanBatch = null;
   }
 }
 
@@ -132,7 +184,7 @@ export async function recleanRegion(n, method) {
     toast('Sidecar not ready');
     return;
   }
-  setCleanStatus(n, 'cleaning');
+  setCleanStatus(n, 'cleaning', p);
   try {
     const result = await cleanImage(p.raw, [{ n, box: b.box, method }], {
       mask: p.clean?.maskPng ?? '',
@@ -142,7 +194,7 @@ export async function recleanRegion(n, method) {
     applyClean(result, { replace: false, target: p });
     toast(`Re-cleaned line ${n} → ${method}`);
   } catch (e) {
-    setCleanStatus(n, 'error');
+    setCleanStatus(n, 'error', p);
     toast(`Re-clean failed: ${e}`);
   }
 }
@@ -164,40 +216,48 @@ export async function refreshFluxStatus() {
   app.flux.checking = true;
   try {
     if (!invoke) {
-      app.flux = { ...app.flux, available: false, state: 'unavailable', reason: 'no Tauri runtime' };
+      app.flux = { ...app.flux, available: false, reason: 'no Tauri runtime' };
       return app.flux;
     }
     const s = await invoke('sidecar_flux_status');
-    // `installable` is false in a packaged (frozen) build where the pip-based
-    // install can't run — the UI disables the button and explains why. Default
-    // true when the sidecar predates the field (older backend).
+    // FLUX now installs into an external uv-provisioned env, so `installable` is
+    // true wherever uv is present — no packaged-app limitation. `catalogue`
+    // drives the model picker; `model` is the persisted selection; `process`
+    // reflects the mt-flux child.
     app.flux = {
       ...app.flux,
       available: !!s.available,
-      state: s.state ?? null,
       reason: s.reason ?? null,
       installable: s.installable ?? true,
+      uvAvailable: s.uv_available ?? true,
+      envProvisioned: !!s.env_provisioned,
+      inProcess: !!s.in_process,
       frozen: !!s.frozen,
+      catalogue: s.catalogue ?? app.flux.catalogue,
+      model: s.model ?? app.flux.model,
+      process: s.process ?? null,
     };
     return app.flux;
   } catch (e) {
-    app.flux = { ...app.flux, available: false, state: 'error', reason: String(e) };
+    app.flux = { ...app.flux, available: false, reason: String(e) };
     return app.flux;
   } finally {
     app.flux.checking = false;
   }
 }
 
-export async function downloadFlux() {
+// `selection` = { family, variant, backend, quant } chosen in Settings; `hfToken`
+// is optional (gated 9B / rate-limited downloads).
+export async function downloadFlux(selection = null, hfToken = '') {
   const invoke = await getInvoke();
   if (!invoke) {
     toast('FLUX download needs the desktop app');
     return;
   }
   app.flux.downloading = true;
-  toast('Installing FLUX deps — this can take a while…');
+  toast('Provisioning FLUX — this can take a while…');
   try {
-    const res = await invoke('sidecar_flux_download');
+    const res = await invoke('sidecar_flux_download', { selection, hfToken });
     toast(res.ok ? 'FLUX ready' : 'FLUX install failed — see logs');
     await refreshFluxStatus();
   } catch (e) {

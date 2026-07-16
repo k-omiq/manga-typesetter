@@ -137,8 +137,27 @@ export const app = $state({
   sidecar: { status: 'unknown', device: null, info: null }, // Python ML sidecar health
   detecting: false, // detection/OCR request in flight
   cleaning: false, // a /clean request is in flight
+  cleanBatch: null, // { done, total } while a whole-chapter clean runs, else null
   selectedLayerId: null, // active clean patch layer
-  flux: { available: false, state: null, reason: null, checking: false, downloading: false, installable: true, frozen: false }, // opt-in inpaint; state: ready|deps_missing|import_error|not_vendored|unavailable. installable=false in a packaged (frozen) build (no pip)
+  // Opt-in FLUX AI-redraw. Runs out-of-process in an external, uv-provisioned
+  // env (packaged-capable) or in-process when the deps are in the base venv
+  // (dev). `catalogue` drives the Settings model picker; `model` is the persisted
+  // selection; `process` is the mt-flux child's live state. `installable` is now
+  // true wherever uv is available (the old packaged-app limitation is gone).
+  flux: {
+    available: false,
+    reason: null,
+    checking: false,
+    downloading: false,
+    installable: true,
+    uvAvailable: true,
+    envProvisioned: false,
+    inProcess: false,
+    frozen: false,
+    catalogue: null, // { families:[{family,variant,model_key,label,backends,quants,default_quant,gated}], default }
+    model: null, // current normalized selection {family,variant,backend,quant,...}
+    process: null, // { running, port, health }
+  },
   // Phase 4 manual brush tools (clean mode only). Every stroke becomes its own
   // brush patch layer (page.clean.layers, kind:'brush'), so it toggles/deletes
   // like an auto region. `tool` is the active sub-tool; brush is the engaged
@@ -352,8 +371,11 @@ let layerSeq = 1;
 
 export const cleanStatus = (n) => page().clean?.status?.[n] ?? 'pending';
 
-export function setCleanStatus(n, s) {
-  const p = page();
+// `target` pins the write to a specific page: a clean request may resolve after
+// the user navigated away, and the status dot must land on the page the request
+// was launched for — not whatever page happens to be current now.
+export function setCleanStatus(n, s, target = null) {
+  const p = target ?? page();
   if (!p.clean) p.clean = { base: null, layers: [] };
   p.clean.status = { ...(p.clean.status ?? {}), [n]: s };
 }
