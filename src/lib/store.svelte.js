@@ -206,6 +206,15 @@ export const boxText = (b, p = page()) => {
 };
 export function setMode(m) {
   app.mode = m === 'clean' ? 'clean' : 'translate';
+  // Keep the active tool valid for the mode's toolset: Clean has only the brush;
+  // Translate has place/text (the typesetting tools). Also close the bulk-style
+  // editor when leaving Translate — it has no meaning in Clean.
+  if (app.mode === 'clean') {
+    if (app.tool === 'text' || app.tool === 'place') app.tool = 'brush';
+    if (app.bulk?.active) closeBulk();
+  } else if (app.tool === 'brush') {
+    app.tool = 'text';
+  }
 }
 
 function clamp(v, a, b) {

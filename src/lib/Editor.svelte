@@ -402,15 +402,18 @@
     <BulkStylePanel />
     <!-- tool dock -->
     <div class="tooldock">
-      <button class:on={app.tool === 'place'} onclick={() => setTool('place')} data-tip="Place tool — drop queued lines">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3l7 18 2.5-7.5L20 11z" /></svg>
-      </button>
-      <button class:on={app.tool === 'text'} class:bulkon={app.bulk.active} onclick={() => setTool('text')} ondblclick={openBulk} data-tip="Text tool — drag to pan, click to add · double-click for bulk style">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7V5h16v2" /><path d="M12 5v14" /><path d="M9 19h6" /></svg>
-      </button>
       {#if cleanMode}
+        <!-- Clean mode is about cleaning the raw — only the brush belongs here.
+             Place/text (and the bulk-style editor) are Translate typesetting tools. -->
         <button class:on={app.tool === 'brush'} onclick={() => setBrushTool(app.brush.tool)} data-tip="Brush tools — manual clean-up (pick a tool in the Brush panel)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.06 11.9l8.07-8.06a1.9 1.9 0 0 1 2.7 2.7l-8.06 8.07" /><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z" /></svg>
+        </button>
+      {:else}
+        <button class:on={app.tool === 'place'} onclick={() => setTool('place')} data-tip="Place tool — drop queued lines">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3l7 18 2.5-7.5L20 11z" /></svg>
+        </button>
+        <button class:on={app.tool === 'text'} class:bulkon={app.bulk.active} onclick={() => setTool('text')} ondblclick={openBulk} data-tip="Text tool — drag to pan, click to add · double-click for bulk style">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7V5h16v2" /><path d="M12 5v14" /><path d="M9 19h6" /></svg>
         </button>
       {/if}
     </div>
@@ -465,13 +468,21 @@
       <div class="empty-state" style="display:grid">
         <div class="dropzone">
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>
-          <h2>Import a cleaned page to begin</h2>
-          <p>Drop your cleaned manga pages, raw references and translated JSON.</p>
-          <div class="row">
-            <button class="btn" onclick={() => pickJson()}>Import JSON</button>
-            <button class="btn" onclick={() => pickImages('cleaned')}>Import Cleaned</button>
-            <button class="btn" onclick={() => pickImages('raw')}>Import Raw</button>
-          </div>
+          {#if cleanMode}
+            <h2>Load your raw pages to begin</h2>
+            <p>Import the raw manga pages to clean. They carry into Translate as the reference — and the source for AI translation.</p>
+            <div class="row">
+              <button class="btn" onclick={() => pickImages('raw')}>Load Raws</button>
+            </div>
+          {:else}
+            <h2>Import a cleaned page to begin</h2>
+            <p>Drop your cleaned manga pages, raw references and translated JSON.</p>
+            <div class="row">
+              <button class="btn" onclick={() => pickJson()}>Import JSON</button>
+              <button class="btn" onclick={() => pickImages('cleaned')}>Import Cleaned</button>
+              <button class="btn" onclick={() => pickImages('raw')}>Import Raw</button>
+            </div>
+          {/if}
         </div>
       </div>
     {/if}
