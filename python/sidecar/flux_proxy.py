@@ -202,6 +202,35 @@ def get_proxy_inpainter():
     return _ProxyInpainter(_base_url(port), token)
 
 
+def warmup() -> dict:
+    """Ensure mt-flux is running and force the model to load (fetches weights).
+
+    Used by the install flow so the chosen model's weights are downloaded up front
+    (into the stable, reused cache) rather than on the first clean. Long-running —
+    call off the event loop. Returns ``{ok, reason?}``.
+    """
+    if not flux.env_provisioned():
+        return {"ok": False, "reason": "FLUX environment not provisioned"}
+    with _lock:
+        running = _ensure_running_locked()
+    if running is None:
+        return {"ok": False, "reason": "mt-flux failed to start"}
+    port, token = running
+    req = urllib.request.Request(
+        _base_url(port) + "/warmup",
+        data=b"{}",
+        headers={"content-type": "application/json", "x-mt-token": token},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_INPAINT_TIMEOUT) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "reason": e.read().decode(errors="replace")[:300]}
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return {"ok": False, "reason": f"{type(e).__name__}: {e}"}
+
+
 def status() -> dict:
     """Whether the FLUX process is up, and for which model (Settings panel).
 

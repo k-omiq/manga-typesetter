@@ -65,6 +65,17 @@ def create_app() -> FastAPI:
     async def health():
         return {"ok": True, "loaded": inpainter.is_loaded(), "model": config.model_summary()}
 
+    @app.post("/warmup")
+    async def warmup():
+        # Force the model to build now, which fetches its (multi-GB) weights into
+        # the shared cache. Lets "Download & Install" actually download the model
+        # up front instead of stalling the first clean. Idempotent + cached.
+        try:
+            await run_in_threadpool(inpainter.get_inpainter)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+        return {"ok": True, "loaded": True, "model": config.model_summary()}
+
     @app.post("/inpaint")
     async def inpaint(req: InpaintRequest):
         try:

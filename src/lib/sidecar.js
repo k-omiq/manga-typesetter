@@ -254,10 +254,11 @@ export async function downloadFlux(selection = null, hfToken = '') {
     return;
   }
   app.flux.downloading = true;
-  toast('Provisioning FLUX — this can take a while…');
+  toast('Installing FLUX + downloading the model — this can take a while…');
   try {
     const res = await invoke('sidecar_flux_download', { selection, hfToken });
-    toast(res.ok ? 'FLUX ready' : 'FLUX install failed — see logs');
+    // res.message describes the outcome (weights downloaded vs deferred to first use).
+    toast(res.ok ? res.message || 'FLUX ready' : 'FLUX install failed — see logs');
     await refreshFluxStatus();
   } catch (e) {
     toast(`FLUX install failed: ${e}`);

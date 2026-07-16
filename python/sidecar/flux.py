@@ -288,25 +288,53 @@ def flux_models_normalize(selection: dict | None) -> dict:
     return saved_selection()
 
 
-def download(selection: dict | None = None, hf_token: str = "", progress=None) -> dict:
-    """One-click setup: persist the model choice + provision the external env.
+def download(selection: dict | None = None, hf_token: str = "", progress=None, warmup: bool = True) -> dict:
+    """One-click setup: persist the choice, provision the env, fetch the weights.
 
-    Model weights still fetch lazily on the first FLUX clean, honouring the saved
-    selection. Returns ``{ok, already, message, model}``.
+    With ``warmup`` (default), after the env is ready the chosen model is loaded
+    once so its multi-GB weights download *now*, into the stable, reused cache —
+    rather than stalling the first clean. Idempotent: the weights are only fetched
+    if not already on disk, and are reused on every later run (verified: the cache
+    dir resolves to the same MODEL_DIR-relative path each launch). Returns
+    ``{ok, already, message, model, weights_ready}``.
     """
     model = save_selection(selection)
     if hf_token:
         _save_hf_token(hf_token)
-    if env_provisioned():
-        return {"ok": True, "already": True, "message": "FLUX environment already provisioned", "model": model}
-    # Dev fast path: if FLUX already runs in-process (deps in the base venv) and
-    # the external env isn't provisioned, a model change shouldn't trigger a heavy
-    # external uv provision — the choice is persisted and the in-process model was
-    # invalidated by save_selection(), so it just reloads on the next clean.
-    if _probe_flux()[0] == "ready":
-        return {"ok": True, "already": True, "message": "model updated (in-process)", "model": model}
-    res = provision(progress=progress)
-    return {"ok": res["ok"], "already": False, "message": res["message"], "model": model}
+
+    already = env_provisioned()
+    if not already:
+        # Dev fast path: if FLUX already runs in-process (deps in the base venv)
+        # and the external env isn't provisioned, don't trigger a heavy external
+        # uv provision — the choice is persisted and the in-process model was
+        # invalidated by save_selection(), so it reloads on the next clean.
+        if _probe_flux()[0] == "ready":
+            return {"ok": True, "already": True, "message": "model updated (in-process)", "model": model, "weights_ready": False}
+        res = provision(progress=progress)
+        if not res["ok"]:
+            return {"ok": False, "already": False, "message": res["message"], "model": model, "weights_ready": False}
+
+    if not warmup:
+        msg = "FLUX environment ready (weights download on first use)"
+        return {"ok": True, "already": already, "message": msg, "model": model, "weights_ready": False}
+
+    # Pre-fetch the model weights so "download" means the model is actually on disk.
+    if progress:
+        progress("downloading model weights…")
+    from . import flux_proxy
+
+    w = flux_proxy.warmup()
+    if w.get("ok"):
+        return {"ok": True, "already": already, "message": "FLUX ready — model weights downloaded", "model": model, "weights_ready": True}
+    # Weights couldn't be fetched now (offline / gated without token / OOM); the
+    # env is still provisioned and weights fetch lazily on first use. Non-fatal.
+    return {
+        "ok": True,
+        "already": already,
+        "message": f"Deps installed; model weights will download on first use ({w.get('reason', '')})".strip(),
+        "model": model,
+        "weights_ready": False,
+    }
 
 
 # --- HF token (gated 9B / rate-limited downloads) --------------------------
