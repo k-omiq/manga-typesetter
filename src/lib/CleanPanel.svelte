@@ -208,7 +208,7 @@
               {#if l.kind === 'brush'}
                 <span class="brushtag" title="Manual brush layer">brush</span>
               {:else}
-                <select class="redo" value={l.method} title="Re-clean with method" onchange={(e) => recleanRegion(l.n, e.target.value)}>
+                <select class="redo" value={l.method} title="Re-clean with method" disabled={app.cleaning} onchange={(e) => recleanRegion(l.n, e.target.value)}>
                   {#each METHODS as m}<option value={m} disabled={m === 'flux' && !app.flux.available}>{m}</option>{/each}
                 </select>
               {/if}
@@ -219,10 +219,10 @@
           {/each}
         </div>
       {/if}
-      <button class="btn flatten" disabled={flattening || !p.raw} title="Composite raw + visible layers into this page's cleaned image (feeds Translate + export)" onclick={onFlatten}>
+      <button class="btn flatten" disabled={flattening || app.cleaning || !p.raw} title="Composite raw + visible layers into this page's cleaned image (feeds Translate + export)" onclick={onFlatten}>
         {flattening ? 'Flattening…' : 'Bake / Flatten this page'}
       </button>
-      <button class="btn finish" disabled={finishing || !anyCleanable} title="Bake every cleaned page, then save them or carry them into Translate" onclick={() => (finishOpen = true)}>
+      <button class="btn finish" disabled={finishing || app.cleaning || !anyCleanable} title="Bake every cleaned page, then save them or carry them into Translate" onclick={() => (finishOpen = true)}>
         {finishing ? 'Working…' : 'Finish cleaning →'}
       </button>
     </div>

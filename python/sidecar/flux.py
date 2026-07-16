@@ -402,9 +402,18 @@ def load_inpainter():
         if sel["family"] == "kontext":
             from core.image.inpainting import FluxKontextInpainter
 
-            kwargs = dict(device=device, backend=sel["backend"], huggingface_token=hf_token())
+            # Mirror the external (mt-flux) Kontext branch: honour the step lever
+            # (upscale_small_crops is Klein-only) and both sdcpp quants.
+            kwargs = dict(
+                device=device,
+                backend=sel["backend"],
+                huggingface_token=hf_token(),
+                num_inference_steps=sel["steps"],
+            )
             if sel["backend"] == "sdcpp" and sel["quant"]:
                 kwargs["sdcpp_diffusion_quant"] = sel["quant"]
+            if sel["backend"] == "sdcpp" and sel["text_encoder_quant"]:
+                kwargs["sdcpp_text_encoder_quant"] = sel["text_encoder_quant"]
             _inpainter = FluxKontextInpainter(**kwargs)
             return _inpainter
 

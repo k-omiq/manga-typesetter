@@ -400,7 +400,12 @@ export function applyClean(result, { replace = true, target = null } = {}) {
     visible: true,
   }));
   if (replace) {
-    p.clean.layers = incoming;
+    // Replace only the auto-region layers; keep manual brush layers (they were
+    // painted by the user and aren't in a /clean result). Brush stays on top,
+    // matching paint-after-clean order. Without this, re-cleaning a page — and
+    // especially a whole-chapter Clean — would silently wipe brush work.
+    const brush = (p.clean.layers ?? []).filter((l) => l.kind === 'brush');
+    p.clean.layers = [...incoming, ...brush];
   } else {
     const byN = new Map(incoming.map((l) => [l.n, l]));
     p.clean.layers = p.clean.layers.map((l) => byN.get(l.n) ?? l);

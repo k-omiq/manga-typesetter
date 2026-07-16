@@ -32,7 +32,14 @@ def _build():
         from core.image.inpainting import FluxKontextInpainter
 
         backend = config.BACKEND if config.BACKEND in ("nunchaku", "sdnq", "sdcpp") else "sdnq"
-        kwargs = dict(device=device, backend=backend, huggingface_token=config.HF_TOKEN)
+        # Kontext honours num_inference_steps (the quality knob's step lever) but
+        # has no upscale_small_crops arg — that half of the knob is Klein-only.
+        kwargs = dict(
+            device=device,
+            backend=backend,
+            huggingface_token=config.HF_TOKEN,
+            num_inference_steps=config.NUM_INFERENCE_STEPS,
+        )
         if backend == "sdcpp" and config.QUANT:
             kwargs["sdcpp_diffusion_quant"] = config.QUANT
         if backend == "sdcpp" and config.TEXT_ENCODER_QUANT:

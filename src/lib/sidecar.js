@@ -162,7 +162,9 @@ export async function cleanAllPages({ method = 'telea', flux = false } = {}) {
       }
       app.cleanBatch = { done: app.cleanBatch.done + 1, total: targets.length };
     }
-    const skipped = app.pages.length - targets.length;
+    // Only raw pages that lack a Detect pass are "skipped"; raw-less placeholders
+    // aren't real pages and shouldn't be counted.
+    const skipped = app.pages.filter((p) => p?.raw && !(p.detect?.boxes ?? []).length).length;
     toast(
       `Cleaned ${targets.length} page(s) · ${regionsTotal} region(s)` +
         (fellTotal ? ` · ${fellTotal} used ${method} (AI not installed)` : '') +
