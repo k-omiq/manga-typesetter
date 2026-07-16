@@ -71,6 +71,9 @@ if [[ -z "$UV_BIN" || ! -x "$UV_BIN" ]]; then
   echo "  install uv (https://docs.astral.sh/uv/) or set UV=/path/to/uv, then re-run." >&2
   exit 1
 fi
+# Absolutise — PyInstaller resolves --add-binary sources against the spec dir, not
+# the cwd, so a relative path (e.g. .venv/bin/uv) would not be found.
+UV_BIN="$(cd "$(dirname "$UV_BIN")" && pwd)/$(basename "$UV_BIN")"
 echo ">> bundling uv from: $UV_BIN"
 
 echo ">> building mt-sidecar (onedir, ML-capable)"
