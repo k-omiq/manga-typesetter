@@ -416,6 +416,7 @@ def load_inpainter():
             backend=sel["backend"],
             huggingface_token=hf_token(),
             num_inference_steps=sel["steps"],
+            upscale_small_crops=sel["upscale"],  # quality↔speed lever
             low_vram=non_cuda,
         )
         if sel["backend"] == "sdcpp" and sel["quant"]:

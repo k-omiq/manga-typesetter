@@ -27,13 +27,23 @@ _MODEL_KEY = {
     ("kontext", ""): "flux_kontext",
 }
 
+# Quality↔speed presets. The two levers we can drive on the inpainter are
+# `num_inference_steps` (linear in time) and `upscale_small_crops` (whether small
+# crops are scaled up to ~1MP before diffusing — the expensive part). This matters
+# most on Apple Silicon, where FLUX has no Triton backend and runs eager/slow.
+QUALITY_PRESETS = {
+    "fast": {"steps": 2, "upscale": False, "label": "Fast", "detail": "2 steps, no upscale — quickest"},
+    "balanced": {"steps": 4, "upscale": True, "label": "Balanced", "detail": "4 steps, ~1MP — default"},
+    "quality": {"steps": 8, "upscale": True, "label": "Quality", "detail": "8 steps, ~1MP — best"},
+}
+
 DEFAULT_SELECTION = {
     "family": "klein",
     "variant": "4b",
     "backend": "sdnq",
     "quant": "",  # sdcpp only; "" → the backend's own default
     "text_encoder_quant": "",
-    "steps": 4,
+    "quality": "balanced",  # → steps + upscale via QUALITY_PRESETS
 }
 
 
@@ -94,7 +104,11 @@ def catalogue() -> dict:
                 "default_quant": spec.get("default", ""),
             }
         )
-    return {"families": families, "default": DEFAULT_SELECTION}
+    qualities = [
+        {"key": k, "label": v["label"], "detail": v["detail"]}
+        for k, v in QUALITY_PRESETS.items()
+    ]
+    return {"families": families, "qualities": qualities, "default": DEFAULT_SELECTION}
 
 
 def normalize(selection: dict | None) -> dict:
@@ -129,11 +143,10 @@ def normalize(selection: dict | None) -> dict:
             key, str(sel.get("text_encoder_quant", "") or "")
         )
 
-    try:
-        steps = int(sel.get("steps", 4))
-    except (TypeError, ValueError):
-        steps = 4
-    steps = max(1, min(12, steps))
+    quality = str(sel.get("quality", "balanced")).lower()
+    if quality not in QUALITY_PRESETS:
+        quality = "balanced"
+    preset = QUALITY_PRESETS[quality]
 
     return {
         "family": family,
@@ -142,7 +155,9 @@ def normalize(selection: dict | None) -> dict:
         "backend": backend,
         "quant": quant,
         "text_encoder_quant": text_encoder_quant,
-        "steps": steps,
+        "quality": quality,
+        "steps": preset["steps"],  # derived from the quality preset
+        "upscale": preset["upscale"],
     }
 
 
@@ -156,6 +171,7 @@ def spawn_env(selection: dict | None, *, hf_token: str = "") -> dict:
         "MT_FLUX_QUANT": r["quant"],
         "MT_FLUX_TEXT_ENCODER_QUANT": r["text_encoder_quant"],
         "MT_FLUX_STEPS": str(r["steps"]),
+        "MT_FLUX_UPSCALE": "1" if r["upscale"] else "0",
     }
     if hf_token:
         env["MT_FLUX_HF_TOKEN"] = hf_token

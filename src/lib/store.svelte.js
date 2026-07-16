@@ -137,6 +137,7 @@ export const app = $state({
   sidecar: { status: 'unknown', device: null, info: null }, // Python ML sidecar health
   detecting: false, // detection/OCR request in flight
   cleaning: false, // a /clean request is in flight
+  cleanBatch: null, // { done, total } while a whole-chapter clean runs, else null
   selectedLayerId: null, // active clean patch layer
   // Opt-in FLUX AI-redraw. Runs out-of-process in an external, uv-provisioned
   // env (packaged-capable) or in-process when the deps are in the base venv

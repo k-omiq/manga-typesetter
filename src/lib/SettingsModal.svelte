@@ -110,11 +110,12 @@
   // ---- FLUX model picker (mirrors MangaTranslator's choices) --------------
   // The chosen model; initialised from the persisted selection (or the
   // catalogue default) the first time the panel opens with data loaded.
-  let selection = $state({ family: 'klein', variant: '4b', backend: 'sdnq', quant: '' });
+  let selection = $state({ family: 'klein', variant: '4b', backend: 'sdnq', quant: '', quality: 'balanced' });
   let hfToken = $state('');
   let pickerInit = $state(false);
 
   const families = $derived(app.flux.catalogue?.families ?? []);
+  const qualities = $derived(app.flux.catalogue?.qualities ?? []);
   const currentFamily = $derived(
     families.find((f) => f.family === selection.family && f.variant === selection.variant) ?? families[0] ?? null,
   );
@@ -129,6 +130,7 @@
       persisted.family !== selection.family ||
       (persisted.variant ?? '') !== (selection.variant ?? '') ||
       persisted.backend !== selection.backend ||
+      (persisted.quality ?? 'balanced') !== selection.quality ||
       (showQuant && (persisted.quant ?? '') !== (selection.quant ?? '')),
   );
 
@@ -174,6 +176,7 @@
       variant: m.variant ?? '',
       backend: m.backend,
       quant: m.quant ?? '',
+      quality: m.quality ?? 'balanced',
     };
     pickerInit = true;
   }
@@ -187,7 +190,13 @@
     const [family, variant = ''] = e.target.value.split(':');
     const fam = families.find((f) => f.family === family && f.variant === variant);
     const backend = fam?.backends?.includes(selection.backend) ? selection.backend : (fam?.backends?.[0] ?? 'sdnq');
-    selection = { family, variant, backend, quant: backend === 'sdcpp' ? (fam?.default_quant ?? '') : '' };
+    selection = {
+      ...selection,
+      family,
+      variant,
+      backend,
+      quant: backend === 'sdcpp' ? (fam?.default_quant ?? '') : '',
+    };
   }
 
   function onBackendChange(e) {
@@ -287,6 +296,26 @@
             </label>
           {/if}
         </div>
+
+        <!-- Quality ↔ speed. Matters most on Apple Silicon (no Triton → slow). -->
+        {#if qualities.length}
+          <div class="field wide">
+            <span>Speed vs quality <em class="hint">— {qualities.find((q) => q.key === selection.quality)?.detail ?? ''}</em></span>
+            <div class="seg">
+              {#each qualities as q}
+                <button
+                  type="button"
+                  class:on={selection.quality === q.key}
+                  disabled={app.flux.downloading}
+                  title={q.detail}
+                  onclick={() => (selection.quality = q.key)}
+                >
+                  {q.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
 
         {#if needsToken}
           <label class="field wide">
@@ -558,6 +587,40 @@
   .field select:disabled,
   .field input:disabled {
     opacity: 0.5;
+  }
+  .field .hint {
+    font-style: normal;
+    color: var(--muted);
+  }
+  .seg {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    width: fit-content;
+  }
+  .seg button {
+    padding: 6px 14px;
+    border: none;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  .seg button:last-child {
+    border-right: none;
+  }
+  .seg button.on {
+    background: var(--accent, #4b7bec);
+    color: #fff;
+    font-weight: 600;
+  }
+  .seg button:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
   .tag {
     flex: none;

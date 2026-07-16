@@ -14,9 +14,11 @@
     layerByLine,
     lineByN,
     setBrushTool,
+    setMode,
+    toast,
   } from './store.svelte.js';
-  import { cleanCurrentPage, recleanRegion, refreshFluxStatus, downloadFlux } from './sidecar.js';
-  import { flattenClean } from './exporter.js';
+  import { cleanCurrentPage, cleanAllPages, recleanRegion, refreshFluxStatus, downloadFlux } from './sidecar.js';
+  import { flattenClean, flattenAllClean, exportImages } from './exporter.js';
 
   const p = $derived(page());
   const regions = $derived(p.detect?.boxes ?? []);
@@ -63,6 +65,41 @@
       flattening = false;
     }
   }
+
+  // Finish-cleaning hand-off: bake every page's clean composite into its cleaned
+  // image, then either save those to a folder or carry them into Translate mode.
+  let finishOpen = $state(false);
+  let finishing = $state(false);
+  // Any page with a raw (or a clean base) can be baked into a cleaned image.
+  const anyCleanable = $derived(app.pages.some((pg) => pg.raw || pg.clean?.base));
+
+  async function transferToTranslate() {
+    finishing = true;
+    try {
+      const n = await flattenAllClean();
+      finishOpen = false;
+      setMode('translate');
+      toast(n ? `Transferred ${n} cleaned page(s) → Translate` : 'Nothing to transfer');
+    } finally {
+      finishing = false;
+    }
+  }
+
+  async function saveToFolder() {
+    finishing = true;
+    try {
+      const n = await flattenAllClean();
+      if (!n) {
+        toast('Nothing to save');
+        return;
+      }
+      finishOpen = false;
+      // Export the freshly-baked cleaned pages (no text boxes yet in clean stage).
+      await exportImages('PNG', 'all');
+    } finally {
+      finishing = false;
+    }
+  }
 </script>
 
 <div class="rpanel">
@@ -76,13 +113,30 @@
     <div class="section-body">
       <div class="cleanbar">
         <button class="btn primary" disabled={app.cleaning || !regions.length} onclick={() => cleanCurrentPage({ method })}>
-          {app.cleaning ? 'Cleaning…' : 'Clean All'}
+          {app.cleaning && !app.cleanBatch ? 'Cleaning…' : 'Clean Page'}
+        </button>
+        <button
+          class="btn"
+          disabled={app.cleaning || app.pages.length < 2}
+          title="Clean every page in the chapter that has been detected. The AI model stays loaded across pages."
+          onclick={() => cleanAllPages({ method })}
+        >
+          {#if app.cleanBatch}
+            Cleaning {app.cleanBatch.done}/{app.cleanBatch.total}…
+          {:else}
+            Clean Chapter
+          {/if}
         </button>
         <select bind:value={method} title="Classical fallback used when the AI model isn't installed">
           <option value="telea">Telea</option>
           <option value="ns">Navier–Stokes</option>
         </select>
       </div>
+      {#if app.cleanBatch}
+        <div class="batchbar" role="progressbar" aria-valuenow={app.cleanBatch.done} aria-valuemax={app.cleanBatch.total}>
+          <div class="batchfill" style="width:{(app.cleanBatch.done / app.cleanBatch.total) * 100}%"></div>
+        </div>
+      {/if}
 
       <div class="policy" title={app.flux.reason ?? ''}>
         Solid areas (bubbles, boxes) → <b>fill</b> · textured art → <b>AI redraw</b>
@@ -165,8 +219,11 @@
           {/each}
         </div>
       {/if}
-      <button class="btn flatten" disabled={flattening || !p.raw} title="Composite raw + visible layers into the cleaned page (feeds Translate + export)" onclick={onFlatten}>
-        {flattening ? 'Flattening…' : 'Bake / Flatten clean'}
+      <button class="btn flatten" disabled={flattening || !p.raw} title="Composite raw + visible layers into this page's cleaned image (feeds Translate + export)" onclick={onFlatten}>
+        {flattening ? 'Flattening…' : 'Bake / Flatten this page'}
+      </button>
+      <button class="btn finish" disabled={finishing || !anyCleanable} title="Bake every cleaned page, then save them or carry them into Translate" onclick={() => (finishOpen = true)}>
+        {finishing ? 'Working…' : 'Finish cleaning →'}
       </button>
     </div>
   </div>
@@ -235,6 +292,29 @@
   </div>
 </div>
 
+{#if finishOpen}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="finish-overlay" onclick={(e) => e.target === e.currentTarget && !finishing && (finishOpen = false)}>
+    <div class="finish-card">
+      <h3>Cleaned chapter ready</h3>
+      <p>Bake every cleaned page, then choose what to do with them.</p>
+      <div class="finish-actions">
+        <button class="fbtn primary" disabled={finishing} onclick={transferToTranslate}>
+          <b>Transfer to Translate</b>
+          <span>Carry the cleaned pages into Translate mode and start typesetting.</span>
+        </button>
+        <button class="fbtn" disabled={finishing} onclick={saveToFolder}>
+          <b>Save to folder</b>
+          <span>Export the cleaned pages as PNGs to a folder you pick.</span>
+        </button>
+      </div>
+      <button class="fcancel" disabled={finishing} onclick={() => (finishOpen = false)}>
+        {finishing ? 'Working…' : 'Cancel'}
+      </button>
+    </div>
+  </div>
+{/if}
+
 <style>
   .cleanbar {
     display: flex;
@@ -243,6 +323,18 @@
   }
   .cleanbar .btn {
     flex: 1;
+  }
+  .batchbar {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--line, #2b2f3a);
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+  .batchfill {
+    height: 100%;
+    background: var(--accent, #4b7bec);
+    transition: width 0.2s ease;
   }
   .btn {
     padding: 7px 10px;
@@ -508,6 +600,96 @@
   .btn.flatten {
     width: 100%;
     margin-top: 8px;
+  }
+  .btn.finish {
+    width: 100%;
+    margin-top: 6px;
+    background: var(--accent, #4b7bec);
+    border-color: var(--accent, #4b7bec);
+    color: #fff;
+    font-weight: 600;
+  }
+  /* Finish-cleaning hand-off prompt */
+  .finish-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: grid;
+    place-items: center;
+    z-index: 60;
+  }
+  .finish-card {
+    width: min(420px, 90vw);
+    background: var(--surface, #171a21);
+    border: 1px solid var(--line, #2b2f3a);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+  .finish-card h3 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    color: var(--text, #e6e8ee);
+  }
+  .finish-card > p {
+    margin: 0 0 16px;
+    font-size: 12.5px;
+    color: var(--muted, #8b91a1);
+    line-height: 1.5;
+  }
+  .finish-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .fbtn {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+    padding: 11px 13px;
+    border-radius: 9px;
+    border: 1px solid var(--line, #2b2f3a);
+    background: var(--surface2, #20242e);
+    color: var(--text, #e6e8ee);
+    font: inherit;
+    cursor: pointer;
+  }
+  .fbtn:hover:not(:disabled) {
+    border-color: var(--accent, #4b7bec);
+  }
+  .fbtn.primary {
+    background: var(--accent, #4b7bec);
+    border-color: var(--accent, #4b7bec);
+    color: #fff;
+  }
+  .fbtn b {
+    font-size: 13px;
+  }
+  .fbtn span {
+    font-size: 11.5px;
+    opacity: 0.85;
+    line-height: 1.4;
+  }
+  .fbtn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .fcancel {
+    width: 100%;
+    margin-top: 12px;
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid var(--line, #2b2f3a);
+    background: none;
+    color: var(--muted, #8b91a1);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .fcancel:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
   .tools {
     display: grid;

@@ -49,6 +49,7 @@ def _build():
         backend=backend,
         huggingface_token=config.HF_TOKEN,
         num_inference_steps=config.NUM_INFERENCE_STEPS,
+        upscale_small_crops=config.UPSCALE_SMALL_CROPS,  # quality↔speed lever
         # low_vram (sequential CPU offload) everywhere but CUDA, matching flux.py.
         low_vram=non_cuda,
     )

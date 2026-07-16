@@ -89,6 +89,24 @@ export async function cleanImage(imageUrl, regions, { mask = '', method = 'telea
   });
 }
 
+// Clean one page object's detected regions and apply the patch layers to it.
+// Returns { layers, fell } on success, { skipped } if the page has no regions,
+// or { error } on failure. Shared by the single-page and whole-chapter paths.
+async function cleanOnePage(p, { method = 'telea', flux = false } = {}) {
+  const regions = (p?.detect?.boxes ?? []).map((b) => ({ n: b.n, box: b.box }));
+  if (!p?.raw || !regions.length) return { skipped: true };
+  for (const r of regions) setCleanStatus(r.n, 'cleaning', p);
+  try {
+    const result = await cleanImage(p.raw, regions, { mask: p.clean?.maskPng ?? '', method, flux });
+    applyClean(result, { target: p });
+    const fell = (result.layers ?? []).filter((l) => l.fell_back).length;
+    return { layers: result.layers.length, fell };
+  } catch (e) {
+    for (const r of regions) setCleanStatus(r.n, 'error', p);
+    return { error: String(e) };
+  }
+}
+
 // Clean every detected region on the current page and apply the patch layers.
 export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) {
   const p = page();
@@ -96,8 +114,7 @@ export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) 
     toast('No raw page to clean — import a raw image first');
     return;
   }
-  const regions = (p.detect?.boxes ?? []).map((b) => ({ n: b.n, box: b.box }));
-  if (!regions.length) {
+  if (!(p.detect?.boxes ?? []).length) {
     toast('Run Detect first — no text regions');
     return;
   }
@@ -106,20 +123,55 @@ export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) 
     return;
   }
   app.cleaning = true;
-  for (const r of regions) setCleanStatus(r.n, 'cleaning', p);
   try {
-    const result = await cleanImage(p.raw, regions, { mask: p.clean?.maskPng ?? '', method, flux });
-    applyClean(result, { target: p });
+    const r = await cleanOnePage(p, { method, flux });
+    if (r.error) toast(`Clean failed: ${r.error}`);
     // Surface, in the completion summary, when textured regions wanted AI but
-    // fell back to the classical inpaint (FLUX not installed) — otherwise it's
-    // only visible per-layer.
-    const fell = (result.layers ?? []).filter((l) => l.fell_back).length;
-    toast(`Cleaned ${result.layers.length} region(s)` + (fell ? ` · ${fell} used ${method} (AI not installed)` : ''));
-  } catch (e) {
-    for (const r of regions) setCleanStatus(r.n, 'error', p);
-    toast(`Clean failed: ${e}`);
+    // fell back to the classical inpaint (FLUX not installed).
+    else toast(`Cleaned ${r.layers} region(s)` + (r.fell ? ` · ${r.fell} used ${method} (AI not installed)` : ''));
   } finally {
     app.cleaning = false;
+  }
+}
+
+// Clean the whole chapter: every page with detected regions, in order. The
+// FLUX process stays warm across pages (the proxy reuses one mt-flux), so only
+// the first page pays the model load. Pages without a Detect pass are skipped.
+export async function cleanAllPages({ method = 'telea', flux = false } = {}) {
+  if (!sidecarReady()) {
+    toast('Sidecar not ready');
+    return;
+  }
+  const targets = app.pages.filter((p) => p?.raw && (p.detect?.boxes ?? []).length);
+  if (!targets.length) {
+    toast('No detected pages to clean — run Detect first');
+    return;
+  }
+  app.cleaning = true;
+  app.cleanBatch = { done: 0, total: targets.length };
+  let regionsTotal = 0;
+  let fellTotal = 0;
+  let failed = 0;
+  try {
+    for (const p of targets) {
+      const r = await cleanOnePage(p, { method, flux });
+      if (r.error) failed++;
+      else {
+        regionsTotal += r.layers ?? 0;
+        fellTotal += r.fell ?? 0;
+      }
+      app.cleanBatch = { done: app.cleanBatch.done + 1, total: targets.length };
+    }
+    const skipped = app.pages.length - targets.length;
+    toast(
+      `Cleaned ${targets.length} page(s) · ${regionsTotal} region(s)` +
+        (fellTotal ? ` · ${fellTotal} used ${method} (AI not installed)` : '') +
+        (failed ? ` · ${failed} page(s) failed` : '') +
+        (skipped ? ` · ${skipped} skipped (no Detect)` : ''),
+    );
+  } finally {
+    app.cleaning = false;
+    app.cleanBatch = null;
   }
 }
 

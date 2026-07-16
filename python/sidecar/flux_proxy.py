@@ -61,6 +61,7 @@ def _selection_sig(sel: dict) -> tuple:
         sel["quant"],
         sel["text_encoder_quant"],
         sel["steps"],
+        sel["upscale"],
         bool(flux.hf_token()),
     )
 

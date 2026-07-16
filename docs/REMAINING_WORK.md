@@ -23,11 +23,12 @@ core pipeline (detect → clean → translate → typeset → export) works.
 `~37 s/step × 4 ≈ 2.5–3 min per textured region` on MPS. Root cause: **Triton
 has no Apple-Silicon backend** (no macOS/arm64 wheel; SDNQ falls back to eager),
 so this can't be fixed with a kernel compiler. Practical levers:
-- **Cap the inpaint working resolution** (biggest win). The inpainter upscales
-  each region to ~1 MP (`1056×976`) before diffusing; running at ~0.25 MP would
-  be ~4× faster for some quality loss. Needs checking whether
-  `FluxKleinInpainter` exposes a target-resolution/megapixel knob, then a
-  "quality ↔ speed" setting in the UI.
+- **Quality ↔ speed setting — landed.** A Fast/Balanced/Quality control in
+  Settings drives `num_inference_steps` (2/4/8) and `upscale_small_crops`
+  (Fast skips the ~1 MP upscale of small crops). Fast is ~2× fewer steps and
+  skips the upscale, roughly halving time for some quality loss. Persisted in the
+  model selection; a change restarts `mt-flux`. Remaining lever: a finer target-
+  megapixel cap would need a MangaTranslator patch (no direct constructor knob).
 - Consider fp16 (non-SDNQ) on MPS if RAM allows (~8 GB for the 4B) — may be
   faster per-op by skipping dequant, at a memory cost.
 - Optional: offload FLUX to a CUDA endpoint (where Triton works) — architectural.

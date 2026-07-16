@@ -62,6 +62,8 @@ try:
     NUM_INFERENCE_STEPS = int(os.environ.get("MT_FLUX_STEPS", "4"))
 except ValueError:
     NUM_INFERENCE_STEPS = 4
+# Whether to upscale small crops to ~1MP before diffusing (quality vs speed).
+UPSCALE_SMALL_CROPS = os.environ.get("MT_FLUX_UPSCALE", "1") != "0"
 
 
 def model_summary() -> dict:
@@ -73,5 +75,6 @@ def model_summary() -> dict:
         "quant": QUANT or None,
         "text_encoder_quant": TEXT_ENCODER_QUANT or None,
         "steps": NUM_INFERENCE_STEPS,
+        "upscale": UPSCALE_SMALL_CROPS,
         "hf_token_set": bool(HF_TOKEN),
     }
