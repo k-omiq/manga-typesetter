@@ -142,20 +142,18 @@ export const app = $state({
   // Opt-in FLUX AI-redraw. Runs out-of-process in an external, uv-provisioned
   // env (packaged-capable) or in-process when the deps are in the base venv
   // (dev). `catalogue` drives the Settings model picker; `model` is the persisted
-  // selection; `process` is the mt-flux child's live state. `installable` is now
-  // true wherever uv is available (the old packaged-app limitation is gone).
+  // selection; `process` is the mt-flux child's live state. `uvAvailable` gates
+  // whether the external env can be provisioned.
   flux: {
     available: false,
     reason: null,
     checking: false,
     downloading: false,
-    installable: true,
     uvAvailable: true,
     envProvisioned: false,
     inProcess: false,
-    frozen: false,
-    catalogue: null, // { families:[{family,variant,model_key,label,backends,quants,default_quant,gated}], default }
-    model: null, // current normalized selection {family,variant,backend,quant,...}
+    catalogue: null, // { families:[{family,variant,model_key,label,backends,quants,default_quant,gated}], qualities, default }
+    model: null, // current normalized selection {family,variant,backend,quant,quality,...}
     process: null, // { running, port, health }
   },
   // Phase 4 manual brush tools (clean mode only). Every stroke becomes its own

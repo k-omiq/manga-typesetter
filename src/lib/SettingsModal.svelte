@@ -643,12 +643,7 @@
     background: #3a2f1f;
     color: #e0c07f;
   }
-  .tag.broken {
-    background: #4a2323;
-    color: #f0b6b6;
-  }
-  .tag.auto,
-  .tag.packaged {
+  .tag.auto {
     background: #24304a;
     color: #9fb6e0;
   }

@@ -206,6 +206,19 @@ def provision(progress=None) -> dict:
             os.chmod(uv, 0o755)
         except OSError:
             pass
+    # On macOS a bundled binary unpacked from app resources can carry
+    # com.apple.quarantine and be blocked by Gatekeeper regardless of the exec
+    # bit. Best-effort strip it (a signed/notarised app usually avoids this, but
+    # this covers ad-hoc/dev bundles). Ignore failures — the attr may be absent.
+    if sys.platform == "darwin":
+        try:
+            subprocess.run(
+                ["xattr", "-d", "com.apple.quarantine", uv],
+                capture_output=True,
+                check=False,
+            )
+        except OSError:
+            pass
 
     FLUX_ENV_DIR.parent.mkdir(parents=True, exist_ok=True)
     steps = [
@@ -234,16 +247,20 @@ def status(selection: dict | None = None) -> dict:
     """Report whether FLUX can run and how it will run, for the Settings panel.
 
     Reports the external-env provisioning state (the primary, packaged-capable
-    path), the in-process dev availability, and the selected model. ``installable``
-    is now True everywhere `uv` is available — the old "packaged app can't install
-    FLUX" limitation is gone (we install into an external interpreter).
+    path), the in-process dev availability, and the selected model.
+
+    Deliberately *light*: the in-process check is ``find_spec`` only (no heavy
+    torch/diffusers import), so merely opening Settings can't drag the diffusion
+    stack into the base process. The authoritative import happens lazily at first
+    use (``load_inpainter`` / ``mt-flux``), which falls back to classical on any
+    failure — so an optimistic "deps present" here is safe.
     """
     sel = flux_models_normalize(selection)
     provisioned = env_provisioned()
-    inproc_state, inproc_reason = _probe_flux()
+    inproc_ready = not _missing_deps()  # find_spec only — no heavy import
     uv_ok = _uv_bin() is not None
 
-    available = provisioned or inproc_state == "ready"
+    available = provisioned or inproc_ready
     if available:
         how = "external" if provisioned else "in-process"
         reason = f"ready ({how})"
@@ -257,11 +274,8 @@ def status(selection: dict | None = None) -> dict:
         "reason": reason,
         "model": sel,
         "env_provisioned": provisioned,
-        "in_process": inproc_state == "ready",
-        "in_process_state": inproc_state,
+        "in_process": inproc_ready,
         "uv_available": uv_ok,
-        "installable": uv_ok,
-        "frozen": bool(getattr(sys, "frozen", False)),
     }
 
 

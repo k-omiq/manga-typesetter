@@ -222,19 +222,16 @@ export async function refreshFluxStatus() {
       return app.flux;
     }
     const s = await invoke('sidecar_flux_status');
-    // FLUX now installs into an external uv-provisioned env, so `installable` is
-    // true wherever uv is present — no packaged-app limitation. `catalogue`
-    // drives the model picker; `model` is the persisted selection; `process`
-    // reflects the mt-flux child.
+    // FLUX installs into an external uv-provisioned env; `uvAvailable` gates
+    // whether it can be provisioned. `catalogue` drives the model picker; `model`
+    // is the persisted selection; `process` reflects the mt-flux child.
     app.flux = {
       ...app.flux,
       available: !!s.available,
       reason: s.reason ?? null,
-      installable: s.installable ?? true,
       uvAvailable: s.uv_available ?? true,
       envProvisioned: !!s.env_provisioned,
       inProcess: !!s.in_process,
-      frozen: !!s.frozen,
       catalogue: s.catalogue ?? app.flux.catalogue,
       model: s.model ?? app.flux.model,
       process: s.process ?? null,
