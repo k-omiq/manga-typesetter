@@ -44,3 +44,6 @@ tsuki117.json
 *.njsproj
 *.sln
 *.sw?
+
+# Local packaged build artifacts (unsigned dev bundles)
+dist-app/
