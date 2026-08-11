@@ -64,17 +64,6 @@ function blankPage(lines, prev) {
     // Preserve placed boxes across a JSON re-import so re-importing a lines file
     // (e.g. updated translations) doesn't discard existing typesetting.
     boxes: (prev?.boxes ?? []).map((b) => ({ ...b, style: { ...b.style } })),
-    // Copy (never alias) prev.clean, in the full canonical shape — a bare
-    // { base, layers } left maskPng/status undefined and shared the object with
-    // the discarded page.
-    clean: prev?.clean
-      ? {
-          base: prev.clean.base ?? null,
-          maskPng: prev.clean.maskPng ?? null,
-          status: { ...(prev.clean.status ?? {}) },
-          layers: (prev.clean.layers ?? []).map((l) => ({ ...l })),
-        }
-      : { base: null, maskPng: null, status: {}, layers: [] },
     detect: prev?.detect ?? null,
     activeLineN: null,
   };
@@ -203,9 +192,8 @@ export async function importImageFiles(files, kind) {
     if (kind === 'cleaned') app.pages[i].cleaned = url;
     else app.pages[i].raw = url;
   });
-  // Either kind counts as "loaded" so the starter overlay dismisses — importing
-  // raws is the first step of the Clean flow, not a no-op that leaves the
-  // import prompt covering the page you just loaded.
+  // Either kind counts as "loaded" so the starter overlay dismisses instead of
+  // covering the page you just imported.
   app.loaded = true;
   toast(`Imported ${list.length} ${kind} page(s)`);
 }

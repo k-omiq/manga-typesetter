@@ -3,41 +3,12 @@
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import time
 
 import uvicorn
 
 from . import config
-
-
-def _stabilize_model_cwd() -> None:
-    """Pin the CWD so MangaTranslator's CWD-relative ``./models`` cache is writable.
-
-    MangaTranslator's model manager caches FLUX weights at ``Path("./models")``
-    *relative to the process CWD* (e.g. ``flux_cache_dir = Path("./models/flux")``).
-    In dev the Rust side launches us with the CWD set to ``python/``, so that
-    resolves to ``python/models`` — fine. In a packaged build the frozen
-    ``mt-sidecar`` binary inherits whatever CWD the OS gave the app (often ``/``
-    when launched from Finder), so ``./models`` would resolve to an unwritable
-    ``/models`` and the first FLUX weight fetch would fail.
-
-    When frozen, chdir into ``MODEL_DIR``'s parent so ``./models`` coincides with
-    ``config.MODEL_DIR`` (``~/.mangatypesetter/models`` by default) — a stable,
-    writable, CWD-independent location that the Settings cache/clear already knows
-    about. Dev (non-frozen) behaviour is left untouched. See docs/FLUX_PACKAGING.md.
-    """
-    if not getattr(sys, "frozen", False):
-        return
-    # `./models` (relative) resolves against CWD → make CWD the MODEL_DIR parent so
-    # `<cwd>/models` == MODEL_DIR. MODEL_DIR itself stays absolute for detect/OCR.
-    target = config.MODEL_DIR.resolve().parent
-    try:
-        target.mkdir(parents=True, exist_ok=True)
-        os.chdir(target)
-    except OSError:
-        pass  # best-effort; a failed chdir just leaves the inherited CWD
 
 
 def _parent_alive(ppid: int) -> bool:
@@ -114,10 +85,6 @@ def _watch_parent_windows(ppid: int) -> None:
 
 
 def main() -> None:
-    # Ensure the CWD-relative FLUX weight cache resolves somewhere writable in a
-    # packaged build (no-op in dev). Must run before the model manager is created.
-    _stabilize_model_cwd()
-
     # Parent-death watchdog: exit the sidecar if the host app that spawned us
     # goes away, so a hard app crash can't orphan us holding the loopback port.
     # POSIX watches getppid()/kill(0); Windows waits on a handle to the parent

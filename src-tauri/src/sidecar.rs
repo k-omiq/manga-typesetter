@@ -58,9 +58,8 @@ impl Sidecar {
 }
 
 /// Unguessable loopback secret from the OS CSPRNG (falls back to time+pid only
-/// if getrandom somehow fails). This gates /analyze, /clean, /translate — the
-/// last of which forwards the user's BYOK API key — so it must not be
-/// enumerable by another local process from launch time + pid.
+/// if getrandom somehow fails). This gates every route except /health, so it
+/// must not be enumerable by another local process from launch time + pid.
 fn make_token() -> String {
     let mut bytes = [0u8; 24];
     if getrandom::getrandom(&mut bytes).is_ok() {
@@ -289,143 +288,6 @@ pub async fn sidecar_analyze(
     resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
-/// Proxy a page image to the sidecar `/clean` (smart per-region cleaning).
-///
-/// `regions` is the JSON array the frontend already holds from `/analyze`
-/// (`[{n, box, method?}]`); `mask_png` is the base64 text mask from the same
-/// call. `method` is the default OpenCV inpaint flavour for textured regions
-/// ("telea"/"ns"); `flux` opts into the heavy FLUX path. Returns one patch
-/// layer per region.
-#[tauri::command]
-pub async fn sidecar_clean(
-    state: tauri::State<'_, Sidecar>,
-    image: Vec<u8>,
-    regions: String,
-    mask_png: String,
-    method: String,
-    flux: bool,
-) -> Result<serde_json::Value, String> {
-    let url = format!("{}/clean", state.base_url());
-    let part = reqwest::multipart::Part::bytes(image).file_name("page.png");
-    let form = reqwest::multipart::Form::new()
-        .part("image", part)
-        .text("regions", regions)
-        .text("mask_png", mask_png)
-        .text("method", method)
-        .text("flux", flux.to_string());
-
-    let resp = reqwest::Client::new()
-        .post(&url)
-        .header("x-mt-token", &state.token)
-        // FLUX cleaning can be slow; cap so a hung run can't block forever.
-        .timeout(std::time::Duration::from_secs(1800))
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !resp.status().is_success() {
-        let code = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("sidecar {code}: {body}"));
-    }
-    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
-}
-
-/// Proxy a brush-inpaint request to the sidecar `/clean/brush`.
-///
-/// `image` is the current clean composite (raw + visible patches); `mask_png` is
-/// the base64 painted alpha mask; `method` is the OpenCV inpaint flavour
-/// ("telea"/"ns") and `flux` opts into the heavy path. Returns one patch layer.
-#[tauri::command]
-pub async fn sidecar_clean_brush(
-    state: tauri::State<'_, Sidecar>,
-    image: Vec<u8>,
-    mask_png: String,
-    method: String,
-    flux: bool,
-) -> Result<serde_json::Value, String> {
-    let url = format!("{}/clean/brush", state.base_url());
-    let part = reqwest::multipart::Part::bytes(image).file_name("page.png");
-    let form = reqwest::multipart::Form::new()
-        .part("image", part)
-        .text("mask_png", mask_png)
-        .text("method", method)
-        .text("flux", flux.to_string());
-
-    let resp = reqwest::Client::new()
-        .post(&url)
-        .header("x-mt-token", &state.token)
-        // FLUX brush fill can be slow; cap so a hung run can't block forever.
-        .timeout(std::time::Duration::from_secs(1800))
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !resp.status().is_success() {
-        let code = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("sidecar {code}: {body}"));
-    }
-    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
-}
-
-/// Report whether the opt-in FLUX inpainter can run on this machine.
-#[tauri::command]
-pub async fn sidecar_flux_status(
-    state: tauri::State<'_, Sidecar>,
-) -> Result<serde_json::Value, String> {
-    let url = format!("{}/clean/flux-status", state.base_url());
-    let resp = reqwest::Client::new()
-        .get(&url)
-        .header("x-mt-token", &state.token)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        let code = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("sidecar {code}: {body}"));
-    }
-    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
-}
-
-/// One-click provision of the external FLUX environment (heavy, opt-in).
-///
-/// `selection` is the chosen model (family/variant/backend/quant); `hf_token` is
-/// an optional HuggingFace token for gated/rate-limited weight downloads. Both
-/// are forwarded to the sidecar, which provisions the uv venv and persists the
-/// choice (see python/sidecar/flux.py).
-#[tauri::command]
-pub async fn sidecar_flux_download(
-    state: tauri::State<'_, Sidecar>,
-    selection: Option<serde_json::Value>,
-    hf_token: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let url = format!("{}/clean/flux-download", state.base_url());
-    let body = serde_json::json!({
-        "selection": selection,
-        "hf_token": hf_token.unwrap_or_default(),
-    });
-    // Provisioning (uv venv + torch/diffusers install) can take many minutes;
-    // allow a long timeout.
-    let resp = reqwest::Client::new()
-        .post(&url)
-        .header("x-mt-token", &state.token)
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(3600))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        let code = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("sidecar {code}: {body}"));
-    }
-    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
-}
-
 /// Report the on-disk size + location of the downloaded model caches.
 #[tauri::command]
 pub async fn sidecar_models_cache(
@@ -474,53 +336,6 @@ pub async fn sidecar_models_cache_clear(
 pub async fn sidecar_restart(app: tauri::AppHandle) -> Result<(), String> {
     spawn(&app);
     Ok(())
-}
-
-/// List the BYOK translation providers the sidecar supports (id + default model).
-#[tauri::command]
-pub async fn sidecar_translate_providers(
-    state: tauri::State<'_, Sidecar>,
-) -> Result<serde_json::Value, String> {
-    let url = format!("{}/translate/providers", state.base_url());
-    let resp = reqwest::Client::new()
-        .get(&url)
-        .header("x-mt-token", &state.token)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        let code = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("sidecar {code}: {body}"));
-    }
-    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
-}
-
-/// Proxy a translation request to the sidecar `/translate`. The BYOK API key
-/// travels in the JSON body and stays loopback-local; the webview never talks to
-/// the provider or the sidecar directly. `payload` =
-/// { lines:[{n,type,jp}], provider, model, api_key, base_url?, ... }.
-#[tauri::command]
-pub async fn sidecar_translate(
-    state: tauri::State<'_, Sidecar>,
-    payload: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let url = format!("{}/translate", state.base_url());
-    let resp = reqwest::Client::new()
-        .post(&url)
-        .header("x-mt-token", &state.token)
-        .timeout(std::time::Duration::from_secs(300))
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !resp.status().is_success() {
-        let code = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("sidecar {code}: {body}"));
-    }
-    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
 /// Build the managed state (call once before `.manage`).

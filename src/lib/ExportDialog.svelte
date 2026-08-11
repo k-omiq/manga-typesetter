@@ -4,6 +4,10 @@
 
   const isTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
 
+  // JSON exports the detected/typeset text, not a rendered page — one document
+  // for the whole scope rather than one file per page.
+  const isJson = $derived(app.fmt === 'JSON');
+
   function close() {
     app.exportOpen = false;
   }
@@ -34,7 +38,14 @@
       <div class="grp">
         <label class="lbl">File name (base)</label>
         <input type="text" value={app.exportName} oninput={onName} placeholder="page" />
-        <div class="exp-sub">Saved as <code>{app.exportName}-&lt;page&gt;.{app.fmt.toLowerCase()}</code></div>
+        <div class="exp-sub">
+          {#if isJson}
+            Saved as <code>{app.exportName}-text.json</code> — the detected text (JP + your
+            translation), reading order and box geometry for every page in scope.
+          {:else}
+            Saved as <code>{app.exportName}-&lt;page&gt;.{app.fmt.toLowerCase()}</code>
+          {/if}
+        </div>
       </div>
 
       <div class="grp">
@@ -57,7 +68,7 @@
           <button class="exp-card" onclick={() => go('all')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="13" height="15" rx="2" /><path d="M8 2h11a2 2 0 0 1 2 2v13" /></svg>
             <div class="t">All pages</div>
-            <div class="d">{app.pages.length} images</div>
+            <div class="d">{app.pages.length} {isJson ? 'pages, one file' : 'images'}</div>
           </button>
         </div>
       </div>

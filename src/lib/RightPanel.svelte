@@ -2,21 +2,13 @@
   import { app, page, isPlaced } from './store.svelte.js';
   import Queue from './Queue.svelte';
   import Inspector from './Inspector.svelte';
-  import CleanPanel from './CleanPanel.svelte';
-  import TranslateControls from './TranslateControls.svelte';
 
   const placedCount = $derived(page().lines.filter((l) => isPlaced(page(), l.n)).length);
   const totalCount = $derived(page().lines.length);
 </script>
 
 <section class="col col-right" style="width:{app.rightWidth}px">
-  {#if app.mode === 'clean'}
-    <CleanPanel />
-  {:else}
   <div class="rpanel">
-    <!-- Translation (BYOK) -->
-    <TranslateControls />
-
     <!-- Text Queue -->
     <div class="section queue" class:collapsed={app.collapsed.queue}>
       <div
@@ -52,5 +44,4 @@
       </div>
     </div>
   </div>
-  {/if}
 </section>

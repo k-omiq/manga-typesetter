@@ -22,17 +22,7 @@ function clonePage(p) {
     w: p.w ?? PAGE_W,
     h: p.h ?? PAGE_H,
     lines: p.lines.map((l) => ({ ...l })),
-    // Clean-mode state: each detected text becomes its own editable patch layer.
-    // composite = raw + ordered visible patches. Populated by the clean pipeline.
-    clean: p.clean
-      ? {
-          base: p.clean.base ?? null,
-          maskPng: p.clean.maskPng ?? null,
-          status: { ...(p.clean.status ?? {}) },
-          layers: p.clean.layers.map((l) => ({ ...l })),
-        }
-      : { base: null, maskPng: null, status: {}, layers: [] },
-    // Detection geometry (drives the cleaning queue + box auto-placement).
+    // Detection geometry (drives the text queue + box auto-placement).
     detect: p.detect
       ? { panels: (p.detect.panels ?? []).slice(), boxes: p.detect.boxes.map((b) => ({ ...b })) }
       : null,
@@ -53,10 +43,10 @@ function clonePage(p) {
 }
 
 // Replace all pages from an imported project (e.g. a lossless PSD). Mirrors
-// clonePage but assigns fresh box AND clean-layer ids from the store's own
-// sequences (so nothing collides with existing state) and normalizes styles up
-// to the current schema. Object URLs (raw/cleaned/clean.base) are passed
-// through as-is — the caller regenerates them from the source.
+// clonePage but assigns fresh box ids from the store's own sequence (so nothing
+// collides with existing state) and normalizes styles up to the current schema.
+// Object URLs (raw/cleaned) are passed through as-is — the caller regenerates
+// them from the source.
 export function loadProjectPages(rawPages) {
   app.pages = rawPages.map((p) => {
     const cp = {
@@ -66,14 +56,6 @@ export function loadProjectPages(rawPages) {
       w: p.w ?? PAGE_W,
       h: p.h ?? PAGE_H,
       lines: (p.lines ?? []).map((l) => ({ ...l })),
-      clean: p.clean
-        ? {
-            base: p.clean.base ?? null,
-            maskPng: p.clean.maskPng ?? null,
-            status: { ...(p.clean.status ?? {}) },
-            layers: (p.clean.layers ?? []).map((l) => ({ ...l, id: 'L' + layerSeq++ })),
-          }
-        : { base: null, maskPng: null, status: {}, layers: [] },
       detect: p.detect
         ? { panels: (p.detect.panels ?? []).slice(), boxes: p.detect.boxes.map((b) => ({ ...b })) }
         : null,
@@ -94,7 +76,6 @@ export function loadProjectPages(rawPages) {
   });
   app.pageIndex = 0;
   app.selectedId = null;
-  app.selectedLayerId = null;
   app.editingId = null;
   app.loaded = true;
   markUnsaved();
@@ -115,7 +96,6 @@ export const app = $state({
   selectedId: null,
   editingId: null, // box currently in inline-edit mode
   tool: 'place', // 'place' | 'text'
-  mode: 'translate', // 'clean' | 'translate' — only the right panel changes between modes
   lastStyle: defaultStyle(), // style new boxes inherit (follows the previous box)
   bulk: { active: false, targets: [], style: null }, // bulk-style picker mode
   exportOpen: false, // export scope/destination dialog
@@ -137,56 +117,6 @@ export const app = $state({
   sidecar: { status: 'unknown', device: null, info: null }, // Python ML sidecar health
   detecting: false, // detection/OCR request in flight
   detectBatch: null, // { done, total } while a whole-chapter detect runs, else null
-  cleaning: false, // a /clean request is in flight
-  cleanBatch: null, // { done, total } while a whole-chapter clean runs, else null
-  selectedLayerId: null, // active clean patch layer
-  // Opt-in FLUX AI-redraw. Runs out-of-process in an external, uv-provisioned
-  // env (packaged-capable) or in-process when the deps are in the base venv
-  // (dev). `catalogue` drives the Settings model picker; `model` is the persisted
-  // selection; `process` is the mt-flux child's live state. `uvAvailable` gates
-  // whether the external env can be provisioned.
-  flux: {
-    available: false,
-    reason: null,
-    checking: false,
-    downloading: false,
-    uvAvailable: true,
-    envProvisioned: false,
-    inProcess: false,
-    catalogue: null, // { families:[{family,variant,model_key,label,backends,quants,default_quant,gated}], qualities, default }
-    model: null, // current normalized selection {family,variant,backend,quant,quality,...}
-    process: null, // { running, port, health }
-  },
-  // Phase 4 manual brush tools (clean mode only). Every stroke becomes its own
-  // brush patch layer (page.clean.layers, kind:'brush'), so it toggles/deletes
-  // like an auto region. `tool` is the active sub-tool; brush is the engaged
-  // editor tool when app.tool === 'brush'.
-  brush: {
-    tool: 'inpaint', // 'inpaint' | 'clone' | 'fill' | 'erase'
-    size: 40, // brush diameter in IMAGE px
-    hardness: 0.7, // 0 = fully soft, 1 = hard edge
-    color: '#ffffff', // solid/sampled fill colour
-    method: 'telea', // content-aware fill flavour (telea | ns)
-    flux: false, // opt into FLUX for brush inpaint
-    cloneSource: null, // {x,y} image-space anchor for the clone tool
-    busy: false, // a brush-inpaint request is in flight
-  },
-  // BYOK LLM translation (reuses MangaTranslator's provider set). Keys are kept
-  // locally (localStorage) for convenience; never leave the machine except in
-  // the loopback request the Rust side proxies to the sidecar.
-  translate: {
-    provider: 'Anthropic',
-    model: '',
-    outputLanguage: 'English',
-    inputLanguage: 'Japanese', // source language the OCR'd text is in
-    readingDirection: 'rtl', // 'rtl' (manga) | 'ltr' (webtoon/western) — orders context
-    reasoningEffort: '', // '' none | 'low' | 'medium' | 'high' — reasoning-capable providers only
-    baseUrl: '', // OpenAI-Compatible only
-    special: '', // special instructions / glossary
-    apiKeys: {}, // { [provider]: key }
-    providers: [], // catalogue from the sidecar
-    translating: false,
-  },
 });
 
 // ---------- derived helpers ----------
@@ -205,19 +135,6 @@ export const boxText = (b, p = page()) => {
   if (b.text != null) return b.text;
   return lineText(lineByN(p ?? page(), b.lineN));
 };
-export function setMode(m) {
-  app.mode = m === 'clean' ? 'clean' : 'translate';
-  // Keep the active tool valid for the mode's toolset: Clean has only the brush;
-  // Translate has place/text (the typesetting tools). Also close the bulk-style
-  // editor when leaving Translate — it has no meaning in Clean.
-  if (app.mode === 'clean') {
-    if (app.tool === 'text' || app.tool === 'place') app.tool = 'brush';
-    if (app.bulk?.active) closeBulk();
-  } else if (app.tool === 'brush') {
-    app.tool = 'text';
-  }
-}
-
 function clamp(v, a, b) {
   return Math.max(a, Math.min(b, v));
 }
@@ -238,22 +155,6 @@ try {
   const saved = JSON.parse(localStorage.getItem('mt.export') || '{}');
   if (saved.dir) app.exportDir = saved.dir;
   if (saved.name) app.exportName = saved.name;
-} catch {
-  /* ignore */
-}
-try {
-  const t = JSON.parse(localStorage.getItem('mt.translate') || '{}');
-  Object.assign(app.translate, {
-    provider: t.provider ?? app.translate.provider,
-    model: t.model ?? app.translate.model,
-    outputLanguage: t.outputLanguage ?? app.translate.outputLanguage,
-    inputLanguage: t.inputLanguage ?? app.translate.inputLanguage,
-    readingDirection: t.readingDirection ?? app.translate.readingDirection,
-    reasoningEffort: t.reasoningEffort ?? app.translate.reasoningEffort,
-    baseUrl: t.baseUrl ?? app.translate.baseUrl,
-    special: t.special ?? app.translate.special,
-    apiKeys: t.apiKeys ?? app.translate.apiKeys,
-  });
 } catch {
   /* ignore */
 }
@@ -290,7 +191,6 @@ export function gotoPage(i) {
   if (i < 0 || i > app.pages.length - 1) return;
   app.pageIndex = i;
   app.selectedId = null;
-  app.selectedLayerId = null; // layer ids are per-page; don't leak selection across pages
   const p = page();
   if (p.activeLineN == null) p.activeLineN = firstUnplaced(p);
 }
@@ -341,11 +241,10 @@ export function setPageDims(w, h) {
 // ---------- tool mode ----------
 export function setTool(t) {
   app.tool = t;
-  if (t !== 'brush') app.brush.cloneSource = null;
 }
 
 // ---------- apply sidecar detection result to the current page ----------
-// result = { img_width, img_height, lines:[{n,type,jp,en,box,vertical,font_size}], mask_png }
+// result = { img_width, img_height, panels, lines:[{n,type,jp,en,box,vertical,font_size}] }
 export function applyDetection(result, target = null) {
   const p = target ?? page();
   if (result.img_width && result.img_height) {
@@ -353,7 +252,8 @@ export function applyDetection(result, target = null) {
     p.h = result.img_height;
   }
   p.lines = result.lines.map((l) => ({ n: l.n, type: l.type, jp: l.jp ?? '', en: '' }));
-  // Detection geometry kept separately — drives cleaning (Phase 2/3) and box auto-placement.
+  // Detection geometry kept separately — drives box auto-placement and the
+  // detected-text JSON export.
   p.detect = {
     panels: result.panels ?? [],
     boxes: result.lines.map((l) => ({
@@ -363,213 +263,10 @@ export function applyDetection(result, target = null) {
       font_size: l.font_size,
     })),
   };
-  if (result.mask_png) p.clean.maskPng = result.mask_png;
   p.boxes = [];
   p.activeLineN = firstUnplaced(p);
   app.loaded = true;
   markUnsaved();
-}
-
-// ---------- clean-mode patch layers ----------
-// Each detected text becomes its own editable patch (cleaned bbox pixels). The
-// composite clean page = raw + ordered visible patches (NOT a flat image), so
-// any single region can be re-cleaned, hidden, or deleted without re-running
-// the whole page. Populated from the sidecar /clean result.
-let layerSeq = 1;
-
-export const cleanStatus = (n) => page().clean?.status?.[n] ?? 'pending';
-
-// `target` pins the write to a specific page: a clean request may resolve after
-// the user navigated away, and the status dot must land on the page the request
-// was launched for — not whatever page happens to be current now.
-export function setCleanStatus(n, s, target = null) {
-  const p = target ?? page();
-  if (!p.clean) p.clean = { base: null, layers: [] };
-  p.clean.status = { ...(p.clean.status ?? {}), [n]: s };
-}
-
-// Merge cleaned layers from a /clean result. replace=true swaps the whole set;
-// replace=false updates only the regions present in the result (single-region redo).
-export function applyClean(result, { replace = true, target = null } = {}) {
-  const p = target ?? page();
-  if (!p.clean) p.clean = { base: null, layers: [] };
-  p.clean.base = p.raw ?? p.clean.base;
-  const incoming = (result.layers ?? []).map((L) => ({
-    id: 'L' + layerSeq++,
-    kind: 'region', // auto layer from a detected text region (vs 'brush')
-    n: L.n,
-    box: L.box, // [x, y, w, h] in image coords
-    method: L.method,
-    requested: L.requested,
-    fellBack: !!L.fell_back,
-    uniform: !!L.uniform,
-    ringStd: L.ring_std,
-    patchPng: L.patch_png, // base64 PNG of the cleaned bbox
-    visible: true,
-  }));
-  if (replace) {
-    // Replace only the auto-region layers; keep manual brush layers (they were
-    // painted by the user and aren't in a /clean result). Brush stays on top,
-    // matching paint-after-clean order. Without this, re-cleaning a page — and
-    // especially a whole-chapter Clean — would silently wipe brush work.
-    const brush = (p.clean.layers ?? []).filter((l) => l.kind === 'brush');
-    p.clean.layers = [...incoming, ...brush];
-  } else {
-    const byN = new Map(incoming.map((l) => [l.n, l]));
-    p.clean.layers = p.clean.layers.map((l) => byN.get(l.n) ?? l);
-    for (const l of incoming) if (!p.clean.layers.some((x) => x.n === l.n)) p.clean.layers.push(l);
-  }
-  // Mark status on the target page directly (not page(), which may have changed
-  // if the user navigated while the request was in flight).
-  const st = { ...(p.clean.status ?? {}) };
-  for (const l of incoming) st[l.n] = 'done';
-  p.clean.status = st;
-  markUnsaved();
-}
-
-export function toggleLayer(id) {
-  const l = page().clean?.layers.find((x) => x.id === id);
-  if (l) {
-    l.visible = !l.visible;
-    markUnsaved();
-  }
-}
-export function selectCleanLayer(id) {
-  app.selectedLayerId = app.selectedLayerId === id ? null : id;
-}
-export function deleteLayer(id) {
-  const p = page();
-  const l = p.clean?.layers.find((x) => x.id === id);
-  if (!l) return;
-  p.clean.layers = p.clean.layers.filter((x) => x.id !== id);
-  // Region layers return their detected line to the cleaning queue; brush layers
-  // (no `n`) have no queue entry to restore.
-  if (l.n != null) setCleanStatus(l.n, 'pending');
-  if (app.selectedLayerId === id) app.selectedLayerId = null;
-  markUnsaved();
-  toast(l.n != null ? `Deleted clean layer · line ${l.n} back to queue` : `Deleted ${l.label ?? 'brush'} layer`);
-}
-export const layerByLine = (n) => page().clean?.layers.find((x) => x.n === n) ?? null;
-export const patchSrc = (layer) => (layer?.patchPng ? 'data:image/png;base64,' + layer.patchPng : null);
-
-// ---------- brush patch layers (Phase 4) ----------
-// A brush stroke commits to its own layer, composited by box exactly like an
-// auto region. `op` records the tool; brush layers carry no detected `n`.
-let brushSeq = 1;
-const BRUSH_LABEL = { inpaint: 'Heal', airemove: 'AI Remove', clone: 'Clone', fill: 'Paint', erase: 'Erase' };
-
-export function addBrushLayer({ op, box, patchPng, method = null, fellBack = false }, target = null) {
-  // Pin to the page the stroke was made on — a client tool's compositing or the
-  // sidecar inpaint may resolve after the user navigated away.
-  const p = target ?? page();
-  if (!p.clean) p.clean = { base: null, maskPng: null, status: {}, layers: [] };
-  p.clean.base = p.raw ?? p.clean.base;
-  const layer = {
-    id: 'L' + layerSeq++,
-    kind: 'brush',
-    op,
-    n: null,
-    label: `${BRUSH_LABEL[op] ?? 'Brush'} ${brushSeq++}`,
-    box, // [x, y, w, h] in image coords
-    method: method ?? op, // drives the panel badge
-    fellBack: !!fellBack,
-    patchPng,
-    visible: true,
-  };
-  p.clean.layers.push(layer);
-  app.selectedLayerId = layer.id;
-  markUnsaved();
-  pushBrushUndo({ type: 'add', id: layer.id, page: p });
-  return layer;
-}
-
-// Replace a layer's patch pixels in place (used by the eraser, which subtracts
-// from the selected layer's alpha). Box is unchanged. `target` pins the page.
-export function updateLayerPatch(id, patchPng, target = null) {
-  const l = (target ?? page()).clean?.layers.find((x) => x.id === id);
-  if (!l) return;
-  l.patchPng = patchPng;
-  markUnsaved();
-}
-
-// ---------- brush undo (per-stroke) ----------
-// Additive strokes (add layer) undo by delete; erase strokes undo by restoring
-// the prior patch. Each entry pins the page it was made on, so undo after
-// navigating away still edits the right page. deleteLayer covers manual removal;
-// this only backs the brush overlay's Cmd/Ctrl-Z.
-export const brushUndo = $state({ stack: [] });
-export function pushBrushUndo(entry) {
-  brushUndo.stack.push(entry);
-  if (brushUndo.stack.length > 50) brushUndo.stack.shift();
-}
-export function undoBrush() {
-  const e = brushUndo.stack.pop();
-  if (!e) {
-    toast('Nothing to undo');
-    return;
-  }
-  const p = e.page ?? page();
-  const layers = p.clean?.layers ?? [];
-  if (e.type === 'add') {
-    p.clean.layers = layers.filter((x) => x.id !== e.id);
-    if (app.selectedLayerId === e.id) app.selectedLayerId = null;
-    toast('Undid brush stroke');
-  } else if (e.type === 'erase') {
-    const l = layers.find((x) => x.id === e.id);
-    if (l) l.patchPng = e.prevPatchPng;
-    toast('Undid erase');
-  }
-  markUnsaved();
-}
-
-// ---------- brush tool selection ----------
-export function setBrushTool(t) {
-  app.tool = 'brush';
-  app.brush.tool = t;
-  if (t !== 'clone') app.brush.cloneSource = null;
-}
-
-// ---------- translation ----------
-// Apply a /translate result ({ lines:[{n,en}] }) onto the current page's lines.
-export function applyTranslation(result, target = null) {
-  const p = target ?? page();
-  const byN = new Map((result.lines ?? []).map((l) => [l.n, l.en]));
-  for (const ln of p.lines) {
-    if (byN.has(ln.n) && byN.get(ln.n) != null) ln.en = byN.get(ln.n);
-  }
-  markUnsaved();
-}
-
-export function setTranslateProvider(provider) {
-  app.translate.provider = provider;
-  // Prefill the model field with the provider's suggested default when empty.
-  const meta = app.translate.providers.find((x) => x.id === provider);
-  if (meta && (!app.translate.model || app.translate.model === '')) {
-    app.translate.model = meta.default_model ?? '';
-  }
-  saveTranslatePrefs();
-}
-
-export function saveTranslatePrefs() {
-  const t = app.translate;
-  try {
-    localStorage.setItem(
-      'mt.translate',
-      JSON.stringify({
-        provider: t.provider,
-        model: t.model,
-        outputLanguage: t.outputLanguage,
-        inputLanguage: t.inputLanguage,
-        readingDirection: t.readingDirection,
-        reasoningEffort: t.reasoningEffort,
-        baseUrl: t.baseUrl,
-        special: t.special,
-        apiKeys: t.apiKeys,
-      }),
-    );
-  } catch {
-    /* ignore */
-  }
 }
 
 // ---------- placement ----------

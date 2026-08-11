@@ -11,12 +11,6 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       sidecar::sidecar_health,
       sidecar::sidecar_analyze,
-      sidecar::sidecar_clean,
-      sidecar::sidecar_clean_brush,
-      sidecar::sidecar_flux_status,
-      sidecar::sidecar_flux_download,
-      sidecar::sidecar_translate,
-      sidecar::sidecar_translate_providers,
       sidecar::sidecar_models_cache,
       sidecar::sidecar_models_cache_clear,
       sidecar::sidecar_restart

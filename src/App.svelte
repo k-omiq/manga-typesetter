@@ -10,9 +10,9 @@
   import Toast from './lib/Toast.svelte';
   import Resizer from './lib/Resizer.svelte';
   import { onMount } from 'svelte';
-  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast, undoBrush } from './lib/store.svelte.js';
+  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast } from './lib/store.svelte.js';
   import { restoreFonts } from './lib/fonts.js';
-  import { checkSidecar, refreshFluxStatus } from './lib/sidecar.js';
+  import { checkSidecar } from './lib/sidecar.js';
 
   let fontModalOpen = $state(false);
   let settingsOpen = $state(false);
@@ -20,14 +20,8 @@
   onMount(() => {
     restoreFonts();
     // Probe the Python sidecar (only meaningful under Tauri; no-op in the browser).
-    // The health probe resolves once the child is up; only then can the FLUX
-    // status GET succeed (it has no retry of its own), so chain it here — this
-    // is what fixes the panel's stale "AI not installed" after a cold boot.
     checkSidecar().then((h) => {
-      if (h) {
-        toast(`Sidecar ready · ${h.device}`);
-        refreshFluxStatus();
-      }
+      if (h) toast(`Sidecar ready · ${h.device}`);
     });
   });
 
@@ -47,19 +41,8 @@
       else if (fontModalOpen) fontModalOpen = false;
       else deselect();
     }
-    // Brush stroke undo (clean mode) — per-stroke = per-layer.
-    if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z') && app.mode === 'clean') {
-      e.preventDefault();
-      undoBrush();
-      return;
-    }
     if (e.key === 'v' || e.key === 'V') setTool('place');
     if (e.key === 't' || e.key === 'T') setTool('text');
-    // Brush size nudge while a brush tool is active.
-    if (app.tool === 'brush' && (e.key === '[' || e.key === ']')) {
-      const d = e.key === ']' ? 4 : -4;
-      app.brush.size = Math.max(4, Math.min(240, app.brush.size + d));
-    }
     if (e.key === 'ArrowRight' && !e.shiftKey) nextPage();
     if (e.key === 'ArrowLeft' && !e.shiftKey) prevPage();
   }
@@ -71,13 +54,9 @@
   <TopBar onFontLib={() => (fontModalOpen = true)} onSettings={() => (settingsOpen = true)} />
 
   <div class="main">
-    <!-- Raw reference is a Translate-mode aid (see the original alongside the
-         cleaned page you're typesetting on). In Clean mode the editor IS the raw
-         you're cleaning, so a separate reference is redundant — hide it. -->
-    {#if app.mode !== 'clean'}
-      <RawPanel />
-      <Resizer side="left" />
-    {/if}
+    <!-- Raw reference: the original page alongside the one you're typesetting. -->
+    <RawPanel />
+    <Resizer side="left" />
     <Editor />
     <Resizer side="right" />
     <RightPanel />

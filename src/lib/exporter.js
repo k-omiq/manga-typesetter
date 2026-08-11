@@ -1,5 +1,5 @@
 // Native-resolution raster export via canvas 2D. PNG is lossless.
-import { app, page, toast, boxText, saveExportPrefs, patchSrc, markUnsaved } from './store.svelte.js';
+import { app, page, toast, boxText, lineText, saveExportPrefs, PAGE_W, PAGE_H } from './store.svelte.js';
 import { familyFor, fontShorthand, applyCase, wrapLinesDOM, arcLayout, maxLineWidth } from './measure.js';
 
 function loadImage(src) {
@@ -216,8 +216,14 @@ function renderBox(box, p) {
   return { canvas: cnv, pad: L.pad, leftExtra: L.leftExtra, topExtra: L.topExtra, cw: L.cw, ch: L.ch };
 }
 
-const MIME = { PNG: 'image/png', JPG: 'image/jpeg', WebP: 'image/webp', PSD: 'image/vnd.adobe.photoshop' };
-const EXT = { PNG: 'png', JPG: 'jpg', WebP: 'webp', PSD: 'psd' };
+const MIME = {
+  PNG: 'image/png',
+  JPG: 'image/jpeg',
+  WebP: 'image/webp',
+  PSD: 'image/vnd.adobe.photoshop',
+  JSON: 'application/json',
+};
+const EXT = { PNG: 'png', JPG: 'jpg', WebP: 'webp', PSD: 'psd', JSON: 'json' };
 const QUALITY = { PNG: undefined, JPG: 0.95, WebP: 0.92, PSD: undefined };
 
 // Render one page to a canvas: white base + cleaned image (if any) + all text
@@ -238,24 +244,16 @@ export async function renderPageCanvas(p, scale = 1) {
   // white base (JPG has no alpha; manga pages are white anyway)
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
-  // Background priority: the flattened cleaned page if one exists, otherwise the
-  // live clean composite (raw + visible patch layers) exactly as the editor
-  // shows it in clean mode. Without the raw fallback, any page that was never
-  // flattened into `p.cleaned` — the common case in raws-only Clean mode —
-  // exported as a blank white sheet.
-  if (p.cleaned) {
+  // Background: the cleaned page when there is one, else the raw — mirroring
+  // what the editor shows, so a raws-only chapter doesn't export as a blank
+  // white sheet.
+  const base = p.cleaned ?? p.raw;
+  if (base) {
     try {
-      const img = await loadImage(p.cleaned);
+      const img = await loadImage(base);
       ctx.drawImage(img, 0, 0, W, H);
     } catch {
       /* draw text on white if image fails */
-    }
-  } else if (p.raw || p.clean?.base) {
-    try {
-      const comp = await compositeCleanCanvas(p);
-      ctx.drawImage(comp, 0, 0, W, H);
-    } catch {
-      /* draw text on white if the composite fails */
     }
   }
   ctx.imageSmoothingQuality = 'high'; // crisp downscale of the supersampled text
@@ -382,95 +380,55 @@ export function renderBoxLayer(box, W, H, scratch, p, scale = 1) {
   };
 }
 
-// Composite a page's clean layers onto its raw base exactly as the editor shows
-// them in clean mode: raw page + ordered *visible* patch layers, each drawn at
-// its box. This is the same math Editor.svelte renders and it backs both the
-// brush tools' source image and Flatten. Returns a canvas (untainted — raw is a
-// blob URL, patches are data URLs, both same-origin).
-export async function compositeCleanCanvas(p, scale = 1) {
-  const W = p.w,
-    H = p.h;
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.round(W * scale);
-  canvas.height = Math.round(H * scale);
-  const ctx = canvas.getContext('2d');
-  if (scale !== 1) ctx.scale(scale, scale);
-  ctx.imageSmoothingQuality = 'high';
-  const base = p.raw ?? p.clean?.base;
-  if (base) {
-    try {
-      const img = await loadImage(base);
-      ctx.drawImage(img, 0, 0, W, H);
-    } catch {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, W, H);
-    }
-  }
-  for (const l of p.clean?.layers ?? []) {
-    if (!l.visible) continue;
-    const src = patchSrc(l);
-    if (!src) continue;
-    try {
-      const img = await loadImage(src);
-      ctx.drawImage(img, l.box[0], l.box[1], l.box[2], l.box[3]);
-    } catch {
-      /* skip a patch that fails to decode */
-    }
-  }
-  return canvas;
+// ---------------------------------------------------------------------------
+// detected-text JSON export
+// ---------------------------------------------------------------------------
+
+// One page → the detected/typeset text plus the geometry it came from. `jp` is
+// the OCR'd source text, `en` the translation you typed (or that came in via a
+// JSON import); `box` is the detector's [x1,y1,x2,y2] in image coordinates and
+// `placed` is where the line's text box actually sits on the page, when one has
+// been placed. Free-typed boxes (no detected line behind them) are listed
+// separately so nothing typeset is lost.
+function serializePageText(p) {
+  const geom = new Map((p.detect?.boxes ?? []).map((d) => [d.n, d]));
+  const placedFor = (n) => {
+    const b = (p.boxes ?? []).find((x) => x.lineN === n);
+    return b ? { x: b.x, y: b.y, w: b.w, h: b.h } : null;
+  };
+  return {
+    page: p.id,
+    width: p.w ?? PAGE_W,
+    height: p.h ?? PAGE_H,
+    panels: (p.detect?.panels ?? []).slice(),
+    lines: (p.lines ?? []).map((l) => {
+      const g = geom.get(l.n);
+      return {
+        n: l.n,
+        type: l.type ?? 'dialogue',
+        jp: l.jp ?? '',
+        en: lineText(l),
+        box: g?.box ?? null,
+        vertical: g?.vertical ?? null,
+        font_size: g?.font_size ?? null,
+        placed: placedFor(l.n),
+      };
+    }),
+    // Text boxes the user typed directly, with no detected line behind them.
+    extraBoxes: (p.boxes ?? [])
+      .filter((b) => b.lineN == null)
+      .map((b) => ({ text: b.text ?? '', x: b.x, y: b.y, w: b.w, h: b.h })),
+  };
 }
 
-function canvasToBlob(canvas, fmt = 'PNG') {
-  return new Promise((res) => canvas.toBlob(res, MIME[fmt], QUALITY[fmt]));
-}
-
-// Bake one page's clean composite (raw + visible patch layers) into p.cleaned.
-// No toast/markUnsaved — the caller owns user feedback so this can run silently
-// in a whole-chapter loop. Returns true if a cleaned image was written.
-async function bakeCleaned(p) {
-  if (!p.raw && !p.clean?.base) return false;
-  const canvas = await compositeCleanCanvas(p);
-  const blob = await canvasToBlob(canvas, 'PNG');
-  if (!blob) return false;
-  if (p.cleaned && p.cleaned.startsWith('blob:')) URL.revokeObjectURL(p.cleaned);
-  p.cleaned = URL.createObjectURL(blob);
-  return true;
-}
-
-// Bake the clean composite into p.cleaned so the cleaning actually feeds translate
-// mode and the exporter (both read p.cleaned). Without this, auto/brush clean
-// layers only ever render in clean mode.
-export async function flattenClean(p = page()) {
-  if (!p.raw && !p.clean?.base) {
-    toast('No raw page to flatten');
-    return false;
-  }
-  try {
-    const ok = await bakeCleaned(p);
-    if (!ok) throw new Error('encode failed');
-    markUnsaved();
-    const n = (p.clean?.layers ?? []).filter((l) => l.visible).length;
-    toast(`Flattened ${n} clean layer(s) → cleaned page`);
-    return true;
-  } catch (e) {
-    toast('Flatten failed: ' + (e?.message || e));
-    return false;
-  }
-}
-
-// Bake every page in the chapter (used by the "finish cleaning" hand-off). Returns
-// the count of pages that produced a cleaned image.
-export async function flattenAllClean() {
-  let n = 0;
-  for (const p of app.pages) {
-    try {
-      if (await bakeCleaned(p)) n++;
-    } catch {
-      /* skip a page that fails to composite; keep going */
-    }
-  }
-  if (n) markUnsaved();
-  return n;
+// The whole export scope as one JSON document. The `pages` shape is exactly what
+// the JSON importer accepts, so an exported file re-imports cleanly.
+export function buildTextJson(pages) {
+  return JSON.stringify(
+    { schema: 1, generator: 'manga-typesetter', pages: pages.map(serializePageText) },
+    null,
+    2,
+  );
 }
 
 // Render one page to a Blob in the requested raster format (native resolution).
@@ -515,7 +473,12 @@ async function saveNative(items, scope, fmt) {
     if (!path) return null; // user cancelled
     await writeFile(path, await blobBytes(first.blob));
     const dir = await dirname(path);
-    const base = (await basename(path)).replace(/\.[^.]+$/, '').replace(/-\d+$/, '');
+    // Learn the base name from a page file only — the JSON export's name carries
+    // a "-text" suffix that must not become the project's export base.
+    const base =
+      fmt === 'JSON'
+        ? app.exportName
+        : (await basename(path)).replace(/\.[^.]+$/, '').replace(/-\d+$/, '');
     saveExportPrefs(dir, base || app.exportName);
     toast(`Saved to ${path}`);
     return dir;
@@ -527,17 +490,39 @@ async function saveNative(items, scope, fmt) {
     await writeFile(await join(dir, it.name), await blobBytes(it.blob));
   }
   saveExportPrefs(dir, app.exportName);
-  toast(`Saved ${items.length} image(s) to ${dir}`);
+  toast(`Saved ${items.length} file(s) to ${dir}`);
   return dir;
 }
 
-// Public entry: scope = 'current' | 'all', fmt = PNG|JPG|WebP.
+// Public entry: scope = 'current' | 'all', fmt = PNG|JPG|WebP|PSD|JSON.
 export async function exportImages(fmt, scope) {
   app.exporting = true;
   try {
     await document.fonts.ready;
     const pages = scope === 'all' ? app.pages : [page()];
     const ext = EXT[fmt];
+
+    // JSON is one document for the whole scope (not one file per page), so it
+    // round-trips through the JSON importer in a single pick.
+    if (fmt === 'JSON') {
+      const suffix = scope === 'all' ? 'text' : `${pages[0].id}-text`;
+      const items = [
+        {
+          name: `${app.exportName}-${suffix}.${ext}`,
+          blob: new Blob([buildTextJson(pages)], { type: MIME.JSON }),
+          page: pages[0],
+        },
+      ];
+      if (isTauri()) {
+        // Always the single-file save dialog — 'all' is still one document.
+        await saveNative(items, 'current', fmt);
+      } else {
+        downloadBlob(items[0].blob, items[0].name);
+        toast(`Exported text for ${pages.length} page(s) as JSON (browser download)`);
+      }
+      return true;
+    }
+
     const items = [];
     for (const p of pages) {
       let blob;

@@ -1,11 +1,10 @@
 // Layered PSD import/export with lossless round-trip.
 //
 // Dual representation: the PSD's visible layers are real, editable Photoshop
-// objects (editable text layers, non-destructive clean patches with masks,
-// base rasters), AND the complete project is embedded as JSON in an image
-// resource (XMP) so this app can reconstruct the page with zero loss of
-// editable state. On import we prefer the embedded JSON (lossless path) and
-// fall back to a best-effort layer mapping for foreign PSDs.
+// objects (editable text layers, base rasters), AND the complete project is
+// embedded as JSON in an image resource (XMP) so this app can reconstruct the
+// page with zero loss of editable state. On import we prefer the embedded JSON
+// (lossless path) and fall back to a best-effort layer mapping for foreign PSDs.
 //
 // ag-psd auto-initializes its canvas backend when `document` is present (the
 // Tauri webview / vite browser), so no explicit initializeCanvas call is needed.
@@ -50,28 +49,6 @@ async function imageDataFromSrc(src, w, h) {
   const ctx = cnv.getContext('2d');
   ctx.drawImage(img, 0, 0, cw, ch);
   return ctx.getImageData(0, 0, cw, ch);
-}
-
-// Decode a bare base64 PNG (no data: prefix, as stored in clean layers/masks).
-function imageDataFromBase64Png(b64, w, h) {
-  const src = b64.startsWith('data:') ? b64 : 'data:image/png;base64,' + b64;
-  return imageDataFromSrc(src, w, h);
-}
-
-// Crop an RGBA ImageData region (clamped to source bounds). Returns a fresh
-// PixelData {data,width,height} suitable for a layer or mask.
-function cropImageData(full, x, y, w, h) {
-  const cnv = document.createElement('canvas');
-  cnv.width = w;
-  cnv.height = h;
-  const ctx = cnv.getContext('2d');
-  // draw the source ImageData, then read back the region
-  const tmp = document.createElement('canvas');
-  tmp.width = full.width;
-  tmp.height = full.height;
-  tmp.getContext('2d').putImageData(full, 0, 0);
-  ctx.drawImage(tmp, x, y, w, h, 0, 0, w, h);
-  return ctx.getImageData(0, 0, w, h);
 }
 
 // Re-encode a canvas/ImageData source into a PNG object URL (used to rebuild
@@ -141,9 +118,8 @@ function extractProject(xmp) {
 }
 
 // Page → plain JSON with every field needed to rebuild it, minus volatile ids
-// (box.id, layer.id — reassigned on import) and object URLs (page.raw/cleaned,
-// clean.base — rebuilt from the base rasters). Clean patches + mask are kept as
-// their existing base64 PNGs (already lossless, never recompressed).
+// (box.id — reassigned on import) and object URLs (page.raw/cleaned — rebuilt
+// from the base rasters).
 function serializePage(p) {
   return {
     id: p.id,
@@ -163,26 +139,6 @@ function serializePage(p) {
       ? {
           panels: (p.detect.panels ?? []).slice(),
           boxes: (p.detect.boxes ?? []).map((d) => ({ n: d.n, box: d.box, vertical: d.vertical, font_size: d.font_size })),
-        }
-      : null,
-    clean: p.clean
-      ? {
-          maskPng: p.clean.maskPng ?? null,
-          status: { ...(p.clean.status ?? {}) },
-          layers: (p.clean.layers ?? []).map((L) => ({
-            n: L.n,
-            kind: L.kind ?? 'region', // 'region' | 'brush' — keep brush layers losslessly
-            op: L.op, // brush op: inpaint | clone | fill | erase
-            label: L.label, // brush display label
-            box: L.box,
-            method: L.method,
-            requested: L.requested,
-            fellBack: L.fellBack,
-            uniform: L.uniform,
-            ringStd: L.ringStd,
-            patchPng: L.patchPng,
-            visible: L.visible,
-          })),
         }
       : null,
     hasRaw: !!p.raw,
@@ -294,10 +250,8 @@ function textLayerFor(p, box, rendered, scale = 1) {
 // project embedded as JSON for lossless re-import. Group/layer schema (top of
 // list = top in Photoshop):
 //   Flattened preview (hidden) — exact app composite
-//   Text     — one editable text layer per box
-//   Brush    — one layer per manual brush stroke (inpaint/clone/paint)
-//   Cleaning — one masked patch per clean layer + hidden full-page AI mask
-//   Base     — Cleaned (if any) over Raw
+//   Text  — one editable text layer per box
+//   Base  — Cleaned (if any) over Raw
 //
 // `scale` supersamples the whole document (default 2) so the rasterized text
 // stays sharp when zoomed in Preview / on lower-res pages. Text is rendered
@@ -339,73 +293,6 @@ export async function buildPagePsd(p, scale = 2) {
     opened: true,
     children: (p.boxes ?? []).map((b) => textLayerFor(p, b, renderBoxLayer(b, W, H, scratch, p, scale), scale)),
   });
-
-  // Brush + Cleaning groups. Auto region patches carry a mask cropped from the
-  // detected-text mask (non-destructive over the original text); brush patches
-  // are freeform, so their own alpha IS the mask and they land in the Brush
-  // group named by their label.
-  const cleanChildren = [];
-  const brushChildren = [];
-  let fullMask = null;
-  if (p.clean?.maskPng) {
-    try {
-      fullMask = await imageDataFromBase64Png(p.clean.maskPng, SW, SH);
-    } catch {
-      fullMask = null;
-    }
-  }
-  for (const L of p.clean?.layers ?? []) {
-    if (!L.patchPng) continue;
-    const [bx, by, bw, bh] = L.box;
-    const lx = sc(bx);
-    const ly = sc(by);
-    const lw = sc(bw);
-    const lh = sc(bh);
-    let patch;
-    try {
-      patch = await imageDataFromBase64Png(L.patchPng, lw, lh);
-    } catch {
-      continue;
-    }
-    const isBrush = L.kind === 'brush';
-    const layer = {
-      name: isBrush ? (L.label ?? 'brush') : `clean-${L.n} (${L.method})`,
-      hidden: !L.visible,
-      left: lx,
-      top: ly,
-      right: lx + lw,
-      bottom: ly + lh,
-      imageData: patch,
-    };
-    if (isBrush) {
-      brushChildren.push(layer);
-    } else {
-      // Non-destructive: mask the patch to the detected text region so it only
-      // covers the original text, cropped from the full-page mask.
-      if (fullMask) {
-        try {
-          const maskData = cropImageData(fullMask, lx, ly, lw, lh);
-          layer.mask = { left: lx, top: ly, imageData: maskData, defaultColor: 0 };
-        } catch {
-          /* skip mask on failure — patch still exports */
-        }
-      }
-      cleanChildren.push(layer);
-    }
-  }
-  if (brushChildren.length) children.push({ name: 'Brush', opened: true, children: brushChildren });
-  if (fullMask) {
-    cleanChildren.push({
-      name: 'AI inpaint mask',
-      hidden: true,
-      left: 0,
-      top: 0,
-      right: fullMask.width,
-      bottom: fullMask.height,
-      imageData: fullMask,
-    });
-  }
-  if (cleanChildren.length) children.push({ name: 'Cleaning', opened: true, children: cleanChildren });
 
   // Base group — Cleaned over Raw (bottom). Both scaled to fill the document.
   const baseChildren = [];
@@ -488,19 +375,8 @@ async function reconstructFromProject(project, psd) {
     detect: sp.detect
       ? { panels: (sp.detect.panels ?? []).slice(), boxes: (sp.detect.boxes ?? []).map((d) => ({ ...d })) }
       : null,
-    clean: sp.clean
-      ? {
-          base: null,
-          maskPng: sp.clean.maskPng ?? null,
-          status: { ...(sp.clean.status ?? {}) },
-          layers: (sp.clean.layers ?? []).map((L) => ({ ...L })),
-        }
-      : { base: null, maskPng: null, status: {}, layers: [] },
   };
-  if (sp.hasRaw) {
-    page.raw = await layerToUrl(findInGroup(psd, 'Base', 'Raw'));
-    if (page.clean) page.clean.base = page.raw;
-  }
+  if (sp.hasRaw) page.raw = await layerToUrl(findInGroup(psd, 'Base', 'Raw'));
   if (sp.hasCleaned) page.cleaned = await layerToUrl(findInGroup(psd, 'Base', 'Cleaned'));
   return page;
 }
@@ -565,7 +441,6 @@ async function reconstructForeign(psd) {
     lines: [],
     boxes,
     detect: null,
-    clean: { base: null, maskPng: null, status: {}, layers: [] },
   };
 }
 
@@ -678,23 +553,11 @@ export async function psdSelfTest(p) {
   // 3) Editability / structure.
   const groupNames = (psd.children ?? []).filter((c) => c.children).map((c) => c.name);
   const textGroup = (psd.children ?? []).find((c) => c.name === 'Text' && c.children);
-  const cleanGroup = (psd.children ?? []).find((c) => c.name === 'Cleaning' && c.children);
   report.checks.groups = groupNames;
   report.checks.hasTextGroup = !!textGroup;
-  report.checks.hasBrushSlot = groupNames.includes('Brush');
   report.checks.textLayersEditable =
     !!textGroup && textGroup.children.length === (src.boxes ?? []).length && textGroup.children.every((l) => !!l.text);
-  const patchLayers = cleanGroup ? cleanGroup.children.filter((l) => l.name.startsWith('clean-')) : [];
-  report.checks.cleanPatchesHaveMask = patchLayers.length === 0 || patchLayers.every((l) => !!l.mask);
-  report.checks.aiMaskPresent = !cleanGroup || !!cleanGroup.children.find((l) => l.name === 'AI inpaint mask');
-  if (
-    !report.checks.hasBrushSlot ||
-    !report.checks.textLayersEditable ||
-    !report.checks.cleanPatchesHaveMask ||
-    !report.checks.aiMaskPresent
-  ) {
-    report.ok = false;
-  }
+  if (!report.checks.hasTextGroup || !report.checks.textLayersEditable) report.ok = false;
 
   return report;
 }

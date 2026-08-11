@@ -26,7 +26,7 @@ try:
 except ValueError:
     PARENT_PID = 0
 
-# Where downloaded models are cached (manga-ocr, detector, optional FLUX).
+# Where downloaded models are cached (manga-ocr, detector, panel YOLO).
 MODEL_DIR = Path(os.environ.get("MT_MODEL_DIR", Path.home() / ".mangatypesetter" / "models"))
 
 

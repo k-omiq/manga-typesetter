@@ -1,15 +1,8 @@
 <script>
-  // Settings. Model management (opt-in FLUX install + cache), the default export
-  // directory, and sidecar controls. Reuses the sidecar bridges + Tauri dialog.
+  // Settings. Model cache, the default export directory, and sidecar controls.
+  // Reuses the sidecar bridges + Tauri dialog.
   import { app, saveExportPrefs, toast } from './store.svelte.js';
-  import {
-    refreshFluxStatus,
-    downloadFlux,
-    checkSidecar,
-    modelsCacheInfo,
-    clearModelsCache,
-    restartSidecar,
-  } from './sidecar.js';
+  import { checkSidecar, modelsCacheInfo, clearModelsCache, restartSidecar } from './sidecar.js';
 
   let { open = $bindable() } = $props();
 
@@ -85,13 +78,11 @@
     }
   }
 
-  // Refresh live sidecar + model status + cache size each time the panel opens.
+  // Refresh live sidecar status + cache size each time the panel opens.
   $effect(() => {
     if (open) {
       confirmClear = false;
-      pickerInit = false; // re-seed the model picker from the latest persisted selection
       checkSidecar();
-      refreshFluxStatus();
       loadCache();
     }
   });
@@ -107,121 +98,6 @@
           : 'Checking…',
   );
 
-  // ---- FLUX model picker (mirrors MangaTranslator's choices) --------------
-  // The chosen model; initialised from the persisted selection (or the
-  // catalogue default) the first time the panel opens with data loaded.
-  let selection = $state({ family: 'klein', variant: '4b', backend: 'sdnq', quant: '', quality: 'balanced' });
-  let hfToken = $state('');
-  let pickerInit = $state(false);
-
-  const families = $derived(app.flux.catalogue?.families ?? []);
-  const qualities = $derived(app.flux.catalogue?.qualities ?? []);
-  const currentFamily = $derived(
-    families.find((f) => f.family === selection.family && f.variant === selection.variant) ?? families[0] ?? null,
-  );
-  const backends = $derived(currentFamily?.backends ?? []);
-  const quants = $derived(currentFamily?.quants ?? []);
-  const showQuant = $derived(selection.backend === 'sdcpp'); // only sdcpp/GGUF picks a quant
-  const needsToken = $derived(!!currentFamily?.gated); // Klein 9B is a gated repo
-
-  // Friendly backend names + one-line hints (the catalogue emits raw keys).
-  const BACKEND_LABEL = { mlx: 'MLX — fastest on Apple Silicon', sdnq: 'SDNQ (Diffusers)', sdcpp: 'sd.cpp (GGUF)' };
-  const backendLabel = (b) => BACKEND_LABEL[b] ?? b.toUpperCase();
-  const BACKEND_HINT = {
-    mlx: 'Native Metal — ~4–5× faster and roughly half the RAM of SDNQ. Apple Silicon only.',
-    sdnq: 'Cross-platform (CUDA / Windows / Linux / Mac). Heavier on Apple Silicon.',
-    sdcpp: 'GGUF backend — pick a quant below.',
-  };
-  const backendHint = $derived(BACKEND_HINT[selection.backend] ?? '');
-
-  const persisted = $derived(app.flux.model);
-  const selectionChanged = $derived(
-    !persisted ||
-      persisted.family !== selection.family ||
-      (persisted.variant ?? '') !== (selection.variant ?? '') ||
-      persisted.backend !== selection.backend ||
-      (persisted.quality ?? 'balanced') !== selection.quality ||
-      (showQuant && (persisted.quant ?? '') !== (selection.quant ?? '')),
-  );
-
-  // uv drives provisioning; without it (e.g. browser / no uv on a source run) the
-  // external env can't be built. The in-process dev path can still be "available".
-  const canProvision = $derived(app.flux.uvAvailable !== false);
-  const fluxState = $derived(
-    app.flux.downloading
-      ? 'installing'
-      : app.flux.checking
-        ? 'checking'
-        : app.flux.available
-          ? 'ready'
-          : !canProvision
-            ? 'unavailable'
-            : 'missing',
-  );
-  const fluxLabel = $derived(
-    {
-      installing: 'Provisioning…',
-      checking: 'Checking…',
-      ready: 'Installed',
-      unavailable: 'Unavailable',
-      missing: 'Not installed',
-    }[fluxState],
-  );
-  // How it runs, for the subtitle: external uv env vs in-process dev deps.
-  const fluxHow = $derived(
-    app.flux.envProvisioned
-      ? app.flux.process?.running
-        ? 'External env · running'
-        : 'External env'
-      : app.flux.inProcess
-        ? 'In-process (dev)'
-        : '',
-  );
-
-  function initPicker() {
-    const m = app.flux.model ?? app.flux.catalogue?.default;
-    if (!m) return;
-    selection = {
-      family: m.family,
-      variant: m.variant ?? '',
-      backend: m.backend,
-      quant: m.quant ?? '',
-      quality: m.quality ?? 'balanced',
-    };
-    pickerInit = true;
-  }
-
-  // Populate the picker once catalogue/model data is in.
-  $effect(() => {
-    if (open && !pickerInit && app.flux.catalogue) initPicker();
-  });
-
-  function onFamilyChange(e) {
-    const [family, variant = ''] = e.target.value.split(':');
-    const fam = families.find((f) => f.family === family && f.variant === variant);
-    const backend = fam?.backends?.includes(selection.backend) ? selection.backend : (fam?.backends?.[0] ?? 'sdnq');
-    selection = {
-      ...selection,
-      family,
-      variant,
-      backend,
-      quant: backend === 'sdcpp' ? (fam?.default_quant ?? '') : '',
-    };
-  }
-
-  function onBackendChange(e) {
-    const backend = e.target.value;
-    selection = {
-      ...selection,
-      backend,
-      quant: backend === 'sdcpp' ? selection.quant || currentFamily?.default_quant || '' : '',
-    };
-  }
-
-  function onDownloadFlux() {
-    const sel = { ...selection, quant: showQuant ? selection.quant : '' };
-    downloadFlux(sel, hfToken.trim());
-  }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
@@ -252,134 +128,6 @@
       </div>
 
       <div class="group-label">Models</div>
-
-      <!-- MangaTranslator FLUX AI redraw (opt-in, model of your choice) -->
-      <div class="model-card">
-        <div class="mc-top">
-          <div class="mc-title">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l2.09 6.26L20 9.27l-5 3.64L16.18 21 12 17.27 7.82 21 9 12.91l-5-3.64 5.91.01z" /></svg>
-            <div>
-              <div class="mc-name">AI Redraw — MangaTranslator FLUX</div>
-              <div class="mc-sub">
-                {currentFamily?.label ?? 'FLUX'} · {selection.backend?.toUpperCase()}{#if showQuant && selection.quant}
-                  · {selection.quant}{/if}{#if fluxHow}
-                  · {fluxHow}{/if}
-              </div>
-            </div>
-          </div>
-          <span class="tag {fluxState}">{fluxLabel}</span>
-        </div>
-
-        <p class="mc-desc">
-          Diffusion inpainting that redraws artwork behind removed text — powers the
-          <b>AI redraw</b> clean modes and the <b>AI Remove</b> brush. Optional: OpenCV Telea/NS
-          cleans without it. On Apple Silicon the <b>MLX</b> backend is the fast, low-RAM native-Metal
-          path. Runs in a separate, opt-in environment installed on demand; the multi-GB model
-          weights stream from HuggingFace on first use.
-        </p>
-
-        <!-- Model picker (same choices MangaTranslator offers) -->
-        <div class="picker">
-          <label class="field">
-            <span>Model</span>
-            <select value={`${selection.family}:${selection.variant}`} onchange={onFamilyChange} disabled={app.flux.downloading || !families.length}>
-              {#each families as f}
-                <option value={`${f.family}:${f.variant}`}>{f.label}</option>
-              {/each}
-            </select>
-          </label>
-          <label class="field">
-            <span>Backend</span>
-            <select value={selection.backend} onchange={onBackendChange} disabled={app.flux.downloading || !backends.length}>
-              {#each backends as b}
-                <option value={b}>{backendLabel(b)}</option>
-              {/each}
-            </select>
-          </label>
-          {#if showQuant}
-            <label class="field">
-              <span>Quant</span>
-              <select bind:value={selection.quant} disabled={app.flux.downloading || !quants.length}>
-                {#each quants as q}
-                  <option value={q}>{q}</option>
-                {/each}
-              </select>
-            </label>
-          {/if}
-        </div>
-
-        {#if backendHint}
-          <div class="mc-backend-hint">{backendHint}</div>
-        {/if}
-
-        <!-- Quality ↔ speed. Matters most on Apple Silicon (no Triton → slow). -->
-        {#if qualities.length}
-          <div class="field wide">
-            <span>Speed vs quality <em class="hint">— {qualities.find((q) => q.key === selection.quality)?.detail ?? ''}</em></span>
-            <div class="seg">
-              {#each qualities as q}
-                <button
-                  type="button"
-                  class:on={selection.quality === q.key}
-                  disabled={app.flux.downloading}
-                  title={q.detail}
-                  onclick={() => (selection.quality = q.key)}
-                >
-                  {q.label}
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
-
-        {#if needsToken}
-          <label class="field wide">
-            <span>HuggingFace token <em>(required — {currentFamily?.label} is a gated repo)</em></span>
-            <input type="password" placeholder="hf_…" bind:value={hfToken} disabled={app.flux.downloading} autocomplete="off" spellcheck="false" />
-          </label>
-        {/if}
-
-        {#if app.flux.reason && (fluxState === 'missing' || fluxState === 'unavailable')}
-          <div class="mc-reason">
-            {#if fluxState === 'unavailable'}<b>Can't provision:</b> {/if}{app.flux.reason}
-          </div>
-        {/if}
-
-        <div class="mc-actions">
-          <button
-            class="btn primary"
-            disabled={!sidecarOk ||
-              app.flux.downloading ||
-              !canProvision ||
-              (needsToken && !hfToken.trim()) ||
-              (app.flux.available && !selectionChanged)}
-            onclick={onDownloadFlux}
-          >
-            {#if app.flux.downloading}
-              Provisioning…
-            {:else if !app.flux.envProvisioned && !app.flux.inProcess}
-              Download &amp; Install
-            {:else if selectionChanged}
-              Apply &amp; install
-            {:else}
-              Installed ✓
-            {/if}
-          </button>
-          <button class="btn" disabled={!sidecarOk || app.flux.downloading || app.flux.checking} onclick={refreshFluxStatus}>
-            Recheck
-          </button>
-        </div>
-
-        {#if !sidecarOk}
-          <div class="qhint">The sidecar isn't running — model install needs the desktop app.</div>
-        {:else if app.flux.downloading}
-          <div class="qhint">Provisioning the {selection.backend === 'mlx' ? 'MLX (mflux) environment' : 'FLUX environment (torch/diffusers)'} and downloading the model. This can take several minutes; you can keep working.</div>
-        {:else if needsToken && !hfToken.trim()}
-          <div class="qhint">{currentFamily?.label} is a gated model — paste a HuggingFace token above to enable install.</div>
-        {:else if selectionChanged && app.flux.available}
-          <div class="qhint">Model choice changed — click <b>Apply &amp; install</b> to switch{selection.backend === 'mlx' ? ' (installs the MLX backend on first use)' : ''}. Weights stream on the next AI clean.</div>
-        {/if}
-      </div>
 
       <!-- Detection/OCR models (auto-managed, read-only) -->
       <div class="model-card muted">
@@ -423,9 +171,8 @@
         {/if}
 
         <p class="mc-desc">
-          Downloaded weights (FLUX redraw model, detector/OCR). Clearing frees disk;
-          the weights re-download on next use. This does <b>not</b> uninstall the FLUX
-          dependencies above.
+          Downloaded detector/OCR weights. Clearing frees disk; they re-download
+          on the next <b>Detect</b>.
         </p>
 
         <div class="mc-actions">
@@ -555,93 +302,10 @@
     color: var(--muted);
     margin: 10px 0 0;
   }
-  .mc-reason {
-    font-size: 11.5px;
-    color: #e0a87f;
-    margin-top: 8px;
-    font-family: ui-monospace, monospace;
-  }
-  .mc-backend-hint {
-    font-size: 11.5px;
-    color: var(--muted, #9aa);
-    margin-top: 6px;
-    line-height: 1.4;
-  }
   .mc-actions {
     display: flex;
     gap: 8px;
     margin-top: 12px;
-  }
-  .picker {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 12px;
-  }
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 11.5px;
-    color: var(--muted);
-    flex: 1;
-    min-width: 120px;
-  }
-  .field.wide {
-    margin-top: 10px;
-    flex-basis: 100%;
-  }
-  .field em {
-    font-style: normal;
-    color: #e0a87f;
-  }
-  .field select,
-  .field input {
-    padding: 6px 8px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text);
-    font: inherit;
-    font-size: 12.5px;
-  }
-  .field select:disabled,
-  .field input:disabled {
-    opacity: 0.5;
-  }
-  .field .hint {
-    font-style: normal;
-    color: var(--muted);
-  }
-  .seg {
-    display: flex;
-    gap: 0;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-    width: fit-content;
-  }
-  .seg button {
-    padding: 6px 14px;
-    border: none;
-    border-right: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--muted);
-    font: inherit;
-    font-size: 12.5px;
-    cursor: pointer;
-  }
-  .seg button:last-child {
-    border-right: none;
-  }
-  .seg button.on {
-    background: var(--accent, #4b7bec);
-    color: #fff;
-    font-weight: 600;
-  }
-  .seg button:disabled {
-    opacity: 0.5;
-    cursor: default;
   }
   .tag {
     flex: none;
@@ -654,15 +318,6 @@
     background: #2b2f3a;
     color: #b9c0d0;
     height: fit-content;
-  }
-  .tag.ready {
-    background: #1f3d2b;
-    color: #7fe0a3;
-  }
-  .tag.installing,
-  .tag.checking {
-    background: #3a2f1f;
-    color: #e0c07f;
   }
   .tag.auto {
     background: #24304a;
@@ -677,12 +332,6 @@
     font: inherit;
     font-size: 12.5px;
     cursor: pointer;
-  }
-  .btn.primary {
-    background: var(--accent, #4b7bec);
-    border-color: var(--accent, #4b7bec);
-    color: #fff;
-    font-weight: 600;
   }
   .btn.sm {
     margin-left: auto;

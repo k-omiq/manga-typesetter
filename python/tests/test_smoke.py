@@ -3,9 +3,9 @@
 Deliberately import-only: these run with just the base ``requirements.txt`` (plus
 ``httpx`` for the TestClient) and must NOT pull in the heavy ML stack
 (torch/opencv/manga-ocr) or the ``external/`` vendor trees, which CI does not
-install. That works because ``sidecar.main`` imports ``detect``/``clean``/
-``flux``/``translate``/``models`` *lazily inside the route handlers*, so building
-the app and hitting the metadata routes touches none of them.
+install. That works because ``sidecar.main`` imports ``detect``/``models``
+*lazily inside the route handlers*, so building the app and hitting the metadata
+routes touches none of them.
 """
 
 from __future__ import annotations
@@ -39,18 +39,10 @@ def test_token_gate(monkeypatch):
     job.
     """
     monkeypatch.setattr(config, "TOKEN", "secret-token")
-    # raise_server_exceptions=False: with the header accepted, the handler's lazy
-    # translate import may fail in the light CI env (no external/ vendor tree) and
-    # 500 — we only care that the gate let it *past* (not 401), so surface that as
-    # a status code instead of re-raising.
     client = TestClient(main.create_app(), raise_server_exceptions=False)
 
     assert client.get("/health").status_code == 200  # health is exempt
     # A protected route without the header is rejected by the middleware.
-    assert client.get("/translate/providers").status_code == 401
-    # ...and accepted past the gate with the right header (may then be 5xx if the
-    # optional ML deps/vendor tree are absent, but it must not be a 401).
-    assert (
-        client.get("/translate/providers", headers={"x-mt-token": "secret-token"}).status_code
-        != 401
-    )
+    assert client.get("/models/cache").status_code == 401
+    # ...and accepted past the gate with the right header.
+    assert client.get("/models/cache", headers={"x-mt-token": "secret-token"}).status_code == 200

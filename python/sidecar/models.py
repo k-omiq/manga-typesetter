@@ -1,21 +1,11 @@
 """Model cache inspection + clearing for the Settings panel.
 
-Reports the on-disk footprint of the downloaded model weights and can free them.
-Two cache roots are known to the sidecar:
+Reports the on-disk footprint of the downloaded detection/OCR weights and can
+free them. Everything the sidecar downloads (comic-text-detector, manga-ocr, the
+panel YOLO) caches under ``config.MODEL_DIR``
+(``~/.mangatypesetter/models`` by default).
 
-- The MangaTranslator model manager writes FLUX weights (and any bubble/YOLO
-  models it fetches) to ``./models`` resolved against the process CWD — for the
-  sidecar spawned by the app that's ``python/models`` (multi-GB, gitignored).
-  Mirrors ``core/ml/model_manager.py``'s ``Path("./models").resolve()``.
-- The detector / OCR / panel models cache under ``config.MODEL_DIR``
-  (``~/.mangatypesetter/models`` by default).
-
-"Clear cache" deletes the *downloaded weights* in these roots; it does NOT
-uninstall the optional FLUX python deps (that's the Settings "Download & Install"
-path). Weights re-download lazily on next use. Note: clearing while a FLUX
-inpainter is loaded only frees disk — the in-memory model stays until the sidecar
-restarts; an in-flight clean that still needs to stream weights could fail, so it
-is a user-initiated action surfaced behind an explicit button.
+"Clear cache" deletes those weights; they re-download lazily on the next Detect.
 """
 
 from __future__ import annotations
@@ -28,20 +18,8 @@ from . import config
 
 
 def _cache_dirs() -> list[Path]:
-    """The model-cache roots the sidecar knows about, de-duplicated.
-
-    ``./models`` and ``config.MODEL_DIR`` can coincide (e.g. when the sidecar is
-    launched from ``python/`` with ``MT_MODEL_DIR`` pointing there), so collapse
-    to unique resolved paths to avoid double-counting sizes.
-    """
-    candidates = [Path("./models").resolve(), config.MODEL_DIR.resolve()]
-    seen: set[Path] = set()
-    uniq: list[Path] = []
-    for d in candidates:
-        if d not in seen:
-            seen.add(d)
-            uniq.append(d)
-    return uniq
+    """The model-cache roots the sidecar knows about."""
+    return [config.MODEL_DIR.resolve()]
 
 
 def _dir_size(path: Path) -> int:
@@ -75,7 +53,7 @@ def clear_cache() -> dict:
 
     Returns which roots were cleared, the freed byte count, and any errors. The
     sidecar's own ``MODEL_DIR`` is recreated afterwards so ``ensure_dirs``
-    invariants hold for the next detect/clean.
+    invariants hold for the next detect.
     """
     freed = 0
     cleared: list[str] = []
