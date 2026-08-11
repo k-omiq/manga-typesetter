@@ -1035,7 +1035,7 @@ export async function deleteChapter(projectId, chapterId) {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `npm test src/lib/library.test.js`
-Expected: PASS — 8 tests.
+Expected: PASS — 7 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1224,7 +1224,7 @@ export async function createChapter({ projectId, number, title, files }) {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `npm test src/lib/library.test.js`
-Expected: PASS — 11 tests.
+Expected: PASS — 10 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1395,7 +1395,7 @@ setLeaveEditorHook(async () => {
 - [ ] **Step 5: Verify the existing tests still pass**
 
 Run: `npm test`
-Expected: PASS — 20 tests. The `library.test.js` mock already stubs `readFile`/`writeFile`, and `openChapter` is not exercised there.
+Expected: PASS — 31 tests (12 paths, 9 route, 10 library). The `library.test.js` mock already stubs `readFile`/`writeFile`, and `openChapter` is not exercised there.
 
 - [ ] **Step 6: Commit**
 
@@ -2116,7 +2116,7 @@ Append the new rules to `src/styles.css`:
 - [ ] **Step 6: Verify the whole suite still passes**
 
 Run: `npm test`
-Expected: PASS — 20 tests.
+Expected: PASS — 31 tests.
 
 - [ ] **Step 7: Verify the app end to end**
 
