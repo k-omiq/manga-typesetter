@@ -35,7 +35,8 @@ untouched. No change is required there for this defect.
 ## Goals
 
 1. A page with no typeset boxes exports byte-for-byte identical to its source.
-2. A page with typeset boxes exports greyscale when its source was greyscale.
+2. A page with typeset boxes keeps its source's colour type and bit depth, and every pixel the text
+   does not cover stays bit-exact.
 3. PSD export produces a greyscale document for greyscale sources, keeping editable type layers.
 4. ICC profiles survive PNG export.
 
@@ -77,25 +78,54 @@ In `renderPageBlob`, before any canvas exists:
 This is the common case for a raws-only chapter, and it is exact by construction rather than by
 careful re-encoding.
 
-### 3. Grey-aware PNG encoding for composited pages
+### 3. Off-canvas compositing for pages that carry text
 
-When a page does have boxes, compositing on canvas is unavoidable — that is where the text is drawn.
-The change is at the encode step, replacing `canvas.toBlob` for PNG:
+The text has to be drawn on a canvas — that is what canvas is for, and matching the editor's
+rendering exactly is a hard requirement. The **page pixels** do not. Routing them through canvas is
+what destroys colour type and bit depth, and it is avoidable.
 
-1. Read the composite as `ImageData`.
-2. Scan for chromacity: any pixel where `R !== G || G !== B` marks the page chromatic (early exit on
-   the first hit). This catches coloured text, coloured shadows, and chromatic source pixels in one
-   pass, rather than trying to infer them from style fields.
-3. If the source was greyscale **and** the composite is achromatic, encode 1-channel (or 2-channel
-   with alpha) 8-bit PNG via `fast-png`. Otherwise encode RGB/RGBA as today.
-4. Splice the captured `iCCP` / `sRGB` / `gAMA` / `cHRM` chunks back in after IHDR. PNG chunks are
-   length + type + data + CRC32, so this is a small self-contained helper — no dependency for it.
+```
+raw bytes ──fast-png decode──> native buffer (e.g. 16-bit, 1 channel, ICC held aside)
+text boxes ──canvas─────────-> RGBA8 transparent overlay, text only
+                    │
+            composite in typed arrays at the source's native depth
+                    │
+        fast-png encode(depth, channels) + splice ancillary chunks
+```
 
-`fast-png` is the only new runtime dependency, and only because canvas cannot emit 1-channel PNG.
+Steps:
 
-**Accepted limitation:** JPG and WebP composited output stays RGB. Canvas cannot emit greyscale JPEG,
-and both are lossy delivery formats rather than archival ones. Passthrough still makes untouched
-pages exact in those formats. PNG is the archival path.
+1. **Decode the page at native fidelity.** PNG sources decode with `fast-png`, which returns the
+   original depth (8 or 16) and channel count (1–4). Browser canvas decoding truncates 16-bit to
+   8-bit, which is precisely why the decode cannot happen there.
+2. **Render text only.** A transparent canvas sized to the page, carrying the box layers and nothing
+   else — no white base fill, no page image. Output is RGBA8.
+3. **Scan the overlay for chromacity.** Any pixel where `R !== G || G !== B` at non-zero alpha marks
+   the overlay chromatic (early exit on first hit). This catches coloured text and coloured shadows
+   without trying to infer them from style fields.
+4. **Composite in typed arrays** at the source's depth: `out = src·(1−α) + text·α`, with α from the
+   overlay and `text` taken as luma when the destination is single-channel. Where α is 0 the source
+   value is copied, not recomputed — so every pixel the text does not touch is bit-exact.
+5. **Encode** with `fast-png` at the source's depth and channel count. Promote to RGB only when the
+   source was chromatic or the overlay is.
+6. **Splice** the captured `iCCP` / `sRGB` / `gAMA` / `cHRM` chunks back in after IHDR. `fast-png`
+   writes no ICC, and PNG chunks are length + type + data + CRC32, so this is a small self-contained
+   helper — no dependency for it.
+
+Consequences worth stating explicitly:
+
+- 16-bit greyscale survives typesetting, not just passthrough.
+- The `#ffffff` `fillRect` at `src/lib/exporter.js:245` is removed from the PNG path. It is a second,
+  independent cause of RGB output — an opaque white RGB base behind every page. JPG keeps it, having
+  no alpha.
+- Only pixels actually under a glyph differ from the source at all.
+
+`fast-png` is the only new runtime dependency.
+
+**Accepted limitation:** JPG and WebP composited output stays RGB, and greyscale JPEG sources decode
+through canvas rather than natively. JPEG is 8-bit regardless, and a greyscale JPEG decodes to
+exactly `R === G === B`, so nothing is lost that the chromacity scan does not already catch. Both are
+lossy delivery formats; PNG is the archival path.
 
 ### 4. Greyscale PSD export
 
@@ -132,10 +162,13 @@ creation is the archival original.
 
 ### 6. 16-bit sources
 
-Canvas is 8-bit, so any composited page is 8-bit whatever we do. Passthrough (§2) preserves 16-bit
-exactly. When a 16-bit page carries boxes, export proceeds at 8-bit and a toast names the loss, once
-per export run rather than per page. PSD export is likewise 8-bit — `ag-psd` cannot do otherwise, and
-the patch does not change that.
+PNG export preserves 16-bit in both paths: untouched pages by passthrough (§2), typeset pages by the
+off-canvas compositor (§3). The text overlay is 8-bit, which only bounds the blend precision inside
+glyph coverage; untouched pixels keep their full 16-bit values.
+
+PSD export remains 8-bit. `ag-psd`'s data model is 8-bit `ImageData` from end to end, so 16-bit there
+is a rewrite of the library rather than the four-site patch in §4. Exporting a 16-bit page to PSD
+warns once per export run, naming the loss and pointing at PNG.
 
 ## Error handling
 
@@ -156,20 +189,26 @@ Unit (Vitest, introduced in the slice 1 spec):
   grey+alpha, indexed.
 - Chunk splicer: `iCCP` survives a round-trip and CRCs validate.
 - Chromacity scan: all-grey, single chromatic pixel, chromatic only in the alpha-zero region.
+- Compositor: with an all-zero-alpha overlay the output buffer equals the input buffer exactly, at
+  both 8-bit and 16-bit; with full-alpha coverage the output equals the overlay luma; 16-bit values
+  outside glyph coverage are unchanged, not rounded through 8-bit.
 
 Manual acceptance:
 
 - Export an untouched greyscale page → `cmp` against the source reports identical.
 - Typeset the same page, export PNG → `identify -verbose` reports `Type: Grayscale`, ICC intact.
+- Typeset a 16-bit greyscale page, export PNG → still `16-bit Grayscale`; pixels outside the text
+  match the source exactly.
 - Typeset with red text → falls back to RGB, no crash, no silently wrong grey.
 - PSD export of a greyscale page → opens in Photoshop as Grayscale, type layers still editable, our
   own importer round-trips it.
-- 16-bit greyscale page with boxes → warns once, exports 8-bit.
+- 16-bit greyscale page exported to PSD → warns once, exports 8-bit.
 
 ## Acceptance
 
 1. Untouched pages export byte-identical to source in their native format.
-2. Typeset greyscale pages export as greyscale PNG with ICC preserved.
-3. Greyscale PSD export opens as a Grayscale document with editable type layers.
-4. Any chromatic content falls back to RGB automatically, with no user action.
-5. No change to sidecar or Rust behaviour.
+2. Typeset greyscale pages export as greyscale PNG at the source's bit depth, ICC preserved.
+3. On a typeset page, every pixel outside glyph coverage is bit-identical to the source.
+4. Greyscale PSD export opens as a Grayscale document with editable type layers.
+5. Any chromatic content falls back to RGB automatically, with no user action.
+6. No change to sidecar or Rust behaviour.
