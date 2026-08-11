@@ -238,12 +238,24 @@ export async function renderPageCanvas(p, scale = 1) {
   // white base (JPG has no alpha; manga pages are white anyway)
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
+  // Background priority: the flattened cleaned page if one exists, otherwise the
+  // live clean composite (raw + visible patch layers) exactly as the editor
+  // shows it in clean mode. Without the raw fallback, any page that was never
+  // flattened into `p.cleaned` — the common case in raws-only Clean mode —
+  // exported as a blank white sheet.
   if (p.cleaned) {
     try {
       const img = await loadImage(p.cleaned);
       ctx.drawImage(img, 0, 0, W, H);
     } catch {
       /* draw text on white if image fails */
+    }
+  } else if (p.raw || p.clean?.base) {
+    try {
+      const comp = await compositeCleanCanvas(p);
+      ctx.drawImage(comp, 0, 0, W, H);
+    } catch {
+      /* draw text on white if the composite fails */
     }
   }
   ctx.imageSmoothingQuality = 'high'; // crisp downscale of the supersampled text
@@ -265,6 +277,11 @@ function paintBoxOnPage(ctx, box, p) {
   const s = box.style;
   const rot = s.rotation || 0;
   const opaque = (s.opacity ?? 1) >= 0.999;
+  // Mirror flip around the box center, applied INSIDE rotation to match the
+  // editor (rotation on .tbox, flip on the inner text → rotate ∘ flip).
+  const fx = s.flipH ? -1 : 1;
+  const fy = s.flipV ? -1 : 1;
+  const flipped = fx !== 1 || fy !== 1;
   if (rot !== 0 && !s.roughen.on && opaque) {
     // Rotated text: paint glyphs DIRECTLY at the angle so they rasterize sharp
     // (rotating a pre-rendered bitmap would resample and soften it). Pivot
@@ -275,6 +292,7 @@ function paintBoxOnPage(ctx, box, p) {
     ctx.save();
     ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
     ctx.rotate((rot * Math.PI) / 180);
+    if (flipped) ctx.scale(fx, fy);
     ctx.translate(-box.w / 2 - L.ox, -box.h / 2 - L.oy);
     paintBox(ctx, box, L);
     ctx.restore();
@@ -285,13 +303,24 @@ function paintBoxOnPage(ctx, box, p) {
       // force a bilinear resample of the whole text block (the primary blur).
       const originX = Math.round(box.x - leftExtra - pad);
       const originY = Math.round(box.y - topExtra - pad);
-      ctx.drawImage(bc, originX, originY, cw, ch);
+      if (flipped) {
+        // Mirror the bitmap around the box center.
+        ctx.save();
+        ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
+        ctx.scale(fx, fy);
+        ctx.translate(-(box.x + box.w / 2), -(box.y + box.h / 2));
+        ctx.drawImage(bc, originX, originY, cw, ch);
+        ctx.restore();
+      } else {
+        ctx.drawImage(bc, originX, originY, cw, ch);
+      }
     } else {
       // Rotated raster fallback (roughened/translucent): downsample the SSx
       // bitmap into its native footprint, pivoting at the box center.
       ctx.save();
       ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
       ctx.rotate((rot * Math.PI) / 180);
+      if (flipped) ctx.scale(fx, fy);
       ctx.drawImage(bc, -(box.w / 2 + leftExtra + pad), -(box.h / 2 + topExtra + pad), cw, ch);
       ctx.restore();
     }
@@ -395,20 +424,30 @@ function canvasToBlob(canvas, fmt = 'PNG') {
   return new Promise((res) => canvas.toBlob(res, MIME[fmt], QUALITY[fmt]));
 }
 
-// Bake the clean composite (raw + visible patch layers) into p.cleaned so the
-// cleaning actually feeds translate mode and the exporter (both read p.cleaned).
-// Without this, auto/brush clean layers only ever render in clean mode.
+// Bake one page's clean composite (raw + visible patch layers) into p.cleaned.
+// No toast/markUnsaved — the caller owns user feedback so this can run silently
+// in a whole-chapter loop. Returns true if a cleaned image was written.
+async function bakeCleaned(p) {
+  if (!p.raw && !p.clean?.base) return false;
+  const canvas = await compositeCleanCanvas(p);
+  const blob = await canvasToBlob(canvas, 'PNG');
+  if (!blob) return false;
+  if (p.cleaned && p.cleaned.startsWith('blob:')) URL.revokeObjectURL(p.cleaned);
+  p.cleaned = URL.createObjectURL(blob);
+  return true;
+}
+
+// Bake the clean composite into p.cleaned so the cleaning actually feeds translate
+// mode and the exporter (both read p.cleaned). Without this, auto/brush clean
+// layers only ever render in clean mode.
 export async function flattenClean(p = page()) {
   if (!p.raw && !p.clean?.base) {
     toast('No raw page to flatten');
     return false;
   }
   try {
-    const canvas = await compositeCleanCanvas(p);
-    const blob = await canvasToBlob(canvas, 'PNG');
-    if (!blob) throw new Error('encode failed');
-    if (p.cleaned && p.cleaned.startsWith('blob:')) URL.revokeObjectURL(p.cleaned);
-    p.cleaned = URL.createObjectURL(blob);
+    const ok = await bakeCleaned(p);
+    if (!ok) throw new Error('encode failed');
     markUnsaved();
     const n = (p.clean?.layers ?? []).filter((l) => l.visible).length;
     toast(`Flattened ${n} clean layer(s) → cleaned page`);
@@ -417,6 +456,21 @@ export async function flattenClean(p = page()) {
     toast('Flatten failed: ' + (e?.message || e));
     return false;
   }
+}
+
+// Bake every page in the chapter (used by the "finish cleaning" hand-off). Returns
+// the count of pages that produced a cleaned image.
+export async function flattenAllClean() {
+  let n = 0;
+  for (const p of app.pages) {
+    try {
+      if (await bakeCleaned(p)) n++;
+    } catch {
+      /* skip a page that fails to composite; keep going */
+    }
+  }
+  if (n) markUnsaved();
+  return n;
 }
 
 // Render one page to a Blob in the requested raster format (native resolution).

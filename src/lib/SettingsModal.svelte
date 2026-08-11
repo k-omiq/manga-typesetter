@@ -124,6 +124,16 @@
   const showQuant = $derived(selection.backend === 'sdcpp'); // only sdcpp/GGUF picks a quant
   const needsToken = $derived(!!currentFamily?.gated); // Klein 9B is a gated repo
 
+  // Friendly backend names + one-line hints (the catalogue emits raw keys).
+  const BACKEND_LABEL = { mlx: 'MLX — fastest on Apple Silicon', sdnq: 'SDNQ (Diffusers)', sdcpp: 'sd.cpp (GGUF)' };
+  const backendLabel = (b) => BACKEND_LABEL[b] ?? b.toUpperCase();
+  const BACKEND_HINT = {
+    mlx: 'Native Metal — ~4–5× faster and roughly half the RAM of SDNQ. Apple Silicon only.',
+    sdnq: 'Cross-platform (CUDA / Windows / Linux / Mac). Heavier on Apple Silicon.',
+    sdcpp: 'GGUF backend — pick a quant below.',
+  };
+  const backendHint = $derived(BACKEND_HINT[selection.backend] ?? '');
+
   const persisted = $derived(app.flux.model);
   const selectionChanged = $derived(
     !persisted ||
@@ -261,10 +271,11 @@
         </div>
 
         <p class="mc-desc">
-          Diffusion inpainting that redraws artwork behind removed text — used by both auto-clean
-          (choose <b>flux</b>) and the brush <b>Fill</b> tool. Optional: OpenCV Telea/NS handles
-          cleaning without it. Runs in a separate, opt-in environment installed on demand; the
-          multi-GB model weights stream from HuggingFace on first use.
+          Diffusion inpainting that redraws artwork behind removed text — powers the
+          <b>AI redraw</b> clean modes and the <b>AI Remove</b> brush. Optional: OpenCV Telea/NS
+          cleans without it. On Apple Silicon the <b>MLX</b> backend is the fast, low-RAM native-Metal
+          path. Runs in a separate, opt-in environment installed on demand; the multi-GB model
+          weights stream from HuggingFace on first use.
         </p>
 
         <!-- Model picker (same choices MangaTranslator offers) -->
@@ -281,7 +292,7 @@
             <span>Backend</span>
             <select value={selection.backend} onchange={onBackendChange} disabled={app.flux.downloading || !backends.length}>
               {#each backends as b}
-                <option value={b}>{b.toUpperCase()}</option>
+                <option value={b}>{backendLabel(b)}</option>
               {/each}
             </select>
           </label>
@@ -296,6 +307,10 @@
             </label>
           {/if}
         </div>
+
+        {#if backendHint}
+          <div class="mc-backend-hint">{backendHint}</div>
+        {/if}
 
         <!-- Quality ↔ speed. Matters most on Apple Silicon (no Triton → slow). -->
         {#if qualities.length}
@@ -345,7 +360,7 @@
             {:else if !app.flux.envProvisioned && !app.flux.inProcess}
               Download &amp; Install
             {:else if selectionChanged}
-              Apply model change
+              Apply &amp; install
             {:else}
               Installed ✓
             {/if}
@@ -358,11 +373,11 @@
         {#if !sidecarOk}
           <div class="qhint">The sidecar isn't running — model install needs the desktop app.</div>
         {:else if app.flux.downloading}
-          <div class="qhint">Provisioning the FLUX environment (downloads torch/diffusers). This can take several minutes; you can keep working.</div>
+          <div class="qhint">Provisioning the {selection.backend === 'mlx' ? 'MLX (mflux) environment' : 'FLUX environment (torch/diffusers)'} and downloading the model. This can take several minutes; you can keep working.</div>
         {:else if needsToken && !hfToken.trim()}
           <div class="qhint">{currentFamily?.label} is a gated model — paste a HuggingFace token above to enable install.</div>
         {:else if selectionChanged && app.flux.available}
-          <div class="qhint">Model choice changed — click <b>Apply model change</b> to switch. New weights stream on the next FLUX clean.</div>
+          <div class="qhint">Model choice changed — click <b>Apply &amp; install</b> to switch{selection.backend === 'mlx' ? ' (installs the MLX backend on first use)' : ''}. Weights stream on the next AI clean.</div>
         {/if}
       </div>
 
@@ -545,6 +560,12 @@
     color: #e0a87f;
     margin-top: 8px;
     font-family: ui-monospace, monospace;
+  }
+  .mc-backend-hint {
+    font-size: 11.5px;
+    color: var(--muted, #9aa);
+    margin-top: 6px;
+    line-height: 1.4;
   }
   .mc-actions {
     display: flex;

@@ -3,7 +3,6 @@
   //  - Cleaning Queue: per-detected-text progress + method badge + retry
   //  - Layers: one editable patch layer per region (toggle / select / redo / delete)
   //  - Brush Tools: manual clean-up (inpaint / clone / paint / erase)
-  import { onMount } from 'svelte';
   import {
     app,
     page,
@@ -25,14 +24,61 @@
   const layers = $derived(p.clean?.layers ?? []);
   const doneCount = $derived(regions.filter((r) => cleanStatus(r.n) === 'done').length);
 
-  let method = $state('telea'); // classical fallback when the AI model isn't installed
+  // Clean method the user picked in the Method dropdown:
+  //   'auto'  → sidecar auto policy (solid → fill, textured → AI redraw)
+  //   'flux'  → AI redraw EVERY region, even flat ones (force AI over the whole page)
+  //   'telea' | 'ns' → force that classical inpaint everywhere (no AI)
+  let cleanMethod = $state('auto');
+  let userPickedMethod = $state(false);
+  // Until the user touches the dropdown, follow availability: default to Auto
+  // (AI redraw) when FLUX is installed, else the Telea classical method.
+  $effect(() => {
+    if (!userPickedMethod) cleanMethod = app.flux.available ? 'auto' : 'telea';
+  });
+
+  // Human label for the installed/selected AI model (from the catalogue).
+  const modelLabel = $derived.by(() => {
+    const fams = app.flux.catalogue?.families ?? [];
+    const m = app.flux.model;
+    const fam =
+      fams.find((f) => f.model_key === m?.model_key) ??
+      fams.find((f) => f.family === m?.family && f.variant === m?.variant);
+    return fam?.label ?? 'FLUX';
+  });
+
+  // Translate the dropdown selection into cleanImage args:
+  //   `flux:true`  → force AI redraw on every region (cleanMethod === 'flux').
+  //   `force`      → stamp an explicit per-region classical method (telea/ns).
+  //   `method`     → the classical fallback used when AI is picked but unavailable.
+  // 'auto' and 'flux' both leave `force` null so the sidecar's per-region policy /
+  // force_ai flag drives the choice.
+  const cleanArgs = () => ({
+    method: cleanMethod === 'ns' ? 'ns' : 'telea',
+    force: cleanMethod === 'auto' || cleanMethod === 'flux' ? null : cleanMethod,
+    flux: cleanMethod === 'flux',
+  });
 
   const METHODS = ['fill', 'telea', 'ns', 'flux'];
   const jpFor = (n) => lineByN(p, n)?.jp ?? '';
 
+  // ? help-icon copy (rendered via the app's [data-tip] tooltip mechanism).
+  const HELP = {
+    clean:
+      'Cleaning erases the detected text from the artwork. Solid areas (speech bubbles, boxes) are filled with the surrounding colour; textured art is redrawn by the AI model when installed, otherwise a classical inpaint (Telea / Navier–Stokes) fills it.',
+    method:
+      'Auto lets each region choose: solid → fill, textured → AI redraw. “AI redraw — every region” forces the AI model on all text, even flat bubbles (slower, best when the whole page is over art). Telea / Navier–Stokes force a classical inpaint everywhere (no AI) — faster, but weaker on detailed backgrounds.',
+    layers:
+      'Every cleaned region becomes its own patch layer over the raw page. Toggle its eye to compare, re-clean it with another method (incl. AI/FLUX), or delete it. Bake / Flatten composites the visible patches into the page image.',
+    brush:
+      'Manual touch-ups: Heal (fast content-aware fill), AI Remove (paint over anything the scan missed — the AI redraws it), Clone (Alt-click a source, then stamp), Paint (solid / eyedropped colour) and Erase (subtract from the selected layer). Size and Hardness set the brush.',
+  };
+
   // Phase 4 brush tools. Each entry: [id, label, one-line hint].
+  //  - inpaint  = fast classical content-aware fill (optional FLUX opt-in)
+  //  - airemove = always AI: paint over artefacts the scan missed, model redraws them
   const BRUSH_TOOLS = [
-    ['inpaint', 'Fill', 'Content-aware fill (sidecar inpaint)'],
+    ['inpaint', 'Heal', 'Fast content-aware fill (classical inpaint)'],
+    ['airemove', 'AI Remove', 'Paint over anything the scan missed — the AI redraws it'],
     ['clone', 'Clone', 'Alt-click to set a source, then paint to stamp'],
     ['fill', 'Paint', 'Solid colour — Alt-click canvas to eyedrop'],
     ['erase', 'Erase', 'Subtract from the selected layer (non-destructive)'],
@@ -40,8 +86,20 @@
   const brushHint = $derived(BRUSH_TOOLS.find((t) => t[0] === app.brush.tool)?.[2] ?? '');
   let flattening = $state(false);
 
-  onMount(() => {
-    refreshFluxStatus();
+  // The sidecar child lags /health by a few seconds, and the FLUX status GET has
+  // no retry — so a single onMount check races the boot and leaves the panel
+  // stuck on "AI not installed". Re-check whenever the sidecar transitions to
+  // ready (and once on mount if it already is), guarding against re-running for
+  // the same ready session.
+  let checkedForReady = $state(false);
+  $effect(() => {
+    const ready = app.sidecar?.status === 'ok';
+    if (ready && !checkedForReady) {
+      checkedForReady = true;
+      refreshFluxStatus();
+    } else if (!ready) {
+      checkedForReady = false;
+    }
   });
 
   // Brush inpaint has its own FLUX opt-in but shares the availability/install
@@ -103,23 +161,24 @@
 </script>
 
 <div class="rpanel">
-  <!-- Cleaning Queue -->
+  <!-- Clean -->
   <div class="section">
     <div class="section-head">
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6" /></svg>
-      Cleaning Queue
-      <span class="count">{doneCount} / {regions.length} cleaned</span>
+      Clean
+      <span class="help tip-wrap" data-tip={HELP.clean}>?</span>
+      <span class="count">{doneCount} / {regions.length}</span>
     </div>
     <div class="section-body">
       <div class="cleanbar">
-        <button class="btn primary" disabled={app.cleaning || !regions.length} onclick={() => cleanCurrentPage({ method })}>
+        <button class="btn primary" disabled={app.cleaning || !regions.length} onclick={() => cleanCurrentPage(cleanArgs())}>
           {app.cleaning && !app.cleanBatch ? 'Cleaning…' : 'Clean Page'}
         </button>
         <button
           class="btn"
           disabled={app.cleaning || app.pages.length < 2}
-          title="Clean every page in the chapter that has been detected. The AI model stays loaded across pages."
-          onclick={() => cleanAllPages({ method })}
+          title="Clean every detected page in the chapter. The AI model stays loaded across pages."
+          onclick={() => cleanAllPages(cleanArgs())}
         >
           {#if app.cleanBatch}
             Cleaning {app.cleanBatch.done}/{app.cleanBatch.total}…
@@ -127,27 +186,43 @@
             Clean Chapter
           {/if}
         </button>
-        <select bind:value={method} title="Classical fallback used when the AI model isn't installed">
-          <option value="telea">Telea</option>
-          <option value="ns">Navier–Stokes</option>
+      </div>
+
+      <div class="methodrow">
+        <span class="mlabel">Method</span>
+        <span class="help tip-wrap" data-tip={HELP.method}>?</span>
+        <select bind:value={cleanMethod} onchange={() => (userPickedMethod = true)}>
+          <option value="auto" disabled={!app.flux.available}>
+            {app.flux.available ? `Auto — AI on textured (${modelLabel})` : 'Auto — AI not installed'}
+          </option>
+          <option value="flux" disabled={!app.flux.available}>
+            {app.flux.available ? 'AI redraw — every region' : 'AI redraw — not installed'}
+          </option>
+          <option value="telea">Telea (fast, no AI)</option>
+          <option value="ns">Navier–Stokes (no AI)</option>
         </select>
       </div>
+
+      <div class="statusrow" title={app.flux.reason ?? ''}>
+        {#if app.flux.downloading}
+          <span class="spin" aria-hidden="true"></span><span class="stat">Installing AI…</span>
+        {:else if app.flux.available}
+          <span class="stat ok">AI ready ✓</span>
+        {:else if app.flux.checking || !app.sidecar?.status || app.sidecar.status === 'unknown'}
+          <span class="stat dim">Checking AI…</span>
+        {:else if app.sidecar.status !== 'ok'}
+          <span class="stat dim">AI unavailable (sidecar offline)</span>
+        {:else}
+          <span class="stat warn">AI not installed</span>
+          <button class="link" disabled={app.flux.downloading} onclick={() => downloadFlux()}>Install</button>
+        {/if}
+      </div>
+
       {#if app.cleanBatch}
         <div class="batchbar" role="progressbar" aria-valuenow={app.cleanBatch.done} aria-valuemax={app.cleanBatch.total}>
           <div class="batchfill" style="width:{(app.cleanBatch.done / app.cleanBatch.total) * 100}%"></div>
         </div>
       {/if}
-
-      <div class="policy" title={app.flux.reason ?? ''}>
-        Solid areas (bubbles, boxes) → <b>fill</b> · textured art → <b>AI redraw</b>
-        {#if app.flux.downloading}
-          <span class="pstate">· installing AI…</span>
-        {:else if app.flux.available}
-          <span class="pstate ok">· AI ready</span>
-        {:else}
-          <span class="pstate warn">· AI not installed — textured areas use the {method} fallback. Install it in Settings.</span>
-        {/if}
-      </div>
 
       {#if regions.length === 0}
         <div class="qhint">No detected text. Run <b>Detect</b> in the top bar first — cleaning works on the detected regions.</div>
@@ -156,22 +231,12 @@
           {#each regions as r (r.n)}
             {@const st = cleanStatus(r.n)}
             {@const lyr = layerByLine(r.n)}
-            <div class="qrow">
+            <div class="qrow" title={lyr ? `method: ${lyr.method}${lyr.fellBack ? ' (fell back from AI)' : ''} · ring σ ${lyr.ringStd}` : 'not cleaned yet'}>
               <span class="badge">{r.n}</span>
-              <span class="qcol">
-                <span class="preview">{jpFor(r.n) || `region ${r.n}`}</span>
-                {#if lyr}
-                  <span class="meta">
-                    <span class="mbadge {lyr.method}">{lyr.method}</span>
-                    {#if lyr.fellBack}<span class="warn">flux→cv2</span>{/if}
-                    <span class="dim">σ {lyr.ringStd}</span>
-                  </span>
-                {/if}
-              </span>
-              <span class="status">
-                <span class="dot {st}" title={st}></span>
-                <button class="mini" title="Re-clean this region" disabled={app.cleaning || st === 'cleaning'} onclick={() => recleanRegion(r.n, method)}>↻</button>
-              </span>
+              <span class="preview">{jpFor(r.n) || `region ${r.n}`}</span>
+              {#if lyr}<span class="mbadge {lyr.method}">{lyr.method}</span>{/if}
+              <span class="dot {st}" title={st}></span>
+              <button class="mini" title="Re-clean this region" disabled={app.cleaning || st === 'cleaning'} onclick={() => recleanRegion(r.n, cleanMethod)}>↻</button>
             </div>
           {/each}
         </div>
@@ -184,6 +249,7 @@
     <div class="section-head">
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6" /></svg>
       Layers
+      <span class="help tip-wrap" data-tip={HELP.layers}>?</span>
       <span class="count">{layers.length}</span>
     </div>
     <div class="section-body">
@@ -233,6 +299,7 @@
     <div class="section-head">
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6" /></svg>
       Brush Tools
+      <span class="help tip-wrap" data-tip={HELP.brush}>?</span>
     </div>
     <div class="section-body">
       <div class="tools">
@@ -274,6 +341,23 @@
               <span>FLUX</span>
             {/if}
           </label>
+        </div>
+      {/if}
+
+      {#if app.brush.tool === 'airemove'}
+        <div class="statusrow" title={app.flux.reason ?? ''}>
+          {#if app.flux.downloading}
+            <span class="spin" aria-hidden="true"></span><span class="stat">Installing AI…</span>
+          {:else if app.flux.available}
+            <span class="stat ok">AI ready ✓ — paint over leftover text / artefacts</span>
+          {:else if app.flux.checking || !app.sidecar?.status || app.sidecar.status === 'unknown'}
+            <span class="stat dim">Checking AI…</span>
+          {:else if app.sidecar.status !== 'ok'}
+            <span class="stat dim">AI unavailable (sidecar offline)</span>
+          {:else}
+            <span class="stat warn">AI model not installed</span>
+            <button class="link" disabled={app.flux.downloading} onclick={() => downloadFlux()}>Install</button>
+          {/if}
         </div>
       {/if}
 
@@ -374,21 +458,84 @@
     color: var(--text, #e6e8ee);
     cursor: pointer;
   }
-  .policy {
-    font-size: 11px;
-    line-height: 1.5;
+  /* Method picker + AI status line */
+  .methodrow {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 8px;
+  }
+  .mlabel {
+    font-size: 12px;
     color: var(--muted, #8b91a1);
+  }
+  .methodrow select {
+    flex: 1;
+    min-width: 0;
+  }
+  .statusrow {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
     margin-bottom: 10px;
   }
-  .policy b {
-    color: var(--text, #e6e8ee);
-    font-weight: 600;
+  .stat {
+    color: var(--muted, #8b91a1);
   }
-  .pstate.ok {
+  .stat.ok {
     color: #7fe0a3;
   }
-  .pstate.warn {
+  .stat.warn {
     color: #e0a87f;
+  }
+  .link {
+    border: none;
+    background: none;
+    padding: 0;
+    font: inherit;
+    font-size: 11px;
+    color: var(--accent, #4b7bec);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .link:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  /* Small circled ? help icon — reuses the global [data-tip] tooltip. */
+  .help {
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid var(--line, #2b2f3a);
+    color: var(--muted, #8b91a1);
+    font-size: 10px;
+    font-weight: 700;
+    cursor: help;
+    user-select: none;
+  }
+  .help:hover {
+    color: var(--text, #e6e8ee);
+    border-color: var(--muted, #8b91a1);
+  }
+  /* Let help tooltips wrap (the global rule is nowrap, fine for short tips).
+     Left-anchor instead of centring: the panel clips overflow, and a centred
+     230px tip on an icon near the panel's left edge would spill outside it. */
+  :global([data-tip].tip-wrap):hover::after {
+    white-space: normal;
+    width: 210px;
+    line-height: 1.45;
+    left: -12px;
+    transform: none;
+    /* don't inherit the section-head's uppercase/heavy styling */
+    text-transform: none;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-align: left;
   }
   .qlist {
     display: flex;
@@ -428,25 +575,14 @@
     min-width: 18px;
     height: 18px;
   }
-  .qcol {
+  .preview {
     flex: 1;
     min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .preview {
     font-size: 12px;
     color: var(--text, #e6e8ee);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .meta {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 10px;
   }
   .mbadge {
     text-transform: uppercase;
@@ -486,11 +622,6 @@
   }
   .dim {
     color: var(--muted, #8b91a1);
-  }
-  .status {
-    display: flex;
-    align-items: center;
-    gap: 6px;
   }
   .dot {
     width: 9px;

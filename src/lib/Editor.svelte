@@ -200,7 +200,11 @@
       bh = maxY - minY + 1;
     if (bw <= 0 || bh <= 0) return clear();
 
-    if (tool === 'inpaint') {
+    if (tool === 'inpaint' || tool === 'airemove') {
+      // 'airemove' always forces the AI model; 'inpaint' (Heal) uses classical
+      // inpaint unless its FLUX opt-in is checked. Both submit a painted mask.
+      const useFlux = tool === 'airemove' ? true : app.brush.flux;
+      const method = tool === 'airemove' ? 'telea' : app.brush.method; // telea = fallback if AI absent
       // Grayscale mask for the sidecar, built only over the painted bbox.
       // Binarize (any painted alpha → 255): the sidecar thresholds the mask at
       // >127, so a soft brush's sub-128 edge would otherwise be dropped and the
@@ -223,11 +227,13 @@
       try {
         const comp = await compositeCleanCanvas(p2);
         const blob = await new Promise((r) => comp.toBlob(r, 'image/png'));
-        const layer = await brushInpaint(blob, maskB64, { method: app.brush.method, flux: app.brush.flux });
-        addBrushLayer({ op: 'inpaint', box: layer.box, patchPng: layer.patch_png, method: layer.method, fellBack: layer.fell_back }, p2);
-        toast(`Brush fill → ${layer.method}${layer.fell_back ? ' (flux→cv2)' : ''}`);
+        const layer = await brushInpaint(blob, maskB64, { method, flux: useFlux });
+        addBrushLayer({ op: tool, box: layer.box, patchPng: layer.patch_png, method: layer.method, fellBack: layer.fell_back }, p2);
+        const verb = tool === 'airemove' ? 'AI remove' : 'Brush heal';
+        toast(`${verb} → ${layer.method}${layer.fell_back ? ' (AI→cv2 fallback)' : ''}`);
       } catch (err) {
-        toast('Brush fill failed: ' + (err?.message || err));
+        const verb = tool === 'airemove' ? 'AI remove' : 'Brush heal';
+        toast(`${verb} failed: ` + (err?.message || err));
       }
       return;
     }

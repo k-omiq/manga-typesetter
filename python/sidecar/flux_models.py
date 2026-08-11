@@ -27,6 +27,30 @@ _MODEL_KEY = {
     ("kontext", ""): "flux_kontext",
 }
 
+# --- MLX (Apple-Silicon native-Metal) backend --------------------------------
+# ADDITIVE backend for the klein family: runs FLUX.2 Klein via `mflux` (native
+# Metal — no Triton, no MPS-overcommit → ~4-5x faster & ~3.5x less memory than the
+# diffusers/SDNQ path on Apple Silicon). It is offered ONLY on Apple Silicon; the
+# sdnq/sdcpp diffusers path is left entirely intact and remains the backend for
+# CUDA/Windows/Linux. Weights are a pre-quantized 4-bit mflux repo per (family,
+# variant). mflux exposes FLUX.2 Klein as in-context *edit* (no mask), so the
+# child crops + edits "remove text" + composites under our mask (see
+# flux_sidecar/mflux_inpainter.py) — same inpaint_mask contract as the diffusers path.
+_MLX_REPO = {
+    ("klein", "4b"): "RunPod/FLUX.2-klein-4B-mflux-4bit",
+}
+
+
+def _apple_silicon() -> bool:
+    import platform
+
+    return sys.platform == "darwin" and platform.machine() == "arm64"
+
+
+def _mlx_available(family: str, variant: str) -> bool:
+    """True when the MLX backend can be offered for this model on this machine."""
+    return _apple_silicon() and (family, variant) in _MLX_REPO
+
 # Quality↔speed presets. The two levers we can drive on the inpainter are
 # `num_inference_steps` (linear in time) and `upscale_small_crops` (whether small
 # crops are scaled up to ~1MP before diffusing — the expensive part). This matters
@@ -36,6 +60,14 @@ QUALITY_PRESETS = {
     "balanced": {"steps": 4, "upscale": True, "label": "Balanced", "detail": "4 steps, ~1MP — default"},
     "quality": {"steps": 8, "upscale": True, "label": "Quality", "detail": "8 steps, ~1MP — best"},
 }
+
+# Hard floor on the inference steps that actually reach the child, regardless of the
+# selected preset. A 2-step FLUX redraw cannot reconstruct the masked region — the
+# diffusion has too few steps to resolve, so it returns a cloudy grey hallucination
+# where the text was. 4 steps is the lowest that produces a usable redraw; the "fast"
+# preset stays selectable in the UI but resolves to this floor for real inference. We
+# deliberately do NOT force everyone up to 8 (quality) — that just makes it slow.
+_MIN_REDRAW_STEPS = 4
 
 DEFAULT_SELECTION = {
     "family": "klein",
@@ -92,6 +124,9 @@ def catalogue() -> dict:
         backends = [
             b for b in m.FLUX_BACKENDS if m.flux_valid_backend(key, b) == b and b != "nunchaku"
         ]
+        # Offer MLX first on Apple Silicon (it's the fast/light default there).
+        if _mlx_available(family, variant):
+            backends.insert(0, "mlx")
         families.append(
             {
                 "family": family,
@@ -108,7 +143,14 @@ def catalogue() -> dict:
         {"key": k, "label": v["label"], "detail": v["detail"]}
         for k, v in QUALITY_PRESETS.items()
     ]
-    return {"families": families, "qualities": qualities, "default": DEFAULT_SELECTION}
+    # Seed the picker to MLX on Apple Silicon (the fast/light native-Metal path);
+    # elsewhere keep the cross-platform SDNQ default. This only sets what the UI
+    # pre-selects — DEFAULT_SELECTION stays sdnq so normalize()'s fallback is safe
+    # on every platform.
+    default = dict(DEFAULT_SELECTION)
+    if _mlx_available(default["family"], default["variant"]):
+        default["backend"] = "mlx"
+    return {"families": families, "qualities": qualities, "default": default}
 
 
 def normalize(selection: dict | None) -> dict:
@@ -129,9 +171,16 @@ def normalize(selection: dict | None) -> dict:
         family, variant = "klein", "4b"
     key = _MODEL_KEY[(family, variant)]
 
-    backend = m.flux_valid_backend(key, str(sel.get("backend", "sdnq")).lower())
-    if backend == "nunchaku":  # not provisionable (see catalogue) — clamp to sdnq
-        backend = "sdnq"
+    backend_req = str(sel.get("backend", "sdnq")).lower()
+    # MLX is our own additive backend (not in MangaTranslator's validator); accept it
+    # only when the machine + model actually support it, else fall through to the
+    # diffusers validation so a stale mlx selection on a non-Mac degrades to sdnq.
+    if backend_req == "mlx" and _mlx_available(family, variant):
+        backend = "mlx"
+    else:
+        backend = m.flux_valid_backend(key, backend_req)
+        if backend == "nunchaku":  # not provisionable (see catalogue) — clamp to sdnq
+            backend = "sdnq"
 
     quant = ""
     text_encoder_quant = ""
@@ -155,8 +204,12 @@ def normalize(selection: dict | None) -> dict:
         "backend": backend,
         "quant": quant,
         "text_encoder_quant": text_encoder_quant,
+        # The mflux repo for the MLX backend ("" for every other backend).
+        "mlx_repo": _MLX_REPO.get((family, variant), "") if backend == "mlx" else "",
         "quality": quality,
-        "steps": preset["steps"],  # derived from the quality preset
+        # Derived from the quality preset, then floored: a real redraw never runs below
+        # `_MIN_REDRAW_STEPS` (2-step output is unusable — cloudy hallucination).
+        "steps": max(int(preset["steps"]), _MIN_REDRAW_STEPS),
         "upscale": preset["upscale"],
     }
 
@@ -172,6 +225,7 @@ def spawn_env(selection: dict | None, *, hf_token: str = "") -> dict:
         "MT_FLUX_TEXT_ENCODER_QUANT": r["text_encoder_quant"],
         "MT_FLUX_STEPS": str(r["steps"]),
         "MT_FLUX_UPSCALE": "1" if r["upscale"] else "0",
+        "MT_FLUX_MLX_REPO": r["mlx_repo"],
     }
     if hf_token:
         env["MT_FLUX_HF_TOKEN"] = hf_token

@@ -136,6 +136,7 @@ export const app = $state({
   toast: { msg: '', seq: 0 },
   sidecar: { status: 'unknown', device: null, info: null }, // Python ML sidecar health
   detecting: false, // detection/OCR request in flight
+  detectBatch: null, // { done, total } while a whole-chapter detect runs, else null
   cleaning: false, // a /clean request is in flight
   cleanBatch: null, // { done, total } while a whole-chapter clean runs, else null
   selectedLayerId: null, // active clean patch layer
@@ -455,7 +456,7 @@ export const patchSrc = (layer) => (layer?.patchPng ? 'data:image/png;base64,' +
 // A brush stroke commits to its own layer, composited by box exactly like an
 // auto region. `op` records the tool; brush layers carry no detected `n`.
 let brushSeq = 1;
-const BRUSH_LABEL = { inpaint: 'Fill', clone: 'Clone', fill: 'Paint', erase: 'Erase' };
+const BRUSH_LABEL = { inpaint: 'Heal', airemove: 'AI Remove', clone: 'Clone', fill: 'Paint', erase: 'Erase' };
 
 export function addBrushLayer({ op, box, patchPng, method = null, fellBack = false }, target = null) {
   // Pin to the page the stroke was made on — a client tool's compositing or the

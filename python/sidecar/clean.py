@@ -40,6 +40,58 @@ import numpy as np
 _OPENCV_INPAINT = {"telea": cv2.INPAINT_TELEA, "ns": cv2.INPAINT_NS}
 _VALID_METHODS = {"fill", "telea", "ns", "flux"}
 
+# Fill-vs-FLUX classification (see `_classify_region`). The raw per-channel std of
+# the surround ring is NOT a reliable uniformity signal: a dense text block's ring
+# catches neighbouring glyphs'/linework ink, so genuinely flat white-paper dialogue
+# measures std ≈ 30-57 and would wrongly route to FLUX (which then hallucinates grey
+# clouds). These drive a robust test instead:
+#   _TONE_DELTA     — per-channel |Δ| from the ring median above which a pixel counts
+#                     as a genuinely different TONE (screentone/art), not stray ink.
+#   _TONE_FRAC_MAX  — max share of such off-tone pixels for a near-extreme surround to
+#                     still count as flat (white paper w/ a few intruding ink pixels).
+#   _TRIM_FRAC      — fraction trimmed from each luminance tail before measuring spread,
+#                     so outlier ink can't spike it.
+#   _NEAR_WHITE/_NEAR_BLACK — median at/near an extreme = flat paper / solid bubble.
+# Tuned on real detector output (AisazuNihaIrarenai-003): flat dialogue tops out at
+# tone_frac 0.068 / trimmed-std 3.3, an order of magnitude below real screentone.
+_TONE_DELTA = 40.0
+_TONE_FRAC_MAX = 0.15
+_TRIM_FRAC = 0.15
+_NEAR_WHITE = 235
+_NEAR_BLACK = 20
+
+# FLUX compositing: clip the redrawn pixels to the exact (dilated) text mask so a
+# FLUX patch differs from the raw page ONLY under the glyphs — the same invariant
+# the fill/telea/ns paths already honour. MangaTranslator's inpaint_mask exposes
+# `strict_mask_clipping` for exactly this: it multiplies the feathered composite
+# mask by the original text mask, dropping the outside-the-glyph blend ring. That
+# removes any bleed of freshly-generated pixels onto good surrounding art and, by
+# construction, leaves the padded-bbox patch border identical to the raw page
+# (zero seam). Without it, Klein's feather ramps new content a few px past the
+# mask, which can smear texture near the glyph edges. See `_run_flux`.
+_STRICT_MASK_CLIPPING = True
+
+# FLUX glyph-mask dilation. The mask handed to the FLUX redraw is dilated WIDER
+# than the 1px classification/fill mask (`m_dil`). Manga display text — titles,
+# credits, SFX — carries a light anti-alias/outline halo so it reads over art;
+# `comic_text_detector` masks only the black strokes, so a 1px dilation leaves that
+# halo sitting just OUTSIDE the mask. Because FLUX composites strictly under the
+# mask (`_STRICT_MASK_CLIPPING`), the halo is preserved from the raw page and
+# survives as white ghost streaks over screentone/gradients (the exact artefact
+# seen on 118-01). A wider dilation swallows the halo so FLUX redraws over it.
+# Kept FLUX-only: the fill/telea classification and ring sampling deliberately key
+# off the tight `m_dil`, so widening here doesn't perturb method selection. ~6px of
+# growth (ELLIPSE(5,5)×3) — measured to clear the streaks without eating into the
+# adjacent art; the fill path is unaffected because its halo ≈ the flat surround.
+_FLUX_DILATE_KERNEL = (5, 5)
+_FLUX_DILATE_ITERS = 3
+
+
+def _dilate_for_flux(m_uint8: np.ndarray) -> np.ndarray:
+    """Widen a 0/255 glyph mask enough to cover the text's anti-alias/outline halo."""
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, _FLUX_DILATE_KERNEL)
+    return cv2.dilate(m_uint8, k, iterations=_FLUX_DILATE_ITERS)
+
 
 def _decode_mask(mask_b64: str, shape: tuple) -> Optional[np.ndarray]:
     """Decode a base64 PNG mask to a full-page uint8 0/255 array sized to `shape`."""
@@ -107,21 +159,50 @@ def _classify_region(
     chans = roi.shape[2]
     ring_px = roi[ring > 0]
 
-    # Uniformity = worst-channel std of the surrounding ring. An empty ring (region
-    # flush to an image edge) is treated as uniform; sample the ROI's own non-text
-    # pixels for the fill colour rather than hardcoding white (which would paint a
-    # white block inside a dark bubble).
+    # Classify the surround. `ring_std` is kept (worst-channel std of the ring) as a
+    # diagnostic, but the uniform decision is ROBUST to neighbouring ink: a dense text
+    # block's ring inevitably catches a few dark pixels from adjacent glyphs/linework,
+    # which spike the raw std even on flat white paper (measured ≈30-57 on pure-paper
+    # dialogue). An empty ring (region flush to an image edge) is treated as uniform;
+    # sample the ROI's own non-text pixels for the fill colour rather than hardcoding
+    # white (which would paint a white block inside a dark bubble).
     if ring_px.size == 0:
         ring_std = 0.0
+        tone_frac = 0.0
+        uniform = True
         interior = roi[m_dil == 0]
         if interior.size:
             fill_color = tuple(int(v) for v in np.median(interior.reshape(-1, chans), axis=0))
         else:
             fill_color = (255, 255, 255)
     else:
-        ring_std = float(ring_px.reshape(-1, chans).std(axis=0).max())
-        fill_color = tuple(int(v) for v in np.median(ring_px.reshape(-1, chans), axis=0))
-    uniform = ring_std <= uniform_threshold
+        rp = ring_px.reshape(-1, chans).astype(np.float32)
+        ring_std = float(rp.std(axis=0).max())
+        med = np.median(rp, axis=0)
+        # Fill colour stays the surround's dominant (median) colour so a dark bubble
+        # fills dark and white paper fills white.
+        fill_color = tuple(int(v) for v in med)
+        # Tone fraction: share of ring pixels whose colour differs strongly from the
+        # ring's dominant colour — a genuinely different TONE (screentone/art), not a
+        # stray ink stroke bleeding in from a neighbouring glyph.
+        tone_frac = float((np.abs(rp - med).max(axis=1) > _TONE_DELTA).mean())
+        # Robust spread: worst-channel std after trimming the darkest/lightest
+        # `_TRIM_FRAC` of the ring by luminance, so a few intruding ink pixels can't
+        # inflate it. This is what actually separates flat surrounds from real texture.
+        if rp.shape[0] >= 8:
+            lum = rp.mean(axis=1)
+            lo, hi = np.percentile(lum, [_TRIM_FRAC * 100.0, 100.0 - _TRIM_FRAC * 100.0])
+            keep = (lum >= lo) & (lum <= hi)
+            trim_std = float(rp[keep].std(axis=0).max()) if int(keep.sum()) > 2 else ring_std
+        else:
+            trim_std = ring_std
+        # Uniform (→ instant fill) when EITHER the surround sits at a near-extreme flat
+        # tone (near-white paper / near-black bubble) with only a sparse scatter of
+        # off-tone pixels, OR its robust (trimmed) spread is genuinely small. FLUX is
+        # reserved for surrounds where a MEANINGFUL fraction is mid-tone/varied — real
+        # screentone, gradients or detailed art filling much of the ring.
+        near_extreme = bool(med.min() >= _NEAR_WHITE or med.max() <= _NEAR_BLACK)
+        uniform = (near_extreme and tone_frac <= _TONE_FRAC_MAX) or (trim_std <= uniform_threshold)
 
     # Policy: explicit per-region override wins; otherwise a uniform (solid-colour)
     # surround -> cheap fill, anything textured -> AI redraw (FLUX). `force_ai`
@@ -142,6 +223,9 @@ def _classify_region(
     return {
         "roi": roi,
         "m_dil": m_dil,
+        # Wider mask used ONLY if this region resolves to FLUX (see _apply_region /
+        # _dilate_for_flux); covers the text halo the tight m_dil leaves behind.
+        "m_dil_flux": _dilate_for_flux(m),
         "fill_color": fill_color,
         "box": [x1, y1, x2 - x1, y2 - y1],
         "method": method,
@@ -149,17 +233,20 @@ def _classify_region(
         "fallback": fallback,
         "uniform": bool(uniform),
         "ring_std": round(ring_std, 2),
+        "tone_frac": round(tone_frac, 4),
     }
 
 
-def _apply_region(cls: dict, *, flux_inpainter=None) -> dict:
+def _apply_region(cls: dict, img_bgr: np.ndarray, *, flux_inpainter=None) -> dict:
     """Second pass: run the resolved method and return the editable patch layer::
 
         { box: [x, y, w, h], method, requested, fell_back, uniform, ring_std,
           patch_png }
 
-    FLUX regions fall back to the classical inpainter (`cls['fallback']`) when the
-    inpainter is unavailable, flagged as `fell_back`.
+    FLUX gets the FULL page + a full-page mask (see `_run_flux`) so the diffusion
+    has real surrounding context; fill/telea/ns keep operating on the local crop
+    exactly as before. FLUX regions fall back to the classical inpainter
+    (`cls['fallback']`) when the inpainter is unavailable, flagged as `fell_back`.
     """
     roi = cls["roi"]
     m_dil = cls["m_dil"]
@@ -168,7 +255,9 @@ def _apply_region(cls: dict, *, flux_inpainter=None) -> dict:
     patch = None
 
     if method == "flux":
-        patch = _run_flux(roi, m_dil, flux_inpainter)
+        # Hand FLUX the WIDER mask so the redraw covers the text's outline halo;
+        # falling back to the tight m_dil only if the wide one is somehow absent.
+        patch = _run_flux(img_bgr, cls.get("m_dil_flux", m_dil), cls["box"], flux_inpainter)
         if patch is None:  # FLUX unavailable -> graceful OpenCV fallback
             fell_back = True
             method = cls["fallback"]
@@ -218,7 +307,7 @@ def clean_region(
     )
     if cls is None:
         return None
-    return _apply_region(cls, flux_inpainter=flux_inpainter)
+    return _apply_region(cls, img_bgr, flux_inpainter=flux_inpainter)
 
 
 def inpaint_brush(
@@ -264,7 +353,13 @@ def inpaint_brush(
 
     patch = None
     if method == "flux":
-        patch = _run_flux(roi, m_dil, flux_inpainter)
+        # Same full-page-context fix as clean_region's _run_flux: give FLUX the
+        # whole page + a full-page mask (dilated painted alpha) so it has real
+        # surrounding pixels, then slice the padded bbox back out. Restricting the
+        # full-page dilated mask to this bbox matches _run_flux's contract; the
+        # painted region lies entirely inside the bbox so nothing is lost.
+        full_dil = cv2.dilate(np.where(mask > 0, 255, 0).astype(np.uint8), edge_k, iterations=1)
+        patch = _run_flux(img_bgr, full_dil[y1:y2, x1:x2], [x1, y1, x2 - x1, y2 - y1], flux_inpainter)
         if patch is None:  # FLUX unavailable -> graceful OpenCV fallback
             fell_back = True
             method = "telea"
@@ -282,16 +377,42 @@ def inpaint_brush(
     }
 
 
-def _run_flux(roi_bgr, mask_dil, flux_inpainter):
-    """Run the opt-in FLUX inpainter on a region crop. Returns BGR patch or None."""
+def _run_flux(img_bgr, region_mask_dil, box, flux_inpainter):
+    """Redraw one region with FLUX, handing the model the FULL page as context.
+
+    `inpaint_mask` is built to receive the whole page + a full-page mask: it does
+    its own context expansion (50%/80px, doubled for Klein), feathered
+    compositing, and returns the full page with ONLY masked pixels redrawn.
+    Pre-cropping to a tight bbox (what we used to do) clamps that context padding
+    to the crop, so the diffusion sees almost no surrounding pixels -> ghosting /
+    garbage. Instead we build a full-page mask that is nonzero only under this
+    region's dilated glyphs, run inpaint_mask on the whole page (it still crops
+    internally to bbox+context, so diffusion cost is ~unchanged), then slice the
+    region's padded bbox back out as the patch.
+
+    `region_mask_dil` is the dilated text mask for the crop `box` = [x, y, w, h]
+    (full-page coords). Returns a BGR patch (padded-bbox sized) or None if FLUX is
+    unavailable / errored — the caller then falls back to classical on the local
+    crop.
+    """
     if flux_inpainter is None:
         return None
     try:
         from PIL import Image
 
-        pil = Image.fromarray(cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2RGB))
-        out = flux_inpainter.inpaint_mask(pil, mask_dil.astype(bool), verbose=False)
-        return cv2.cvtColor(np.array(out.convert("RGB")), cv2.COLOR_RGB2BGR)
+        H, W = img_bgr.shape[:2]
+        x, y, w, h = box
+        full_mask = np.zeros((H, W), dtype=bool)
+        full_mask[y:y + h, x:x + w] = region_mask_dil.astype(bool)
+        if not full_mask.any():
+            return None
+
+        pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+        out = flux_inpainter.inpaint_mask(
+            pil, full_mask, verbose=False, strict_mask_clipping=_STRICT_MASK_CLIPPING
+        )
+        page = cv2.cvtColor(np.array(out.convert("RGB")), cv2.COLOR_RGB2BGR)
+        return page[y:y + h, x:x + w].copy()
     except Exception:
         return None
 
@@ -343,7 +464,7 @@ def clean_regions(
     # Pass 2 — apply.
     layers = []
     for cls in classifications:
-        layer = _apply_region(cls, flux_inpainter=flux_inpainter)
+        layer = _apply_region(cls, img_bgr, flux_inpainter=flux_inpainter)
         layer["n"] = cls["n"]
         layers.append(layer)
     return layers

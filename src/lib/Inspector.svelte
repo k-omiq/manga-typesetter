@@ -264,6 +264,17 @@
           <div class="field"><label class="lbl">Width</label><input type="number" min="40" value={Math.round(box.w)} oninput={(e) => { box.w = clamp(+e.target.value || 40, 40, 5000); touch(); }} /></div>
           <div class="field"><label class="lbl">Height</label><input type="number" min="30" value={Math.round(box.h)} oninput={(e) => { box.h = clamp(+e.target.value || 30, 30, 5000); touch(); }} /></div>
         </div>
+        <div class="field">
+          <label class="lbl">Mirror</label>
+          <div class="seg">
+            <button class:on={s.flipH} title="Flip horizontal (mirror left↔right)" onclick={() => { s.flipH = !s.flipH; touch(); }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18" stroke-dasharray="2 2" /><path d="M9 8l-5 4 5 4z" /><path d="M15 8l5 4-5 4z" /></svg>
+            </button>
+            <button class:on={s.flipV} title="Flip vertical (mirror top↔bottom)" onclick={() => { s.flipV = !s.flipV; touch(); }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h18" stroke-dasharray="2 2" /><path d="M8 9l4-5 4 5z" /><path d="M8 15l4 5 4-5z" /></svg>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 

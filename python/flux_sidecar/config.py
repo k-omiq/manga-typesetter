@@ -49,8 +49,12 @@ MODEL_DIR = Path(os.environ.get("MT_MODEL_DIR", Path.home() / ".mangatypesetter"
 FAMILY = os.environ.get("MT_FLUX_FAMILY", "klein").lower()
 # variant: "4b" (default) | "9b" (Klein only).
 VARIANT = os.environ.get("MT_FLUX_VARIANT", "4b").lower()
-# backend: "sdnq" (Diffusers/torch) | "sdcpp" (GGUF) | "nunchaku" (Kontext/CUDA).
+# backend: "sdnq" (Diffusers/torch) | "sdcpp" (GGUF) | "mlx" (Apple-Silicon native
+# Metal via mflux — see mflux_inpainter). "mlx" is validated base-side (Apple Silicon
+# only) in sidecar/flux_models; here we just honour whatever we're given.
 BACKEND = os.environ.get("MT_FLUX_BACKEND", "sdnq").lower()
+# Pre-quantized mflux repo for the MLX backend ("" for every other backend).
+MLX_REPO = os.environ.get("MT_FLUX_MLX_REPO", "")
 # quant: sdcpp diffusion-model quant, e.g. "Q4_K_M" (empty → the class default).
 QUANT = os.environ.get("MT_FLUX_QUANT", "")
 # text-encoder quant for sdcpp (empty → the class default).
@@ -65,6 +69,13 @@ except ValueError:
 # Whether to upscale small crops to ~1MP before diffusing (quality vs speed).
 UPSCALE_SMALL_CROPS = os.environ.get("MT_FLUX_UPSCALE", "1") != "0"
 
+# Memory-bounded mode (default ON). Keeps one inpaint's footprint bounded on
+# shared-memory machines (Apple Silicon): VAE slicing + tiled decode, an
+# allocator purge after every request, and a hard cap on MPS allocations (see
+# __main__) so a runaway can't push the whole machine into swap-thrash. Set
+# MT_FLUX_LOW_MEM=0 to run the stock pipeline behaviour.
+LOW_MEM = os.environ.get("MT_FLUX_LOW_MEM", "1") != "0"
+
 
 def model_summary() -> dict:
     """The selected model, for /health and the Settings panel."""
@@ -76,5 +87,7 @@ def model_summary() -> dict:
         "text_encoder_quant": TEXT_ENCODER_QUANT or None,
         "steps": NUM_INFERENCE_STEPS,
         "upscale": UPSCALE_SMALL_CROPS,
+        "low_mem": LOW_MEM,
+        "mlx_repo": MLX_REPO or None,
         "hf_token_set": bool(HF_TOKEN),
     }

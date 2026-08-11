@@ -45,6 +45,20 @@ export async function analyzeImage(imageUrl, { ocr = true } = {}) {
   return invoke('sidecar_analyze', { image: bytes, ocr });
 }
 
+// Detect + OCR one page object and apply results to it. Returns { lines } on
+// success or { error } on failure. Shared by the single-page and whole-chapter
+// paths. Pins the write to `p` — detection may resolve after the user navigates.
+async function detectOnePage(p, { ocr = true } = {}) {
+  if (!p?.raw) return { skipped: true };
+  try {
+    const result = await analyzeImage(p.raw, { ocr });
+    applyDetection(result, p);
+    return { lines: result.lines.length };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 // Orchestrates detection for the current page's raw image and applies results.
 export async function detectCurrentPage({ ocr = true } = {}) {
   const p = page();
@@ -58,15 +72,45 @@ export async function detectCurrentPage({ ocr = true } = {}) {
   }
   app.detecting = true;
   try {
-    const result = await analyzeImage(p.raw, { ocr });
-    // Pin to the page detection was launched for — the user may have navigated
-    // while the sidecar ran (mirrors clean/translate's target pattern).
-    applyDetection(result, p);
-    toast(`Detected ${result.lines.length} text region(s)`);
-  } catch (e) {
-    toast(`Detection failed: ${e}`);
+    const r = await detectOnePage(p, { ocr });
+    if (r.error) toast(`Detection failed: ${r.error}`);
+    else toast(`Detected ${r.lines} text region(s)`);
   } finally {
     app.detecting = false;
+  }
+}
+
+// Detect + OCR every loaded raw page, in order. Runs one page at a time so the
+// sidecar isn't hammered with concurrent requests; the model stays warm across
+// pages. Pages without a raw image are skipped.
+export async function detectAllPages({ ocr = true } = {}) {
+  if (!sidecarReady()) {
+    toast('Sidecar not ready');
+    return;
+  }
+  const targets = app.pages.filter((p) => p?.raw);
+  if (!targets.length) {
+    toast('No raw pages to detect — import raw images first');
+    return;
+  }
+  app.detecting = true;
+  app.detectBatch = { done: 0, total: targets.length };
+  let linesTotal = 0;
+  let failed = 0;
+  try {
+    for (const p of targets) {
+      const r = await detectOnePage(p, { ocr });
+      if (r.error) failed++;
+      else linesTotal += r.lines ?? 0;
+      app.detectBatch = { done: app.detectBatch.done + 1, total: targets.length };
+    }
+    toast(
+      `Detected ${targets.length} page(s) · ${linesTotal} text region(s)` +
+        (failed ? ` · ${failed} page(s) failed` : ''),
+    );
+  } finally {
+    app.detecting = false;
+    app.detectBatch = null;
   }
 }
 
@@ -92,8 +136,15 @@ export async function cleanImage(imageUrl, regions, { mask = '', method = 'telea
 // Clean one page object's detected regions and apply the patch layers to it.
 // Returns { layers, fell } on success, { skipped } if the page has no regions,
 // or { error } on failure. Shared by the single-page and whole-chapter paths.
-async function cleanOnePage(p, { method = 'telea', flux = false } = {}) {
-  const regions = (p?.detect?.boxes ?? []).map((b) => ({ n: b.n, box: b.box }));
+//
+// `force` (null | 'telea' | 'ns') stamps an explicit per-region method so the
+// sidecar's auto policy is bypassed entirely — the classical inpaint wins even
+// for textured regions (no AI). When null, regions carry no method and the
+// sidecar runs its auto policy (textured → AI redraw when FLUX is available).
+async function cleanOnePage(p, { method = 'telea', flux = false, force = null } = {}) {
+  const regions = (p?.detect?.boxes ?? []).map((b) =>
+    force ? { n: b.n, box: b.box, method: force } : { n: b.n, box: b.box },
+  );
   if (!p?.raw || !regions.length) return { skipped: true };
   for (const r of regions) setCleanStatus(r.n, 'cleaning', p);
   try {
@@ -108,7 +159,7 @@ async function cleanOnePage(p, { method = 'telea', flux = false } = {}) {
 }
 
 // Clean every detected region on the current page and apply the patch layers.
-export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) {
+export async function cleanCurrentPage({ method = 'telea', flux = false, force = null } = {}) {
   const p = page();
   if (!p?.raw) {
     toast('No raw page to clean — import a raw image first');
@@ -124,7 +175,7 @@ export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) 
   }
   app.cleaning = true;
   try {
-    const r = await cleanOnePage(p, { method, flux });
+    const r = await cleanOnePage(p, { method, flux, force });
     if (r.error) toast(`Clean failed: ${r.error}`);
     // Surface, in the completion summary, when textured regions wanted AI but
     // fell back to the classical inpaint (FLUX not installed).
@@ -137,7 +188,7 @@ export async function cleanCurrentPage({ method = 'telea', flux = false } = {}) 
 // Clean the whole chapter: every page with detected regions, in order. The
 // FLUX process stays warm across pages (the proxy reuses one mt-flux), so only
 // the first page pays the model load. Pages without a Detect pass are skipped.
-export async function cleanAllPages({ method = 'telea', flux = false } = {}) {
+export async function cleanAllPages({ method = 'telea', flux = false, force = null } = {}) {
   if (!sidecarReady()) {
     toast('Sidecar not ready');
     return;
@@ -154,7 +205,7 @@ export async function cleanAllPages({ method = 'telea', flux = false } = {}) {
   let failed = 0;
   try {
     for (const p of targets) {
-      const r = await cleanOnePage(p, { method, flux });
+      const r = await cleanOnePage(p, { method, flux, force });
       if (r.error) failed++;
       else {
         regionsTotal += r.layers ?? 0;
@@ -177,7 +228,8 @@ export async function cleanAllPages({ method = 'telea', flux = false } = {}) {
   }
 }
 
-// Re-clean a single region with a forced method (retry / redo a layer).
+// Re-clean a single region. `method` is a forced flavour (fill|telea|ns|flux)
+// or 'auto' to re-run the sidecar's auto policy (textured → AI when available).
 export async function recleanRegion(n, method) {
   const p = page();
   const b = (p.detect?.boxes ?? []).find((x) => x.n === n);
@@ -187,11 +239,14 @@ export async function recleanRegion(n, method) {
     return;
   }
   setCleanStatus(n, 'cleaning', p);
+  // 'auto' → send no per-region method so the sidecar classifies it (fill vs AI).
+  const forced = method === 'auto' ? null : method;
+  const region = forced ? { n, box: b.box, method: forced } : { n, box: b.box };
   try {
-    const result = await cleanImage(p.raw, [{ n, box: b.box, method }], {
+    const result = await cleanImage(p.raw, [region], {
       mask: p.clean?.maskPng ?? '',
-      method,
-      flux: method === 'flux', // the redo dropdown offers flux; actually engage it
+      method: forced === 'ns' ? 'ns' : 'telea', // classical fallback flavour
+      flux: forced === 'flux', // the redo dropdown offers flux; actually engage it
     });
     applyClean(result, { replace: false, target: p });
     toast(`Re-cleaned line ${n} → ${method}`);
@@ -238,7 +293,11 @@ export async function refreshFluxStatus() {
     };
     return app.flux;
   } catch (e) {
-    app.flux = { ...app.flux, available: false, reason: String(e) };
+    // A failed status invoke usually just means the sidecar child hasn't
+    // finished booting yet (it lags /health by a few seconds). Show that,
+    // rather than a raw error, so the panel reads "starting…" not "not installed".
+    const reason = app.sidecar?.status === 'ok' ? String(e) : 'sidecar starting…';
+    app.flux = { ...app.flux, available: false, reason };
     return app.flux;
   } finally {
     app.flux.checking = false;

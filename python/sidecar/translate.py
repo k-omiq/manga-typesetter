@@ -33,8 +33,12 @@ _SENTINEL = re.compile(
     re.IGNORECASE,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_MT_DIR = _REPO_ROOT / "external" / "MangaTranslator"
+# Dev: repo's external/MangaTranslator. Packaged (PyInstaller): bundled into the
+# onedir `_internal` (sys._MEIPASS) as `MangaTranslator/`.
+if getattr(sys, "frozen", False):
+    _MT_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "MangaTranslator"
+else:
+    _MT_DIR = Path(__file__).resolve().parents[2] / "external" / "MangaTranslator"
 
 # provider id -> TranslationConfig api-key field + a suggested (editable) model.
 PROVIDERS = [

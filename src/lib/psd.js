@@ -11,6 +11,7 @@
 // Tauri webview / vite browser), so no explicit initializeCanvas call is needed.
 import { writePsd, readPsd } from 'ag-psd';
 import { app, toast, loadProjectPages, PAGE_W, PAGE_H } from './store.svelte.js';
+import { isTauri, pickFilesTauri } from './importer.js';
 import { renderPageCanvas, renderBoxLayer } from './exporter.js';
 import { fontCssFor } from './store.svelte.js';
 
@@ -607,6 +608,14 @@ export async function importPsdFiles(files) {
 }
 
 export async function pickPsd() {
+  // Native dialog under Tauri — a detached <input type=file> never opens in the
+  // packaged app (WKWebView runOpenPanel silently fails). Browser keeps the
+  // input fallback.
+  if (isTauri()) {
+    const files = await pickFilesTauri({ name: 'Photoshop', extensions: ['psd', 'psb'], multiple: true });
+    if (files && files.length) await importPsdFiles(files);
+    return;
+  }
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.psd,.psb,image/vnd.adobe.photoshop';

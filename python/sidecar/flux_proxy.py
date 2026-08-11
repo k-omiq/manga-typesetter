@@ -36,6 +36,14 @@ _INPAINT_TIMEOUT = 3600
 _HEALTH_TIMEOUT = 60
 
 _lock = threading.Lock()
+# Serialises /inpaint POSTs across ALL proxy instances. The base sidecar's
+# /clean and /clean/brush handlers run in a threadpool, so two HTTP requests
+# (e.g. a chapter clean racing a brush stroke) can each be inside clean_regions
+# at once — without this, both would queue heavy requests into mt-flux
+# simultaneously. The child serialises too (its /inpaint lock); this base-side
+# lock keeps at most ONE region in flight end-to-end so a burst of cleans can't
+# stack N crops' worth of staging inside the child while one diffusion runs.
+_inpaint_serial = threading.Lock()
 _proc: subprocess.Popen | None = None
 _port: int | None = None
 _token: str | None = None
@@ -105,7 +113,10 @@ def _spawn_locked(sel: dict) -> bool:
     """Spawn mt-flux for `sel` and wait until /health is up. Returns success."""
     global _proc, _port, _token, _sig
 
-    py = flux.venv_python()
+    # Pick the external interpreter for this selection's backend: the MLX (mflux)
+    # env for the "mlx" backend, the diffusers env otherwise. Same flux_sidecar
+    # source runs in both — its inpainter branches on MT_FLUX_BACKEND.
+    py = flux.env_python_for(sel)
     if py is None:
         return False
 
@@ -270,7 +281,15 @@ class _ProxyInpainter:
         self._url = base_url + "/inpaint"
         self._token = token
 
-    def inpaint_mask(self, image_pil, mask_np, seed: int = 1, verbose: bool = False, **_ignored):
+    def inpaint_mask(
+        self,
+        image_pil,
+        mask_np,
+        seed: int = 1,
+        verbose: bool = False,
+        strict_mask_clipping: bool = False,
+        **_ignored,
+    ):
         import base64
 
         import numpy as np
@@ -288,6 +307,7 @@ class _ProxyInpainter:
                 "image_b64": base64.b64encode(img_buf.getvalue()).decode("ascii"),
                 "mask_b64": base64.b64encode(mask_buf.getvalue()).decode("ascii"),
                 "seed": seed,
+                "strict_mask_clipping": bool(strict_mask_clipping),
             }
         ).encode("ascii")
 
@@ -297,7 +317,9 @@ class _ProxyInpainter:
             headers={"content-type": "application/json", "x-mt-token": self._token},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=_INPAINT_TIMEOUT) as r:
-            out = json.loads(r.read())
+        # One FLUX region in flight at a time (see _inpaint_serial above).
+        with _inpaint_serial:
+            with urllib.request.urlopen(req, timeout=_INPAINT_TIMEOUT) as r:
+                out = json.loads(r.read())
         data = base64.b64decode(out["image_b64"])
         return Image.open(io.BytesIO(data)).convert("RGB")

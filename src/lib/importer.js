@@ -102,6 +102,8 @@ export async function importJsonFile(file) {
 }
 
 // Transient file picker (runs inside a user gesture, so .click() is allowed).
+// Browser-only fallback: in the packaged Tauri app WKWebView's runOpenPanel
+// silently fails for a detached input, so Tauri uses the dialog plugin below.
 function pick(accept, multiple) {
   return new Promise((resolve) => {
     const input = document.createElement('input');
@@ -113,12 +115,75 @@ function pick(accept, multiple) {
   });
 }
 
+// Tauri injects __TAURI_INTERNALS__; absent in the browser (same check as sidecar.js).
+export function isTauri() {
+  return typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
+}
+
+const MIME_BY_EXT = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  gif: 'image/gif',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  json: 'application/json',
+};
+
+function basename(path) {
+  return String(path).split('/').pop().split('\\').pop();
+}
+
+function mimeFromExt(name) {
+  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+  return MIME_BY_EXT[ext] || 'application/octet-stream';
+}
+
+// Native file dialog (Tauri): open() → absolute paths → readFile → File objects,
+// so the shared import pipeline (which works on File/Blob) stays unchanged.
+// Dynamic imports keep the Tauri plugins out of the browser bundle path.
+export async function pickFilesTauri({ name, extensions, multiple }) {
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const selected = await open({ multiple, filters: [{ name, extensions }] });
+  if (!selected) return null; // cancelled
+  const paths = Array.isArray(selected) ? selected : [selected];
+  if (!paths.length) return null;
+  const { readFile } = await import('@tauri-apps/plugin-fs');
+  const files = [];
+  for (const path of paths) {
+    const fname = basename(path);
+    try {
+      const bytes = await readFile(path);
+      files.push(new File([bytes], fname, { type: mimeFromExt(fname) }));
+    } catch (e) {
+      toast(`Could not read ${fname}: ${e?.message || e}`);
+    }
+  }
+  return files.length ? files : null;
+}
+
 export async function pickJson() {
+  if (isTauri()) {
+    const files = await pickFilesTauri({ name: 'JSON', extensions: ['json'], multiple: false });
+    if (files && files[0]) await importJsonFile(files[0]);
+    return;
+  }
   const f = await pick('.json,application/json', false);
   if (f && f[0]) await importJsonFile(f[0]);
 }
 
 export async function pickImages(kind) {
+  if (isTauri()) {
+    const files = await pickFilesTauri({
+      name: 'Images',
+      extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff'],
+      multiple: true,
+    });
+    if (files && files.length) await importImageFiles(files, kind);
+    return;
+  }
   const f = await pick('image/*', true);
   if (f && f.length) await importImageFiles(f, kind);
 }
@@ -138,6 +203,9 @@ export async function importImageFiles(files, kind) {
     if (kind === 'cleaned') app.pages[i].cleaned = url;
     else app.pages[i].raw = url;
   });
-  if (kind === 'cleaned') app.loaded = true;
+  // Either kind counts as "loaded" so the starter overlay dismisses — importing
+  // raws is the first step of the Clean flow, not a no-op that leaves the
+  // import prompt covering the page you just loaded.
+  app.loaded = true;
   toast(`Imported ${list.length} ${kind} page(s)`);
 }

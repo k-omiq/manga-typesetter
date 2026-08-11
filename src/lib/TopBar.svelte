@@ -2,11 +2,11 @@
   import { app, prevPage, nextPage, setMode, page } from './store.svelte.js';
   import { pickJson, pickImages } from './importer.js';
   import { pickPsd } from './psd.js';
-  import { detectCurrentPage, sidecarReady } from './sidecar.js';
+  import { detectAllPages, sidecarReady } from './sidecar.js';
 
   let { onFontLib, onSettings } = $props();
 
-  const canDetect = $derived(sidecarReady() && !!page()?.raw && !app.detecting);
+  const canDetect = $derived(sidecarReady() && app.pages.some((p) => p?.raw) && !app.detecting);
 
   function openExport() {
     app.exportOpen = true;
@@ -55,8 +55,8 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M7 8h4a2 2 0 0 1 0 4H7zM7 8v8" /><path d="M15 8v8h2a2 2 0 0 0 0-4h-2" /></svg>PSD
         </button>
       {/if}
-      <button class="btn" disabled={!canDetect} onclick={() => detectCurrentPage()} data-tip={sidecarReady() ? 'Detect text + OCR (sidecar)' : 'Sidecar not ready'} data-tip-pos="down">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" /><path d="M7 12h10" /></svg>{app.detecting ? 'Detecting…' : 'Detect'}
+      <button class="btn" disabled={!canDetect} onclick={() => detectAllPages()} data-tip={sidecarReady() ? 'Detect text + OCR on every loaded page (sidecar)' : 'Sidecar not ready'} data-tip-pos="down">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" /><path d="M7 12h10" /></svg>{app.detectBatch ? `Detecting ${app.detectBatch.done}/${app.detectBatch.total}…` : app.detecting ? 'Detecting…' : 'Detect'}
       </button>
     </div>
     <span class="divider-v"></span>

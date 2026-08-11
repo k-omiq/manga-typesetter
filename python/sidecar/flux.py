@@ -67,9 +67,14 @@ _FLUX_DEPS = [
     "fonttools>=4.56.0",
     "huggingface_hub>=0.20",
     "ultralytics>=8.3.94",  # reached via core.__init__ → core.ml.model_manager
-    # mt-flux process server stack:
+    # mt-flux process server stack. The child serves plain HTTP POST /inpaint and
+    # runs uvicorn with ws="none" (see flux_sidecar/__main__), so websockets is
+    # not strictly required — but pin it anyway so uvicorn's ws autodetect has a
+    # complete package to import if anything ever re-enables ws, rather than a
+    # partial one leaking in from elsewhere.
     "fastapi>=0.110",
     "uvicorn>=0.29",
+    "websockets>=13",
     "pydantic>=2.0",
 ]
 
@@ -99,6 +104,24 @@ _PROVISIONED_MARKER = FLUX_ENV_DIR / ".provisioned"
 # Where the selected model is persisted (shared by the spawn + in-process paths).
 _SELECTION_FILE = config.MODEL_DIR.resolve().parent / "flux-selection.json"
 
+# The MLX backend (Apple Silicon) runs `mflux`, a stack completely disjoint from the
+# diffusers deps above. It gets its OWN env so selecting/deselecting it never touches
+# the diffusers flux-env that CUDA/Windows/Linux users depend on. Only ever created
+# on Apple Silicon (the base-side catalogue won't offer "mlx" elsewhere).
+MLX_ENV_DIR = config.MODEL_DIR.resolve().parent / "mlx-env"
+_MLX_PROVISIONED_MARKER = MLX_ENV_DIR / ".provisioned"
+# mflux (pulls mlx + its own torch + opencv/pillow/numpy) plus the same tiny
+# HTTP-server stack the child runs (uvicorn/fastapi/pydantic; ws="none" so
+# websockets is optional but pinned for uvicorn's autodetect — mirrors _FLUX_DEPS).
+# Nothing from MangaTranslator is needed on this path.
+_MLX_DEPS = [
+    "mflux",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "websockets>=13",
+    "pydantic>=2.0",
+]
+
 _probe: tuple[str, str] | None = None  # cached in-process probe (see _probe_flux)
 
 
@@ -108,6 +131,27 @@ def venv_python() -> Path | None:
     exe = "python.exe" if os.name == "nt" else "python"
     py = FLUX_ENV_DIR / sub / exe
     return py if py.exists() else None
+
+
+def mlx_env_python() -> Path | None:
+    """Path to the external MLX (mflux) venv's interpreter, or None if not created."""
+    sub = "Scripts" if os.name == "nt" else "bin"
+    exe = "python.exe" if os.name == "nt" else "python"
+    py = MLX_ENV_DIR / sub / exe
+    return py if py.exists() else None
+
+
+def _is_mlx_backend(selection: dict | None) -> bool:
+    """Whether `selection` (or the saved one) resolves to the MLX backend."""
+    from . import flux_models
+
+    r = flux_models.normalize(selection) if selection is not None else saved_selection()
+    return r.get("backend") == "mlx"
+
+
+def env_python_for(selection: dict | None) -> Path | None:
+    """The external interpreter for `selection`'s backend (MLX vs diffusers env)."""
+    return mlx_env_python() if _is_mlx_backend(selection) else venv_python()
 
 
 def flux_src_dir() -> Path:
@@ -147,8 +191,18 @@ def _uv_bin() -> str | None:
 
 
 def env_provisioned() -> bool:
-    """True once the external FLUX venv exists and finished provisioning."""
+    """True once the external FLUX (diffusers) venv exists and finished provisioning."""
     return _PROVISIONED_MARKER.is_file() and venv_python() is not None
+
+
+def mlx_env_provisioned() -> bool:
+    """True once the external MLX (mflux) venv exists and finished provisioning."""
+    return _MLX_PROVISIONED_MARKER.is_file() and mlx_env_python() is not None
+
+
+def env_provisioned_for(selection: dict | None) -> bool:
+    """Provisioning state of the env that `selection`'s backend needs."""
+    return mlx_env_provisioned() if _is_mlx_backend(selection) else env_provisioned()
 
 
 def saved_selection() -> dict:
@@ -182,8 +236,8 @@ def save_selection(selection: dict | None) -> dict:
     return norm
 
 
-def provision(progress=None) -> dict:
-    """Create the external uv venv and install the FLUX deps into it.
+def _provision_env(env_dir: Path, marker: Path, deps: list[str], label: str, progress=None) -> dict:
+    """Create an external uv venv at `env_dir` and install `deps` into it.
 
     Works in both a frozen build and dev (installs into a *real* external
     interpreter, never the frozen app). Returns ``{ok, message}``. Heavy — only
@@ -220,12 +274,12 @@ def provision(progress=None) -> dict:
         except OSError:
             pass
 
-    FLUX_ENV_DIR.parent.mkdir(parents=True, exist_ok=True)
+    env_dir.parent.mkdir(parents=True, exist_ok=True)
     steps = [
         # A managed standalone CPython so we don't depend on a system Python.
-        [uv, "venv", "--python", "3.12", str(FLUX_ENV_DIR)],
+        [uv, "venv", "--python", "3.12", str(env_dir)],
         # Resolve the right platform wheels (MPS/CUDA/CPU torch) into that venv.
-        [uv, "pip", "install", "--python", str(FLUX_ENV_DIR), *_FLUX_DEPS],
+        [uv, "pip", "install", "--python", str(env_dir), *deps],
     ]
     tail: list[str] = []
     for cmd in steps:
@@ -237,10 +291,25 @@ def provision(progress=None) -> dict:
             return {"ok": False, "message": "\n".join(tail) or f"failed: {' '.join(cmd)}"}
 
     try:
-        _PROVISIONED_MARKER.write_text("ok")
+        marker.write_text("ok")
     except OSError:
         pass
-    return {"ok": True, "message": "\n".join(tail) or "FLUX environment ready"}
+    return {"ok": True, "message": "\n".join(tail) or f"{label} environment ready"}
+
+
+def provision(progress=None) -> dict:
+    """Provision the diffusers/SDNQ FLUX env (sdnq/sdcpp backends)."""
+    return _provision_env(FLUX_ENV_DIR, _PROVISIONED_MARKER, _FLUX_DEPS, "FLUX", progress)
+
+
+def provision_mlx(progress=None) -> dict:
+    """Provision the MLX (mflux) env — the Apple-Silicon native-Metal backend."""
+    return _provision_env(MLX_ENV_DIR, _MLX_PROVISIONED_MARKER, _MLX_DEPS, "MLX", progress)
+
+
+def provision_for(selection: dict | None, progress=None) -> dict:
+    """Provision whichever external env `selection`'s backend needs."""
+    return provision_mlx(progress) if _is_mlx_backend(selection) else provision(progress)
 
 
 def status(selection: dict | None = None) -> dict:
@@ -256,8 +325,11 @@ def status(selection: dict | None = None) -> dict:
     failure — so an optimistic "deps present" here is safe.
     """
     sel = flux_models_normalize(selection)
-    provisioned = env_provisioned()
-    inproc_ready = not _missing_deps()  # find_spec only — no heavy import
+    is_mlx = sel.get("backend") == "mlx"
+    provisioned = env_provisioned_for(sel)
+    # The in-process dev shortcut is the diffusers path only; the MLX backend always
+    # runs via its external env, so don't report the diffusers deps as its readiness.
+    inproc_ready = (not is_mlx) and (not _missing_deps())  # find_spec only — no heavy import
     uv_ok = _uv_bin() is not None
 
     available = provisioned or inproc_ready
@@ -302,15 +374,17 @@ def download(selection: dict | None = None, hf_token: str = "", progress=None, w
     if hf_token:
         _save_hf_token(hf_token)
 
-    already = env_provisioned()
+    is_mlx = model.get("backend") == "mlx"
+    already = env_provisioned_for(model)
     if not already:
-        # Dev fast path: if FLUX already runs in-process (deps in the base venv)
-        # and the external env isn't provisioned, don't trigger a heavy external
-        # uv provision — the choice is persisted and the in-process model was
-        # invalidated by save_selection(), so it reloads on the next clean.
-        if _probe_flux()[0] == "ready":
+        # Dev fast path (diffusers only): if FLUX already runs in-process (deps in
+        # the base venv) and the external env isn't provisioned, don't trigger a
+        # heavy external uv provision — the choice is persisted and the in-process
+        # model was invalidated by save_selection(), so it reloads on the next clean.
+        # The MLX backend has no in-process shortcut; it always uses its external env.
+        if not is_mlx and _probe_flux()[0] == "ready":
             return {"ok": True, "already": True, "message": "model updated (in-process)", "model": model, "weights_ready": False}
-        res = provision(progress=progress)
+        res = provision_for(model, progress=progress)
         if not res["ok"]:
             return {"ok": False, "already": False, "message": res["message"], "model": model, "weights_ready": False}
 
@@ -428,6 +502,21 @@ def load_inpainter():
     if _inpainter is not None:
         return _inpainter
 
+    sel = saved_selection()
+
+    # MLX backend (Apple Silicon): build the mflux inpainter in-process. Needs mflux
+    # in the base interpreter (uncommon — normally the external mlx-env child serves
+    # this), so it fails soft to None → classical fallback if mflux isn't importable.
+    if sel.get("backend") == "mlx":
+        try:
+            from flux_sidecar.mflux_inpainter import MfluxInpainter
+
+            repo = sel.get("mlx_repo") or "RunPod/FLUX.2-klein-4B-mflux-4bit"
+            _inpainter = MfluxInpainter(repo, steps=sel["steps"], upscale=sel["upscale"])
+            return _inpainter
+        except Exception:
+            return None
+
     if _missing_deps():
         return None
 
@@ -437,7 +526,6 @@ def load_inpainter():
     try:
         from core.device import get_best_device
 
-        sel = saved_selection()
         device = get_best_device()
         non_cuda = getattr(device, "type", str(device)) != "cuda"
 

@@ -44,6 +44,9 @@ export function defaultStyle() {
     lineHeight: 1.1,
     letterSpacing: 0,
     rotation: 0,
+    // mirror flip (applied around the box centre, inside rotation)
+    flipH: false, // horizontal mirror (left↔right)
+    flipV: false, // vertical mirror (top↔bottom)
     // drop shadow
     shadow: { on: false, x: 2, y: 2, blur: 2, color: '#000000', opacity: 0.6 },
     // rough / distressed edges (SVG feDisplacementMap)

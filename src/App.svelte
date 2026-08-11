@@ -12,7 +12,7 @@
   import { onMount } from 'svelte';
   import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast, undoBrush } from './lib/store.svelte.js';
   import { restoreFonts } from './lib/fonts.js';
-  import { checkSidecar } from './lib/sidecar.js';
+  import { checkSidecar, refreshFluxStatus } from './lib/sidecar.js';
 
   let fontModalOpen = $state(false);
   let settingsOpen = $state(false);
@@ -20,8 +20,14 @@
   onMount(() => {
     restoreFonts();
     // Probe the Python sidecar (only meaningful under Tauri; no-op in the browser).
+    // The health probe resolves once the child is up; only then can the FLUX
+    // status GET succeed (it has no retry of its own), so chain it here — this
+    // is what fixes the panel's stale "AI not installed" after a cold boot.
     checkSidecar().then((h) => {
-      if (h) toast(`Sidecar ready · ${h.device}`);
+      if (h) {
+        toast(`Sidecar ready · ${h.device}`);
+        refreshFluxStatus();
+      }
     });
   });
 
@@ -65,8 +71,13 @@
   <TopBar onFontLib={() => (fontModalOpen = true)} onSettings={() => (settingsOpen = true)} />
 
   <div class="main">
-    <RawPanel />
-    <Resizer side="left" />
+    <!-- Raw reference is a Translate-mode aid (see the original alongside the
+         cleaned page you're typesetting on). In Clean mode the editor IS the raw
+         you're cleaning, so a separate reference is redundant — hide it. -->
+    {#if app.mode !== 'clean'}
+      <RawPanel />
+      <Resizer side="left" />
+    {/if}
     <Editor />
     <Resizer side="right" />
     <RightPanel />

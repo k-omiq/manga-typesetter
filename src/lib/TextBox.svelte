@@ -73,6 +73,13 @@
     s.curve && s.curve !== 0 && !editing && text !== '' ? arcLayout(text, s, effSize) : null,
   );
 
+  // Mirror flip applied to the rendered glyphs (not the box chrome / handles).
+  // Rotation lives on .tbox (outer) and the flip on the text (inner), so the
+  // composition matches the exporter's rotate-then-flip order.
+  const mirror = $derived(
+    s.flipH || s.flipV ? `scale(${s.flipH ? -1 : 1}, ${s.flipV ? -1 : 1})` : '',
+  );
+
   function clamp(v, a, b) {
     return Math.max(a, Math.min(b, v));
   }
@@ -225,7 +232,7 @@
       onkeydown={onEditKey}
     ></div>
   {:else if layout}
-    <div class="arc">
+    <div class="arc" style={mirror ? `transform:${mirror}` : ''}>
       {#each layout as g, i (i)}
         <span
           class="arc-ch"
@@ -234,7 +241,7 @@
       {/each}
     </div>
   {:else}
-    <div class="txt" style={textStyle}>{text}</div>
+    <div class="txt" style="{textStyle}{mirror ? `transform:${mirror};` : ''}">{text}</div>
   {/if}
 
   {#if selected && !editing && !bulkOn}
