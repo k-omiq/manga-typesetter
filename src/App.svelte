@@ -13,11 +13,13 @@
   import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast } from './lib/store.svelte.js';
   import { restoreFonts } from './lib/fonts.js';
   import { checkSidecar } from './lib/sidecar.js';
+  import { initTheme } from './lib/theme.svelte.js';
 
   let fontModalOpen = $state(false);
   let settingsOpen = $state(false);
 
   onMount(() => {
+    initTheme();
     restoreFonts();
     // Probe the Python sidecar (only meaningful under Tauri; no-op in the browser).
     checkSidecar().then((h) => {

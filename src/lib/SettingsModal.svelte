@@ -232,11 +232,11 @@
     gap: 8px;
     font-size: 13px;
     padding: 4px 2px 12px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--line);
     margin-bottom: 14px;
   }
   .slabel {
-    color: var(--muted);
+    color: var(--t2);
   }
   .sval {
     margin-left: 2px;
@@ -246,27 +246,27 @@
     width: 9px;
     height: 9px;
     border-radius: 50%;
-    background: #555b6b;
+    background: var(--t3);
   }
   .dot.ok {
-    background: #5fcf86;
+    background: var(--text);
   }
   .dot.err {
-    background: #e06f6f;
+    background: var(--warn);
   }
   .group-label {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--muted);
+    color: var(--t2);
     margin-bottom: 8px;
   }
   .model-card {
-    border: 1px solid var(--border);
+    border: 1px solid var(--line);
     border-radius: 10px;
     padding: 14px;
     margin-bottom: 12px;
-    background: var(--surface-2);
+    background: var(--panel2);
   }
   .model-card.muted {
     opacity: 0.85;
@@ -285,7 +285,7 @@
   }
   .mc-title svg {
     flex: none;
-    color: var(--muted);
+    color: var(--t2);
   }
   .mc-name {
     font-size: 13.5px;
@@ -294,12 +294,12 @@
   }
   .mc-sub {
     font-size: 11.5px;
-    color: var(--muted);
+    color: var(--t2);
   }
   .mc-desc {
     font-size: 12.5px;
     line-height: 1.5;
-    color: var(--muted);
+    color: var(--t2);
     margin: 10px 0 0;
   }
   .mc-actions {
@@ -315,18 +315,18 @@
     letter-spacing: 0.04em;
     padding: 2px 8px;
     border-radius: 999px;
-    background: #2b2f3a;
-    color: #b9c0d0;
+    background: var(--panel2);
+    color: var(--t2);
     height: fit-content;
   }
   .tag.auto {
-    background: #24304a;
-    color: #9fb6e0;
+    background: var(--accent-soft);
+    color: var(--text);
   }
   .btn {
     padding: 7px 14px;
     border-radius: 7px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--line);
     background: var(--surface);
     color: var(--text);
     font: inherit;
@@ -339,9 +339,9 @@
     font-size: 12px;
   }
   .btn.danger {
-    background: #4a2323;
-    border-color: #7a3a3a;
-    color: #f0b6b6;
+    background: color-mix(in srgb, var(--warn) 16%, transparent);
+    border-color: var(--warn);
+    color: var(--warn);
     font-weight: 600;
   }
   .btn:disabled {
@@ -366,7 +366,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--muted);
+    color: var(--t2);
     font-family: ui-monospace, monospace;
   }
   .path-size {
@@ -376,7 +376,7 @@
   }
   .qhint {
     font-size: 12px;
-    color: var(--muted);
+    color: var(--t2);
     margin-top: 10px;
     line-height: 1.4;
   }
