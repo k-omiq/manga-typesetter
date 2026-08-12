@@ -161,3 +161,40 @@ describe('deleteChapter', () => {
     expect(fsx._tree.files.has('/lib/keep/project.json')).toBe(true);
   });
 });
+
+const { createChapter } = await import('./library.svelte.js');
+
+function fakeFile(name, byte) {
+  return { name, arrayBuffer: async () => new Uint8Array([byte]).buffer };
+}
+
+describe('createChapter', () => {
+  it('writes chapter.json with one page per file, in natural order', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({
+      projectId: p.id,
+      number: 3,
+      title: 'The Duel',
+      files: [fakeFile('page10.png', 10), fakeFile('page2.png', 2)],
+    });
+    expect(c.slug).toBe('003-the-duel');
+    const json = JSON.parse(fsx._tree.files.get(`${c.dir}/chapter.json`));
+    expect(json.pages.map((pg) => pg.file)).toEqual(['page2.png', 'page10.png']);
+  });
+
+  it('appears in the project catalogue immediately', async () => {
+    const p = await createProject('Series');
+    await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    expect(projectById(p.id).chapters).toHaveLength(1);
+  });
+
+  it('rolls back the directory when a copy fails', async () => {
+    const p = await createProject('Series');
+    const broken = { name: 'bad.png', arrayBuffer: async () => { throw new Error('read failed'); } };
+    await expect(
+      createChapter({ projectId: p.id, number: 1, title: '', files: [broken] }),
+    ).rejects.toThrow();
+    expect(fsx._tree.dirs.has(`${p.dir}/001`)).toBe(false);
+    expect(projectById(p.id).chapters).toHaveLength(0);
+  });
+});

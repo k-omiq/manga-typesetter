@@ -9,7 +9,7 @@
 //   <root>/<project-slug>/<chapter-slug>/raws/
 
 import { fsx } from './fsx.js';
-import { slugify, uniqueSlug } from './paths.js';
+import { slugify, uniqueSlug, chapterSlug } from './paths.js';
 
 const ROOT_KEY = 'mt.libraryRoot';
 const SCHEMA = 1;
@@ -209,4 +209,108 @@ export async function deleteChapter(projectId, chapterId) {
   if (!p || !c) return;
   await fsx.remove(c.dir);
   p.chapters = p.chapters.filter((x) => x.id !== chapterId);
+}
+
+// ---------- chapter creation ----------
+
+// Same ordering the image importer already uses, so a chapter's page order
+// matches what the user sees in their file browser.
+function naturalSort(a, b) {
+  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+// Cover art for the library grid. A derived asset written to its own path — it
+// is never written back over a raw, and the raw it came from is untouched.
+export async function makeThumb(bytes) {
+  const url = URL.createObjectURL(new Blob([bytes]));
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = url;
+    });
+    const W = 336; // 2x the 168px grid cell
+    const H = Math.round((img.naturalHeight / img.naturalWidth) * W);
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, W, H);
+    const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+export async function createChapter({ projectId, number, title, files }) {
+  const p = projectById(projectId);
+  if (!p) throw new Error('No such project');
+
+  const taken = new Set(p.chapters.map((c) => c.slug));
+  const slug = uniqueSlug(chapterSlug(number, title ?? ''), taken);
+  const dir = await fsx.join(p.dir, slug);
+  const rawsDir = await fsx.join(dir, 'raws');
+
+  const ordered = [...files].sort(naturalSort);
+
+  try {
+    await fsx.mkdir(rawsDir);
+
+    const pages = [];
+    for (let i = 0; i < ordered.length; i++) {
+      const f = ordered[i];
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      await fsx.writeFile(await fsx.join(rawsDir, f.name), bytes);
+      pages.push({ id: i + 1, file: f.name, w: 0, h: 0, lines: [], detect: null, boxes: [] });
+      if (i === 0 && !p.coverChapterId) {
+        try {
+          await fsx.writeFile(await fsx.join(p.dir, 'thumb.png'), await makeThumb(bytes));
+        } catch {
+          /* a missing cover is cosmetic; never fail chapter creation over it */
+        }
+      }
+    }
+
+    const record = {
+      schema: SCHEMA,
+      id: newId('c'),
+      number,
+      title: title ?? '',
+      createdAt: now(),
+      updatedAt: now(),
+      pages,
+    };
+    await writeJson(await fsx.join(dir, 'chapter.json'), record);
+
+    const chapter = {
+      id: record.id,
+      number: record.number,
+      title: record.title,
+      slug,
+      dir,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      pageCount: pages.length,
+      unreadable: false,
+    };
+    p.chapters = [...p.chapters, chapter].sort((a, b) => a.number - b.number);
+    if (!p.coverChapterId) {
+      p.coverChapterId = chapter.id;
+      p.coverPageId = pages[0]?.id ?? null;
+    }
+    p.updatedAt = now();
+    await renameProject(p.id, p.name); // rewrites project.json with the new cover + timestamp
+    return chapter;
+  } catch (e) {
+    // No half-written chapter is left behind for the scan to find.
+    try {
+      await fsx.remove(dir);
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
 }
