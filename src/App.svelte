@@ -55,11 +55,11 @@
   });
 
   // Every edit reaches disk through an 800ms debounce, so quitting with the
-  // editor open dropped up to 800ms of work. A desktop window being destroyed
-  // fires no unload the page can await, so the close request is the only place
-  // this can be caught.
+  // editor open drops up to 800ms of work unless something flushes on the way
+  // out. A desktop window being destroyed fires no unload the page can await, so
+  // both routes out of the app have to be caught explicitly.
   //
-  // This is the one @tauri-apps import outside the filesystem facade and the
+  // These are the only @tauri-apps imports outside the filesystem facade and the
   // importer: fsx is the seam for *filesystem* calls, and window lifecycle is
   // not one.
   async function armQuitFlush() {
@@ -67,17 +67,66 @@
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const w = getCurrentWindow();
+      // Shared by both routes out. Resolves true when it is safe to go; false
+      // when the flush failed and the user has been told (the second consecutive
+      // failure returns true, so a disk that will never write cannot pin the
+      // window open — see flushBeforeLeaving).
+      const safeToQuit = () => (app.chapterRef ? flushBeforeLeaving('quit') : Promise.resolve(true));
+
+      // Route 1: the red close button.
       await w.onCloseRequested(async (e) => {
         if (!app.chapterRef) return; // nothing pending; let it close
         e.preventDefault();
-        // Fails closed on the first failure and says why; a second consecutive
-        // failure names what is about to be lost and lets the window close, so a
-        // disk that will never write cannot pin it open. See flushBeforeLeaving.
-        if (await flushBeforeLeaving('quit')) await w.destroy();
+        if (await safeToQuit()) await w.destroy();
       });
+
+      // Route 2: ⌘Q and the menu's Quit item — the dominant way this app is
+      // closed on macOS, and one that raises no close request at all. tao's
+      // macOS app delegate implements `applicationWillTerminate` and nothing
+      // earlier: there is no `applicationShouldTerminate`, so by the time the
+      // app hears about the quit the run loop is already ending and the webview
+      // can no longer be asked for anything. Tauri's RunEvent::ExitRequested is
+      // no help either — tauri-runtime-wry only raises it when the last window
+      // is destroyed or when app.exit() is called, never from LoopDestroyed.
+      //
+      // The last point that is still ordinary application time is the menu item
+      // itself. The default menu's Quit is a *predefined* item, which on macOS
+      // sends `terminate:` straight to NSApp. Swapping it for an ordinary item
+      // carrying the same ⌘Q accelerator turns the quit into a menu event this
+      // code can await in — flush first, then destroy the window, which exits.
+      await interceptQuitMenuItem(safeToQuit, w);
     } catch {
-      // No close hook is better than a boot that fails over one.
+      // No quit hook is better than a boot that fails over one.
     }
+  }
+
+  async function interceptQuitMenuItem(safeToQuit, w) {
+    const { Menu, MenuItem } = await import('@tauri-apps/api/menu');
+    const menu = await Menu.default();
+    for (const sub of await menu.items()) {
+      if (sub.kind !== 'Submenu') continue;
+      const items = await sub.items();
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind !== 'Predefined') continue;
+        // muda names it '&Quit'; macOS drops the mnemonic marker.
+        const text = (await items[i].text()) ?? '';
+        if (!/^&?quit\b/i.test(text)) continue;
+        const replacement = await MenuItem.new({
+          id: 'mt-quit',
+          text, // whatever the platform already called it
+          accelerator: 'CmdOrCtrl+Q',
+          action: async () => {
+            if (await safeToQuit()) await w.destroy();
+          },
+        });
+        await sub.removeAt(i);
+        await sub.insert(replacement, i);
+        await menu.setAsAppMenu();
+        return;
+      }
+    }
+    // Nothing matched — leave the platform's own menu in place rather than
+    // installing a half-built one. The close-request route still holds.
   }
 
   // Hydrate the editor whenever the route lands on a chapter. The guard read is
