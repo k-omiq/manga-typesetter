@@ -47,3 +47,6 @@ tsuki117.json
 
 # Local packaged build artifacts (unsigned dev bundles)
 dist-app/
+
+# Git worktrees for parallel agent sessions
+.claude/worktrees/
