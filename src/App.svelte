@@ -14,8 +14,9 @@
   import ProjectView from './lib/home/ProjectView.svelte';
   import NewChapterDialog from './lib/home/NewChapterDialog.svelte';
   import { onMount, untrack } from 'svelte';
-  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast } from './lib/store.svelte.js';
+  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast, flushSave } from './lib/store.svelte.js';
   import { restoreFonts } from './lib/fonts.js';
+  import { isTauri } from './lib/importer.js';
   import { checkSidecar } from './lib/sidecar.js';
   import { initTheme } from './lib/theme.svelte.js';
   import { library, initRoot, openChapter } from './lib/library.svelte.js';
@@ -46,11 +47,44 @@
       booted = true;
     }
     restoreFonts();
+    armQuitFlush();
     // Probe the Python sidecar (only meaningful under Tauri; no-op in the browser).
     checkSidecar().then((h) => {
       if (h) toast(`Sidecar ready · ${h.device}`);
     });
   });
+
+  // Every edit reaches disk through an 800ms debounce, so quitting with the
+  // editor open dropped up to 800ms of work. A desktop window being destroyed
+  // fires no unload the page can await, so the close request is the only place
+  // this can be caught.
+  //
+  // This is the one @tauri-apps import outside the filesystem facade and the
+  // importer: fsx is the seam for *filesystem* calls, and window lifecycle is
+  // not one.
+  async function armQuitFlush() {
+    if (!isTauri()) return;
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const w = getCurrentWindow();
+      await w.onCloseRequested(async (e) => {
+        if (!app.chapterRef) return; // nothing pending; let it close
+        e.preventDefault();
+        try {
+          await flushSave();
+        } catch (err) {
+          // Fails closed, same as leaving the editor does: quitting now would
+          // silently discard the very work that could not be written. Say so
+          // and stay open — the next quit retries.
+          toast(`Could not save — not quitting. ${err?.message ?? err}`);
+          return;
+        }
+        await w.destroy();
+      });
+    } catch {
+      // No close hook is better than a boot that fails over one.
+    }
+  }
 
   // Hydrate the editor whenever the route lands on a chapter. The guard read is
   // untracked on purpose: openChapter writes app.chapterRef, so tracking it here

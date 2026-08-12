@@ -1,5 +1,5 @@
 <script>
-  import { app, saveExportPrefs, markSaved } from './store.svelte.js';
+  import { app, saveExportPrefs } from './store.svelte.js';
   import { exportImages } from './exporter.js';
 
   const isTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
@@ -19,8 +19,12 @@
   }
   async function go(scope) {
     close();
-    const ok = await exportImages(app.fmt, scope);
-    if (ok) markSaved();
+    // Exporting is not saving. This used to call markSaved(), which flipped the
+    // indicator to "saved" at the one moment chapter.json is most likely to be
+    // genuinely stale — a debounce is normally still pending when the user hits
+    // Export. The indicator answers "is my work on disk", and an export answers
+    // a different question.
+    await exportImages(app.fmt, scope);
   }
 </script>
 
