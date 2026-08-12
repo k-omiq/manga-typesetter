@@ -1,5 +1,5 @@
 // Real import: tolerant JSON parsing → pages, and image files → pages by order.
-import { app, toast, PAGE_W, PAGE_H, firstUnplaced } from './store.svelte.js';
+import { app, toast, markUnsaved, PAGE_W, PAGE_H, firstUnplaced } from './store.svelte.js';
 
 let pageSeq = 1000;
 
@@ -85,20 +85,49 @@ export async function importJsonFile(file) {
   }
   const parsed = normalizeJson(data);
   const old = app.pages;
-  // A shorter JSON drops the pages past its end. That is the user's own action,
-  // but inside an open chapter it also drops their typesetting on those pages
-  // from chapter.json at the next save, so it is never done silently.
-  const dropped = app.chapterRef ? Math.max(0, old.length - parsed.length) : 0;
-  app.pages = parsed.map((pp, i) => blankPage(pp.lines, old[i]));
+  const inChapter = !!app.chapterRef;
+
+  // A translations file is source material for pages that already exist. It
+  // says what the lines on page 1..N are; it says nothing about whether the
+  // chapter has pages after that. So it never shortens the document:
+  //
+  //   - Pages the JSON covers take its lines and keep everything else they
+  //     have — their raw, their `file`, and every box already placed on them.
+  //   - Pages past its end are left exactly as they are. Truncating them threw
+  //     away the user's typesetting on one click, with only a toast afterwards,
+  //     and the next navigation flushed that loss to chapter.json.
+  //   - Pages past the END OF THE DOCUMENT are only appended outside a chapter,
+  //     where that is the one way a document gets created. Inside a chapter a
+  //     page's raw comes from the library; an appended page would carry no
+  //     `file`, persist as file:'' and be unrenderable and unremovable.
+  const covered = inChapter ? Math.min(parsed.length, old.length) : parsed.length;
+  const next = [];
+  for (let i = 0; i < covered; i++) next.push(blankPage(parsed[i].lines, old[i]));
+  // Untouched pages are carried across by identity — nothing to rebuild, and
+  // nothing that could go missing in the rebuilding.
+  for (let i = covered; i < old.length; i++) next.push(old[i]);
+
+  app.pages = next;
   app.pageIndex = 0;
   app.selectedId = null;
   app.editingId = null;
-  app.loaded = true;
-  const total = parsed.reduce((s, p) => s + p.lines.length, 0);
+  if (next.length) app.loaded = true;
+  // The imported lines are a real edit to the open chapter, so they are saved
+  // like one instead of waiting for whatever happens to flush next.
+  if (inChapter && covered) markUnsaved();
+
+  const total = parsed
+    .slice(0, covered)
+    .reduce((s, p) => s + p.lines.length, 0);
+  const kept = old.length - covered;
+  const ignored = parsed.length - covered;
+  const notes = [];
+  if (kept) notes.push(`${kept} later page(s) left unchanged`);
+  if (ignored) {
+    notes.push(`${ignored} page(s) past the end of the chapter ignored — add pages in the library`);
+  }
   toast(
-    dropped
-      ? `Imported ${parsed.length} page(s), ${total} line(s) — ${dropped} page(s) dropped from the chapter`
-      : `Imported ${parsed.length} page(s), ${total} line(s)`,
+    `Imported ${covered} page(s), ${total} line(s)${notes.length ? ' — ' + notes.join(' · ') : ''}`,
   );
 }
 

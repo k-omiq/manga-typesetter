@@ -590,22 +590,21 @@ describe('pages[].file is durable, not positional', () => {
   const jsonFile = (obj) => ({ text: async () => JSON.stringify(obj) });
   const LINE = { n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' };
 
-  it('keeps every surviving page on its own raw when a shorter JSON replaces the document', async () => {
+  it('keeps every covered page on its own raw when a shorter JSON is imported', async () => {
     const { c } = await seedOpenChapter();
     expect(chapterJson(c).pages.map((pg) => pg.file)).toEqual(['page.png', 'page-2.png']);
     await importJsonFile(jsonFile({ pages: [{ lines: [LINE] }] }));
-    expect(app.pages).toHaveLength(1);
     expect(app.pages[0].file).toBe('page.png');
     await saveOpenChapter();
     // Page 1 still owns page.png — it has not inherited its neighbour's name.
-    expect(chapterJson(c).pages.map((pg) => pg.file)).toEqual(['page.png']);
+    expect(chapterJson(c).pages.map((pg) => pg.file)).toEqual(['page.png', 'page-2.png']);
     closeChapter();
   });
 
-  it('warns that pages were dropped from the chapter', async () => {
+  it('says how many later pages it left alone', async () => {
     await seedOpenChapter();
     await importJsonFile(jsonFile({ pages: [{ lines: [LINE] }] }));
-    expect(app.toast.msg).toMatch(/1 page\(s\) dropped from the chapter/);
+    expect(app.toast.msg).toMatch(/1 later page\(s\) left unchanged/);
     closeChapter();
   });
 
@@ -634,6 +633,82 @@ describe('pages[].file is durable, not positional', () => {
     // a foreign document over this chapter.
     await saveOpenChapter();
     expect(chapterJson(c).pages.map((pg) => pg.file)).toEqual(before);
+    closeChapter();
+  });
+});
+
+// The JSON button is one click away and enabled inside a chapter, because
+// re-importing updated translations is exactly what it is for. What it must
+// never be is a one-click way to delete the pages the file says nothing about.
+describe('a JSON import never shortens the chapter', () => {
+  const jsonFile = (obj) => ({ text: async () => JSON.stringify(obj) });
+  const LINE = (n, en) => ({ n, type: 'dialogue', jp: 'あ', en });
+  const pagesJson = (...ens) => jsonFile({ pages: ens.map((en) => ({ lines: [LINE(1, en)] })) });
+
+  // Three pages, with the typesetting on the last one — the page a two-page
+  // translations file has nothing to say about.
+  async function seedTypesetChapter() {
+    const p = await createProject('Series');
+    const c = await createChapter({
+      projectId: p.id,
+      number: 1,
+      title: '',
+      files: [fakeFile('p1.png', 1), fakeFile('p2.png', 2), fakeFile('p3.png', 3)],
+    });
+    await openChapter(p.id, c.id);
+    app.pages[2].lines = [LINE(1, 'End')];
+    app.pages[2].boxes = [
+      { id: 'b9', lineN: 1, text: null, x: 5, y: 6, w: 100, h: 40, style: {} },
+    ];
+    await saveOpenChapter();
+    return { p, c };
+  }
+
+  it('keeps the pages a shorter JSON does not cover, and their boxes', async () => {
+    const { c } = await seedTypesetChapter();
+    await importJsonFile(pagesJson('One'));
+    expect(app.pages).toHaveLength(3);
+    expect(app.pages[2].boxes).toHaveLength(1);
+    await saveOpenChapter();
+    const record = chapterJson(c);
+    expect(record.pages.map((pg) => pg.file)).toEqual(['p1.png', 'p2.png', 'p3.png']);
+    expect(record.pages[2].boxes).toHaveLength(1);
+    expect(record.pages[2].lines[0].en).toBe('End');
+    closeChapter();
+  });
+
+  it('updates the lines on the pages the JSON does cover', async () => {
+    const { c } = await seedTypesetChapter();
+    await importJsonFile(pagesJson('One', 'Two'));
+    expect(app.pages[0].lines[0].en).toBe('One');
+    expect(app.pages[1].lines[0].en).toBe('Two');
+    await saveOpenChapter();
+    expect(chapterJson(c).pages.map((pg) => pg.lines[0]?.en)).toEqual(['One', 'Two', 'End']);
+    closeChapter();
+  });
+
+  it('does not append pages that would persist with no raw', async () => {
+    const { c } = await seedTypesetChapter();
+    await importJsonFile(pagesJson('One', 'Two', 'Three', 'Four', 'Five'));
+    expect(app.pages).toHaveLength(3);
+    expect(app.toast.msg).toMatch(/2 page\(s\) past the end of the chapter ignored/);
+    await saveOpenChapter();
+    const files = chapterJson(c).pages.map((pg) => pg.file);
+    // No page arrives with file:'' — unrenderable, and impossible to get rid of.
+    expect(files).toEqual(['p1.png', 'p2.png', 'p3.png']);
+    closeChapter();
+  });
+
+  it('saves the imported lines itself rather than waiting for the way out', async () => {
+    const { c } = await seedTypesetChapter();
+    vi.useFakeTimers();
+    try {
+      await importJsonFile(pagesJson('One'));
+      await vi.advanceTimersByTimeAsync(1000);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(chapterJson(c).pages[0].lines[0].en).toBe('One');
     closeChapter();
   });
 });
