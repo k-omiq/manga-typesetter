@@ -18,7 +18,7 @@
   import { restoreFonts } from './lib/fonts.js';
   import { checkSidecar } from './lib/sidecar.js';
   import { initTheme } from './lib/theme.svelte.js';
-  import { initRoot, openChapter } from './lib/library.svelte.js';
+  import { library, initRoot, openChapter } from './lib/library.svelte.js';
   import { route, goBack } from './lib/route.svelte.js';
 
   let fontModalOpen = $state(false);
@@ -33,8 +33,18 @@
 
   onMount(async () => {
     initTheme();
-    await initRoot();
-    booted = true;
+    try {
+      await initRoot();
+    } catch (e) {
+      // Resolving the root is the one thing between launch and a window with
+      // anything in it. If it fails, say so on the library screen — which owns
+      // every other library failure, and already renders library.error as an
+      // alert with a retry — rather than leaving a blank frame with no way out.
+      library.error = `Could not work out where your library lives — ${e?.message ?? e}`;
+    } finally {
+      // Always. A boot that cannot finish still has to render something.
+      booted = true;
+    }
     restoreFonts();
     // Probe the Python sidecar (only meaningful under Tauri; no-op in the browser).
     checkSidecar().then((h) => {

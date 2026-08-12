@@ -119,6 +119,18 @@ async function readProject(root, slug, problems) {
 }
 
 export async function scanLibrary() {
+  // No root means initRoot never finished. Scanning '' would either fail with
+  // something unrecognisable or read the wrong place, and clearing the error
+  // would throw away the only explanation the user has — including across the
+  // retry button, which lands back here.
+  if (!library.root) {
+    library.projects = [];
+    library.loading = false;
+    if (!library.error) {
+      library.error = 'The library folder is not set. Choose one in Settings.';
+    }
+    return;
+  }
   library.loading = true;
   library.error = '';
   const found = [];

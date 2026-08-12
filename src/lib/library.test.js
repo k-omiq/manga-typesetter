@@ -116,6 +116,18 @@ describe('scanLibrary', () => {
     expect(library.projects[0].chapters.map((c) => c.number)).toEqual([2, 10]);
   });
 
+  it('keeps the boot failure on screen instead of scanning nowhere', async () => {
+    // What a failed initRoot leaves behind: no root, and a message the library
+    // screen is already rendering. The scan the screen runs on mount — and the
+    // retry button that lands back here — must not wipe it.
+    await setRoot('');
+    library.error = 'Could not work out where your library lives — no home directory';
+    await scanLibrary();
+    expect(library.loading).toBe(false);
+    expect(library.projects).toHaveLength(0);
+    expect(library.error).toMatch(/Could not work out where your library lives/);
+  });
+
   it('marks a corrupt chapter.json as unreadable without failing the scan', async () => {
     seedProject('y', PROJECT('p1', 'Y'), [['001', CHAPTER('c1', 1, [])]]);
     fsx._tree.dirs.add('/lib/y/002');
