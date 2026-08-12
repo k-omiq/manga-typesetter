@@ -7,6 +7,7 @@
   import { goEditor } from '../route.svelte.js';
   import { pickFilesTauri } from '../importer.js';
   import { toast } from '../store.svelte.js';
+  import { plural } from '../format.js';
 
   // `busy` is bindable so the app-level Escape handler can refuse to dismiss the
   // dialog mid-copy, matching the overlay and Cancel guards below.
@@ -83,7 +84,7 @@
       const n = number === null || number === undefined || number === '' ? 1 : Number(number);
       const chapter = await createChapter({ projectId: pid, number: n, title, files });
       open = false;
-      toast(`Created chapter ${chapter.number} · ${files.length} pages copied`);
+      toast(`Created chapter ${chapter.number} · ${plural(files.length, 'page')} copied`);
       await goEditor(pid, chapter.id);
     } catch (e) {
       // Deliberately not deleting `createdProject`: silently removing something

@@ -2,7 +2,7 @@
   import { projectById, deleteChapter } from '../library.svelte.js';
   import { route, goLibrary, goEditor } from '../route.svelte.js';
   import { toast } from '../store.svelte.js';
-  import { relativeTime } from '../reltime.js';
+  import { relativeTime, plural } from '../format.js';
 
   let { onNewChapter } = $props();
 
@@ -42,7 +42,7 @@
     <div class="project-title">
       <div class="project-name">{project.name}</div>
       <div class="project-meta">
-        {project.chapters.length} chapters · {pageTotal} pages
+        {plural(project.chapters.length, 'chapter')} · {plural(pageTotal, 'page')}
       </div>
     </div>
     <button class="soft-btn" onclick={() => onNewChapter(project.id)}>New chapter</button>
@@ -75,14 +75,14 @@
             {/if}
           </div>
           <div class="chapter-chip">{c.unreadable ? '' : status(c).label}</div>
-          <div class="chapter-pages">{c.unreadable ? '' : `${c.pageCount} pages`}</div>
+          <div class="chapter-pages">{c.unreadable ? '' : plural(c.pageCount, 'page')}</div>
           <div class="chapter-time">{c.unreadable ? '' : relativeTime(c.updatedAt)}</div>
         </button>
         <button class="chapter-del" onclick={() => onDelete(c)} title="Delete chapter">Delete</button>
       </div>
       {#if confirmingId === c.id}
         <div class="confirm-note warn" role="alert">
-          Deletes this chapter's folder, including its {c.pageCount} copied raws. No undo. Click Delete again to confirm.
+          Deletes this chapter's folder, including its {plural(c.pageCount, 'copied raw')}. No undo. Click Delete again to confirm.
         </div>
       {/if}
     {:else}

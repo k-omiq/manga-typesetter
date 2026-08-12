@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { relativeTime } from './reltime.js';
+import { relativeTime, plural } from './format.js';
 
 const NOW = Date.parse('2026-08-12T12:00:00.000Z');
 const at = (ms) => relativeTime(new Date(NOW - ms).toISOString(), NOW);
@@ -8,6 +8,19 @@ const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
+
+describe('plural', () => {
+  it('agrees with the count', () => {
+    expect(plural(0, 'page')).toBe('0 pages');
+    expect(plural(1, 'page')).toBe('1 page');
+    expect(plural(2, 'page')).toBe('2 pages');
+  });
+
+  it('takes an explicit plural for words that need one', () => {
+    expect(plural(1, 'entry', 'entries')).toBe('1 entry');
+    expect(plural(3, 'entry', 'entries')).toBe('3 entries');
+  });
+});
 
 describe('relativeTime', () => {
   it('collapses anything under a minute to "just now"', () => {

@@ -3,6 +3,7 @@
   import { library, scanLibrary, createProject, deleteProject } from '../library.svelte.js';
   import { goProject } from '../route.svelte.js';
   import { toast } from '../store.svelte.js';
+  import { plural } from '../format.js';
   import ProjectCard from './ProjectCard.svelte';
 
   let { onNewChapter } = $props();
@@ -82,8 +83,8 @@
       />
       {#if confirmingId === project.id}
         <div class="confirm-note warn" role="alert">
-          Deletes the folder and every chapter in it — {pageCountOf(project)} pages. No undo. Click
-          Delete again to confirm.
+          Deletes the folder and every chapter in it — {plural(pageCountOf(project), 'page')}. No
+          undo. Click Delete again to confirm.
         </div>
       {/if}
     {/each}

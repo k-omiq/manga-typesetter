@@ -1,8 +1,15 @@
-// Relative time for the library screens. Both the project card and the chapter
-// table need it, and neither should be the one that owns it.
+// Human-readable counts and times for the library screens. Both the project
+// card and the chapter table need both, and neither should be the one that
+// owns them.
 //
 // Pure: `now` is a parameter, so the whole thing is testable without touching
 // the clock, and nothing here reads the DOM or the filesystem.
+
+// "1 page", "12 pages". Not decoration: "1 pages" is the kind of thing that
+// makes an app look unfinished, and it appears on the first screen.
+export function plural(n, one, many = `${one}s`) {
+  return `${n} ${n === 1 ? one : many}`;
+}
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -13,7 +20,7 @@ const WEEK = 7 * DAY;
 const MONTH = 30 * DAY;
 const YEAR = 365 * DAY;
 
-const ago = (n, unit) => `${n} ${unit}${n === 1 ? '' : 's'} ago`;
+const ago = (n, unit) => `${plural(n, unit)} ago`;
 
 // Returns '' for anything it cannot read — a missing or malformed timestamp is
 // a blank column, never the string "Invalid Date" or "NaN days ago".
