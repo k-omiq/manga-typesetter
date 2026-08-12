@@ -250,7 +250,9 @@ describe('createChapter', () => {
 });
 
 const { openChapter, saveOpenChapter, closeChapter, chapterById } = await import('./library.svelte.js');
-const { app, markUnsaved } = await import('./store.svelte.js');
+const { app, markUnsaved, page, loadProjectPages } = await import('./store.svelte.js');
+const { importJsonFile } = await import('./importer.js');
+const { route, goEditor, goLibrary, resetRoute } = await import('./route.svelte.js');
 
 // The editor store is module-global, so no case may inherit another's open
 // chapter — a stale chapterRef would let a save land in the wrong file.
@@ -301,6 +303,9 @@ describe('openChapter', () => {
     }
     expect(app.pages[0].raw).toBeNull();
     expect(app.pages[0].lines).toHaveLength(1);
+    // The reference survives the missing file, so the next save cannot orphan
+    // the raw by writing an empty name over it.
+    expect(app.pages[0].file).toBe(record.pages[0].file);
     closeChapter();
   });
 
@@ -372,6 +377,140 @@ describe('saveOpenChapter', () => {
     closeChapter();
     await saveOpenChapter();
     expect(fsx._tree.files.get(`${c.dir}/chapter.json`)).toBe(before);
+  });
+});
+
+describe('pages[].file is durable, not positional', () => {
+  const jsonFile = (obj) => ({ text: async () => JSON.stringify(obj) });
+  const LINE = { n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' };
+
+  it('keeps every surviving page on its own raw when a shorter JSON replaces the document', async () => {
+    const { c } = await seedOpenChapter();
+    expect(chapterJson(c).pages.map((pg) => pg.file)).toEqual(['page.png', 'page-2.png']);
+    await importJsonFile(jsonFile({ pages: [{ lines: [LINE] }] }));
+    expect(app.pages).toHaveLength(1);
+    expect(app.pages[0].file).toBe('page.png');
+    await saveOpenChapter();
+    // Page 1 still owns page.png — it has not inherited its neighbour's name.
+    expect(chapterJson(c).pages.map((pg) => pg.file)).toEqual(['page.png']);
+    closeChapter();
+  });
+
+  it('warns that pages were dropped from the chapter', async () => {
+    await seedOpenChapter();
+    await importJsonFile(jsonFile({ pages: [{ lines: [LINE] }] }));
+    expect(app.toast.msg).toMatch(/1 page\(s\) dropped from the chapter/);
+    closeChapter();
+  });
+
+  it('says nothing about dropped pages outside a chapter', async () => {
+    closeChapter();
+    loadProjectPages([{ id: 1, lines: [], boxes: [] }, { id: 2, lines: [], boxes: [] }]);
+    await importJsonFile(jsonFile({ pages: [{ lines: [LINE] }] }));
+    expect(app.toast.msg).not.toMatch(/dropped/);
+  });
+
+  it("never lends this chapter's filenames to a foreign document", async () => {
+    const { c } = await seedOpenChapter();
+    // What psd.js does: substitute a whole different document under the open chapter.
+    loadProjectPages([{ id: 99, lines: [], boxes: [] }]);
+    await saveOpenChapter();
+    expect(chapterJson(c).pages[0].file).toBe('');
+    closeChapter();
+  });
+});
+
+describe('a save whose chapter moved under it', () => {
+  it('abandons the write when the chapter is closed while the read is in flight', async () => {
+    const { c } = await seedOpenChapter();
+    app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+    const before = fsx._tree.files.get(`${c.dir}/chapter.json`);
+    const orig = fsx.readTextFile;
+    fsx.readTextFile = async (path) => {
+      const out = await orig(path);
+      // The user leaves the editor while this save's read is still in flight.
+      if (path === `${c.dir}/chapter.json`) closeChapter();
+      return out;
+    };
+    try {
+      await saveOpenChapter();
+    } finally {
+      fsx.readTextFile = orig;
+    }
+    expect(fsx._tree.files.get(`${c.dir}/chapter.json`)).toBe(before);
+    expect(c.pageCount).toBe(2);
+  });
+});
+
+describe('a failed save is visible', () => {
+  it('toasts when the debounced autosave cannot write', async () => {
+    await seedOpenChapter();
+    const orig = fsx.writeTextFile;
+    fsx.writeTextFile = async () => {
+      throw new Error('disk full');
+    };
+    vi.useFakeTimers();
+    try {
+      app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+      markUnsaved();
+      await vi.advanceTimersByTimeAsync(1000);
+    } finally {
+      vi.useRealTimers();
+      fsx.writeTextFile = orig;
+    }
+    expect(app.saved).toBe(false);
+    expect(app.toast.msg).toMatch(/Could not save/);
+    closeChapter();
+  });
+
+  it('keeps the user in the editor when the leave-save fails', async () => {
+    const { p, c } = await seedOpenChapter();
+    resetRoute();
+    await goEditor(p.id, c.id);
+    app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+    const orig = fsx.writeTextFile;
+    fsx.writeTextFile = async () => {
+      throw new Error('disk full');
+    };
+    let moved;
+    try {
+      moved = await goLibrary();
+    } finally {
+      fsx.writeTextFile = orig;
+    }
+    expect(moved).toBe(false);
+    expect(route.name).toBe('editor');
+    expect(app.chapterRef).not.toBeNull();
+    expect(app.pages[0].lines).toHaveLength(1); // the work is still on screen
+    expect(app.toast.msg).toMatch(/staying in the editor/);
+    resetRoute();
+    closeChapter();
+  });
+
+  it('leaves the editor normally when the save succeeds', async () => {
+    const { p, c } = await seedOpenChapter();
+    resetRoute();
+    await goEditor(p.id, c.id);
+    app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+    const moved = await goLibrary();
+    expect(moved).toBe(true);
+    expect(route.name).toBe('library');
+    expect(app.chapterRef).toBeNull();
+    expect(chapterJson(c).pages[0].lines).toHaveLength(1);
+    resetRoute();
+  });
+});
+
+describe('the stand-in page', () => {
+  it('is frozen, so an accidental write throws instead of polluting it', () => {
+    closeChapter();
+    const p = page();
+    expect(Object.isFrozen(p)).toBe(true);
+    expect(() => {
+      p.w = 5;
+    }).toThrow();
+    expect(() => p.boxes.push({ id: 'x' })).toThrow();
+    expect(page().boxes).toHaveLength(0);
   });
 });
 

@@ -25,13 +25,23 @@ function same(a, b) {
   return a.name === b.name && a.projectId === b.projectId && a.chapterId === b.chapterId;
 }
 
+// Resolves true when the route moved, false when leaving was refused.
 async function go(next, { record = true } = {}) {
-  if (same(route, next)) return;
-  if (route.name === 'editor' && leaveEditorHook) await leaveEditorHook();
+  if (same(route, next)) return true;
+  if (route.name === 'editor' && leaveEditorHook) {
+    try {
+      await leaveEditorHook();
+    } catch {
+      // The hook could not put the chapter away safely (a failed save). It has
+      // already told the user why; staying put keeps their work on screen.
+      return false;
+    }
+  }
   if (record) history.push({ name: route.name, projectId: route.projectId, chapterId: route.chapterId });
   route.name = next.name;
   route.projectId = next.projectId;
   route.chapterId = next.chapterId;
+  return true;
 }
 
 export function goLibrary() {
@@ -46,10 +56,13 @@ export function goEditor(projectId, chapterId) {
   return go({ name: 'editor', projectId, chapterId });
 }
 
-export function goBack() {
+export async function goBack() {
   const prev = history.pop();
-  if (!prev) return Promise.resolve();
-  return go(prev, { record: false });
+  if (!prev) return false;
+  const moved = await go(prev, { record: false });
+  // A refused leave must not eat the history entry the user is trying to reach.
+  if (!moved) history.push(prev);
+  return moved;
 }
 
 // Test-only: return to a clean slate between cases.

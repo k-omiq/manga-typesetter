@@ -53,6 +53,10 @@ export function loadProjectPages(rawPages) {
       id: p.id ?? pageLoadSeq++,
       raw: p.raw ?? null,
       cleaned: p.cleaned ?? null,
+      // The page's own durable filename inside the chapter's raws/. Carried on
+      // the page, never re-derived by position, so a save can never hand one
+      // page's raw to another.
+      file: p.file ?? null,
       w: p.w ?? PAGE_W,
       h: p.h ?? PAGE_H,
       lines: (p.lines ?? []).map((l) => ({ ...l })),
@@ -124,7 +128,21 @@ export const app = $state({
 // A blank stand-in keeps every consumer total while no chapter is open. The
 // editor is only routed to with pages loaded, so this is a safety net, not a
 // code path with a UI.
-const NO_PAGE = { id: 0, raw: null, cleaned: null, w: PAGE_W, h: PAGE_H, lines: [], detect: null, boxes: [], activeLineN: null };
+// Frozen, arrays included: a write to the shared singleton is a bug, and it
+// should throw where it happens rather than quietly pollute a non-reactive
+// object that every empty-document consumer shares.
+const NO_PAGE = Object.freeze({
+  id: 0,
+  raw: null,
+  cleaned: null,
+  file: null,
+  w: PAGE_W,
+  h: PAGE_H,
+  lines: Object.freeze([]),
+  detect: null,
+  boxes: Object.freeze([]),
+  activeLineN: null,
+});
 export const page = () => app.pages[app.pageIndex] ?? NO_PAGE;
 export const byId = (id) => page().boxes.find((b) => b.id === id);
 // English text for a line. Back-compat: fall back to legacy natural/stylised/text
@@ -185,7 +203,13 @@ export function markUnsaved() {
   app.saved = false;
   if (!saver || !app.chapterRef) return;
   clearTimeout(saveT);
-  saveT = setTimeout(() => saver(), 800);
+  // There is no manual save in this app, so a rejected autosave is the user's
+  // only signal that their work is not reaching the disk. Never swallow it.
+  saveT = setTimeout(() => {
+    Promise.resolve()
+      .then(saver)
+      .catch((e) => toast(`Could not save — ${e?.message ?? e}`));
+  }, 800);
 }
 export function markSaved() {
   app.saved = true;

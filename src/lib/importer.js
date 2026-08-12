@@ -58,6 +58,10 @@ function blankPage(lines, prev) {
     id: prev?.id ?? pageSeq++,
     raw: prev?.raw ?? null,
     cleaned: prev?.cleaned ?? null,
+    // The name of this page's raw inside its chapter. Preserved for the same
+    // reason `raw` and `boxes` are: after a JSON re-import each surviving page
+    // must still point at its own file on disk, not at its neighbour's.
+    file: prev?.file ?? null,
     w: prev?.w ?? PAGE_W,
     h: prev?.h ?? PAGE_H,
     lines,
@@ -81,13 +85,21 @@ export async function importJsonFile(file) {
   }
   const parsed = normalizeJson(data);
   const old = app.pages;
+  // A shorter JSON drops the pages past its end. That is the user's own action,
+  // but inside an open chapter it also drops their typesetting on those pages
+  // from chapter.json at the next save, so it is never done silently.
+  const dropped = app.chapterRef ? Math.max(0, old.length - parsed.length) : 0;
   app.pages = parsed.map((pp, i) => blankPage(pp.lines, old[i]));
   app.pageIndex = 0;
   app.selectedId = null;
   app.editingId = null;
   app.loaded = true;
   const total = parsed.reduce((s, p) => s + p.lines.length, 0);
-  toast(`Imported ${parsed.length} page(s), ${total} line(s)`);
+  toast(
+    dropped
+      ? `Imported ${parsed.length} page(s), ${total} line(s) — ${dropped} page(s) dropped from the chapter`
+      : `Imported ${parsed.length} page(s), ${total} line(s)`,
+  );
 }
 
 // Transient file picker (runs inside a user gesture, so .click() is allowed).

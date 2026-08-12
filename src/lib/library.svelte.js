@@ -10,7 +10,7 @@
 
 import { fsx } from './fsx.js';
 import { slugify, uniqueSlug, chapterSlug } from './paths.js';
-import { app, loadProjectPages, markSaved, setSaver, flushSave } from './store.svelte.js';
+import { app, loadProjectPages, markSaved, setSaver, flushSave, toast } from './store.svelte.js';
 import { setLeaveEditorHook } from './route.svelte.js';
 
 const ROOT_KEY = 'mt.libraryRoot';
@@ -403,7 +403,9 @@ export async function openChapter(projectId, chapterId) {
         // A missing raw must not discard the typesetting that references it.
         url = null;
       }
-      pages.push({ ...pg, raw: url, cleaned: null });
+      // `file` travels onto the store page: from here on the page carries its
+      // own raw's name, so nothing downstream has to pair by position.
+      pages.push({ ...pg, file: pg.file ?? null, raw: url, cleaned: null });
     }
   } catch (e) {
     // Nothing was swapped in, so these URLs have no owner to revoke them.
@@ -423,18 +425,27 @@ export async function openChapter(projectId, chapterId) {
 }
 
 export async function saveOpenChapter() {
+  // Captured once. Every await below is a window in which the user can close
+  // this chapter or open another, and `app.pages` stops being what `ref`
+  // describes the moment they do — so the identity of the ref is re-checked
+  // after each one. A debounce already in flight cannot be cancelled; this is
+  // what stops it writing an empty or foreign document over a real chapter.
   const ref = app.chapterRef;
   if (!ref) return;
   const c = chapterById(ref.projectId, ref.chapterId);
   if (!c) return;
-  const record = await readJson(await fsx.join(c.dir, 'chapter.json'));
-  const onDisk = record.pages ?? [];
+  const path = await fsx.join(c.dir, 'chapter.json');
+  if (app.chapterRef !== ref) return;
+  const record = await readJson(path);
+  if (app.chapterRef !== ref) return;
+
   record.updatedAt = now();
-  // Blob URLs are runtime-only; `file` is the durable reference, carried across
-  // from disk untouched rather than re-derived from anything in memory.
-  record.pages = app.pages.map((pg, i) => ({
+  // Blob URLs are runtime-only. `file` is the durable reference and it is read
+  // off the page itself, so a document whose pages were replaced or reordered
+  // in the editor can never hand one page's raw to another.
+  record.pages = app.pages.map((pg) => ({
     id: pg.id,
-    file: onDisk[i]?.file ?? '',
+    file: pg.file ?? '',
     w: pg.w,
     h: pg.h,
     // $state.snapshot is a deep clone: the nested style objects inside boxes
@@ -443,11 +454,12 @@ export async function saveOpenChapter() {
     detect: $state.snapshot(pg.detect),
     boxes: $state.snapshot(pg.boxes),
   }));
-  await writeJson(await fsx.join(c.dir, 'chapter.json'), record);
+  await writeJson(path, record);
   // The in-memory catalogue follows the disk, never leads it.
   c.updatedAt = record.updatedAt;
   c.pageCount = record.pages.length;
-  markSaved();
+  // Only the chapter still on screen can be declared saved.
+  if (app.chapterRef === ref) markSaved();
 }
 
 export function closeChapter() {
@@ -467,6 +479,14 @@ export function closeChapter() {
 // Wire the store's autosave and the route's leave-editor flush to this module.
 setSaver(saveOpenChapter);
 setLeaveEditorHook(async () => {
-  await flushSave();
+  try {
+    await flushSave();
+  } catch (e) {
+    // Fail closed, and say so. Rethrowing keeps the route on the editor, so the
+    // work is still on screen and the next edit will retry the save; leaving
+    // would close the chapter and drop it.
+    toast(`Could not save — staying in the editor. ${e?.message ?? e}`);
+    throw e;
+  }
   closeChapter();
 });
