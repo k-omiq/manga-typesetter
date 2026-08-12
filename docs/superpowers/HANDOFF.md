@@ -2,7 +2,12 @@
 
 Date: 2026-08-12
 Worktree: `/Users/caved/dev/manga-typesetter/.claude/worktrees/strip-clean`, branch `strip-clean`
-State at handoff: HEAD `35c843d`, working tree clean, `npm test` 78 passing, `npm run build` and `cargo check` clean.
+State at handoff: working tree clean, `npm test` 89 passing, `npm run build` and `cargo check` clean.
+
+Branch topology, settled 2026-08-13: `ml-engine` preserves the pre-strip state — the full
+`python/flux_sidecar` package, FLUX inpainting, BYOK translation and Clean mode — for reuse in
+another application. `strip-clean` is the typesetter-only line and is what `main` should carry.
+The clean features were removed in `4960252`, which exists only on `strip-clean`.
 
 Work all of this **in the worktree above**. Do not `cd` to the parent repo.
 
@@ -23,17 +28,27 @@ Nine tasks, each individually reviewed, plus a whole-branch review that returned
 
 ---
 
-## 1. Finish slice 1 (start here — one step)
+## 1. Slice 1 — done, pending the branch move
 
-The scoped re-review of the final two commits was dispatched but died on a session limit. It never ran. Nothing else in slice 1 is open.
+The re-review ran and produced `b3f55a8` (single-flighting the quit flush, gating the menu work to
+macOS). An independent audit then closed the outstanding menu question — **the Edit menu is
+intact**: the code rebuilds the menu from Tauri's own `Menu::default()` builder and swaps only the
+Quit item, and Cmd+C / Cmd+V / Cmd+A were exercised inside an inline text box on the canvas.
 
-- Ready-to-use prompt: `.superpowers/sdd/2026-08-12-ui-remake-slice1/PENDING-rereview-prompt.md`
-- Diff package already built: `.superpowers/sdd/2026-08-12-ui-remake-slice1/review-41823a0..35c843d.diff`
+That audit found three more Important issues, all since fixed (`3c3cf1e`, `d560667`, `59cb747`,
+report at `docs/superpowers/data-safety-fix-report.md`):
+- `scanLibrary` had no in-flight guard, so a stale scan could wipe a newer one's results and print
+  an error naming the new root against the old path's failure.
+- A JSON import shorter than the open chapter deleted the trailing pages and every box on them,
+  one click away, with no confirm. It now never shrinks the document.
+- `chapter.json` was written non-atomically every 800 ms; a crash mid-write cost a whole chapter.
+  Writes now go through a temp file and a rename.
 
-Dispatch it to a `general-purpose` subagent on `opus`, synchronously. Its biggest named risk is worth repeating: the fix replaces the macOS menu's predefined Quit item, and **nobody has verified that Edit-menu Copy / Cut / Paste / Select All still work**. Users type into text boxes on the canvas; losing Cmd+C/Cmd+V there would be severe and no unit test would catch it. If that check cannot be done by reading the diff, launch the app and click through the menus.
+Not fixed, deliberately: the library card's status chip and Continue button, which the spec asks
+for and were never built. They belong to slice 2a, where the card is reworked anyway.
 
-If it comes back clean: delete the workspace (`rm -rf .superpowers/sdd/2026-08-12-ui-remake-slice1`) and use `superpowers:finishing-a-development-branch`.
-If it returns findings: one fix dispatch, one scoped re-review, then adjudicate residuals.
+Remaining step, which must run in the parent checkout because `main` is checked out there:
+`git reset --hard strip-clean` from `/Users/caved/dev/manga-typesetter`, with a clean working tree.
 
 ---
 
