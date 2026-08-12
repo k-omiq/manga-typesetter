@@ -56,7 +56,7 @@ Data-safety note: this slice touches the schema and the copy path, which is wher
 
 ## 3. Slice 2b — the editor wireframe
 
-The wireframe is the authority. The user calls it "the mother wireframe" and said everything outside it is redundant. It is the image attached earlier in the conversation; if it is not to hand, ask for it before designing.
+The wireframe is the authority. The user calls it "the mother wireframe" and said everything outside it is redundant. It is committed at `docs/wireframe-editor.png` — read it before designing anything in this slice.
 
 Target layout:
 - Full-bleed canvas. The current top bar, status bar and column resizers are deleted.
