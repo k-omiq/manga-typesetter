@@ -10,6 +10,13 @@
     "dialog:default",
     "fs:default",
     "fs:allow-write-file",
+    "fs:allow-read-file",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-read-dir",
+    "fs:allow-mkdir",
+    "fs:allow-remove",
+    "fs:allow-exists",
     {
       "identifier": "fs:scope",
       "allow": [
