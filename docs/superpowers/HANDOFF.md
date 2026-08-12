@@ -54,7 +54,8 @@ Remaining step, which must run in the parent checkout because `main` is checked 
 
 ## 2. Slice 2a — chapter sources (next)
 
-Decided with the user, not yet specified. Brainstorm → spec → plan → `superpowers:subagent-driven-development`.
+**Specified.** `docs/superpowers/specs/2026-08-13-slice2a-chapter-sources-design.md`. It needs a
+plan (`superpowers:writing-plans`) and then `superpowers:subagent-driven-development`.
 
 The governing decision: **imports do not belong in the editor.** Source material is chosen when a chapter is created, on the home screen. That resolves a bug currently worked around by disabling buttons — the editor's "Cleaned" import sets `pages[i].cleaned`, which `saveOpenChapter`'s page projection discards, so it silently loses its result on reopen.
 
