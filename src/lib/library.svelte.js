@@ -74,18 +74,31 @@ async function readChapter(projectDir, slug) {
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
     pageCount: (raw.pages ?? []).length,
+    unreadable: false,
   };
 }
 
-async function readProject(root, slug) {
+async function readProject(root, slug, problems) {
   const dir = await fsx.join(root, slug);
   const raw = await readJson(await fsx.join(dir, 'project.json'));
   const chapters = [];
   for (const cslug of await subdirs(dir)) {
+    const marker = await fsx.join(dir, cslug, 'chapter.json');
+    if (!(await fsx.exists(marker))) continue; // not a chapter directory
     try {
       chapters.push(await readChapter(dir, cslug));
-    } catch {
-      /* a directory without a readable chapter.json is not a chapter */
+    } catch (e) {
+      // One bad chapter folder must never blank the project's chapter list.
+      problems.push(`${slug}/${cslug}`);
+      chapters.push({
+        id: `unreadable:${cslug}`,
+        number: 0,
+        title: '',
+        slug: cslug,
+        dir: await fsx.join(dir, cslug),
+        pageCount: 0,
+        unreadable: true,
+      });
     }
   }
   chapters.sort((a, b) => a.number - b.number);
@@ -114,7 +127,7 @@ export async function scanLibrary() {
       const marker = await fsx.join(library.root, slug, 'project.json');
       if (!(await fsx.exists(marker))) continue; // not a project directory
       try {
-        found.push(await readProject(library.root, slug));
+        found.push(await readProject(library.root, slug, problems));
       } catch (e) {
         // One bad folder must never blank the library.
         problems.push(slug);

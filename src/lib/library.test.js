@@ -49,7 +49,7 @@ vi.mock('./fsx.js', () => {
 });
 
 const { fsx } = await import('./fsx.js');
-const { library, setRoot, scanLibrary, createProject, deleteProject, projectById } = await import(
+const { library, setRoot, scanLibrary, createProject, deleteProject, deleteChapter, projectById } = await import(
   './library.svelte.js'
 );
 
@@ -108,6 +108,19 @@ describe('scanLibrary', () => {
     await scanLibrary();
     expect(library.projects[0].chapters.map((c) => c.number)).toEqual([2, 10]);
   });
+
+  it('marks a corrupt chapter.json as unreadable without failing the scan', async () => {
+    seedProject('y', PROJECT('p1', 'Y'), [['001', CHAPTER('c1', 1, [])]]);
+    fsx._tree.dirs.add('/lib/y/002');
+    fsx._tree.files.set('/lib/y/002/chapter.json', '{ this is not json');
+    fsx._tree.dirs.add('/lib/y/no-marker');
+    await scanLibrary();
+    const chapters = library.projects[0].chapters;
+    expect(chapters.filter((c) => !c.unreadable)).toHaveLength(1);
+    expect(chapters.filter((c) => c.unreadable)).toHaveLength(1);
+    expect(chapters.find((c) => c.slug === 'no-marker')).toBeUndefined();
+    expect(library.error).toBeTruthy();
+  });
 });
 
 describe('createProject', () => {
@@ -131,5 +144,20 @@ describe('deleteProject', () => {
     await deleteProject(p.id);
     expect(fsx._tree.dirs.has('/lib/gone')).toBe(false);
     expect(projectById(p.id)).toBeUndefined();
+  });
+});
+
+describe('deleteChapter', () => {
+  it('removes the chapter directory and entry without touching the project', async () => {
+    const p = await createProject('Keep');
+    fsx._tree.dirs.add('/lib/keep/001');
+    fsx._tree.files.set('/lib/keep/001/chapter.json', CHAPTER('c1', 1, []));
+    await scanLibrary();
+    const chapter = projectById(p.id).chapters[0];
+    await deleteChapter(p.id, chapter.id);
+    expect(fsx._tree.dirs.has('/lib/keep/001')).toBe(false);
+    expect(projectById(p.id).chapters).toHaveLength(0);
+    expect(fsx._tree.dirs.has('/lib/keep')).toBe(true);
+    expect(fsx._tree.files.has('/lib/keep/project.json')).toBe(true);
   });
 });
