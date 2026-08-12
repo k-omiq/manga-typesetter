@@ -1,5 +1,6 @@
 <script>
   import { convertFileSrc } from '@tauri-apps/api/core';
+  import { relativeTime } from '../reltime.js';
 
   let { project, onOpen, onDelete } = $props();
 
@@ -8,6 +9,9 @@
     project.chapters.length === 1 ? '1 chapter' : `${project.chapters.length} chapters`,
   );
   const pageCount = $derived(project.chapters.reduce((n, c) => n + c.pageCount, 0));
+  // "12 pages · 3 days ago". A project written by a hand-edited or older
+  // project.json may carry no timestamp; then the separator goes too.
+  const touched = $derived(relativeTime(project.updatedAt));
 </script>
 
 <div class="pcard" class:unreadable={project.unreadable}>
@@ -24,7 +28,7 @@
       <div class="pcard-sub warn">Unreadable — check this folder</div>
     {:else}
       <div class="pcard-sub">{chapterLine}</div>
-      <div class="pcard-sub small">{pageCount} pages</div>
+      <div class="pcard-sub small">{pageCount} pages{touched ? ` · ${touched}` : ''}</div>
     {/if}
   </div>
   <button class="pcard-del" onclick={() => onDelete(project)} title="Delete project">Delete</button>

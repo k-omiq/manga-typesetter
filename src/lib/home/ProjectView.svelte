@@ -2,8 +2,18 @@
   import { projectById, deleteChapter } from '../library.svelte.js';
   import { route, goLibrary, goEditor } from '../route.svelte.js';
   import { toast } from '../store.svelte.js';
+  import { relativeTime } from '../reltime.js';
 
   let { onNewChapter } = $props();
+
+  // Slice 1 knows two facts about a chapter: whether it has pages, and whether
+  // anything has been placed on them. Three states, no progress model — a
+  // percentage would be a number this app cannot honestly produce yet.
+  function status(c) {
+    if (!c.pageCount) return { mark: '·', label: 'No pages', on: false };
+    if (!c.typeset) return { mark: '○', label: 'Raws only', on: false };
+    return { mark: '●', label: 'Typeset', on: true };
+  }
 
   const project = $derived(projectById(route.projectId));
   const pageTotal = $derived((project?.chapters ?? []).reduce((n, c) => n + c.pageCount, 0));
@@ -48,6 +58,9 @@
           onclick={() => goEditor(project.id, c.id)}
           disabled={c.unreadable}
         >
+          <div class="chapter-mark" class:on={!c.unreadable && status(c).on} aria-hidden="true">
+            {c.unreadable ? '—' : status(c).mark}
+          </div>
           <div class="chapter-num">{c.unreadable ? '—' : c.number}</div>
           <div class="chapter-title">
             {#if c.duplicate}
@@ -58,9 +71,12 @@
               <div class="chapter-sub">{c.slug} — check this folder</div>
             {:else}
               <div>{c.title || `Chapter ${c.number}`}</div>
-              <div class="chapter-sub">{c.pageCount} pages</div>
+              <div class="chapter-sub">{c.slug}</div>
             {/if}
           </div>
+          <div class="chapter-chip">{c.unreadable ? '' : status(c).label}</div>
+          <div class="chapter-pages">{c.unreadable ? '' : `${c.pageCount} pages`}</div>
+          <div class="chapter-time">{c.unreadable ? '' : relativeTime(c.updatedAt)}</div>
         </button>
         <button class="chapter-del" onclick={() => onDelete(c)} title="Delete chapter">Delete</button>
       </div>

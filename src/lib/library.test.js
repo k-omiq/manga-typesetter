@@ -107,6 +107,26 @@ describe('scanLibrary', () => {
     expect(library.projects).toHaveLength(0);
   });
 
+  it('records whether a chapter has any typesetting on it', async () => {
+    const BOXED = JSON.stringify({
+      schema: 1,
+      id: 'c2',
+      number: 2,
+      title: '',
+      createdAt: 'T0',
+      updatedAt: 'T0',
+      pages: [{ id: 1, boxes: [{ id: 'b1', lineN: 1 }] }],
+    });
+    seedProject('t', PROJECT('p1', 'T'), [
+      ['001', CHAPTER('c1', 1, [{ id: 1 }, { id: 2 }])],
+      ['002', BOXED],
+    ]);
+    await scanLibrary();
+    const [raws, typeset] = library.projects[0].chapters;
+    expect(raws.typeset).toBe(false);
+    expect(typeset.typeset).toBe(true);
+  });
+
   it('sorts chapters by number', async () => {
     seedProject('x', PROJECT('p1', 'X'), [
       ['010', CHAPTER('c10', 10, [])],
@@ -475,6 +495,17 @@ describe('saveOpenChapter', () => {
     expect(app.pages[0].boxes[0].style.shadow.on).toBe(true);
     // Unset keys are filled from the current schema, not left undefined.
     expect(app.pages[0].boxes[0].style.shadow.blur).toBe(2);
+    closeChapter();
+  });
+
+  it('turns the catalogue entry typeset once a box is placed', async () => {
+    const { p, c } = await seedOpenChapter();
+    expect(chapterById(p.id, c.id).typeset).toBe(false);
+    app.pages[0].boxes = [
+      { id: 'b1', lineN: null, text: 'Ah', x: 0, y: 0, w: 10, h: 10, style: {} },
+    ];
+    await saveOpenChapter();
+    expect(chapterById(p.id, c.id).typeset).toBe(true);
     closeChapter();
   });
 

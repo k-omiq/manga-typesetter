@@ -75,9 +75,15 @@ async function subdirs(dir) {
 
 // ---------- scan ----------
 
+// Everything slice 1 knows about a chapter's state: it has pages, and it has
+// typesetting. There is no progress model here and none is invented — a box on
+// any page means work has started, and that is the whole claim.
+export const isTypeset = (pages) => (pages ?? []).some((pg) => (pg.boxes ?? []).length > 0);
+
 async function readChapter(projectDir, slug) {
   const dir = await fsx.join(projectDir, slug);
   const raw = await readJson(await fsx.join(dir, 'chapter.json'));
+  const pages = raw.pages ?? [];
   return {
     id: raw.id,
     number: raw.number,
@@ -86,7 +92,8 @@ async function readChapter(projectDir, slug) {
     dir,
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
-    pageCount: (raw.pages ?? []).length,
+    pageCount: pages.length,
+    typeset: isTypeset(pages),
     unreadable: false,
   };
 }
@@ -104,6 +111,7 @@ function duplicateStub(name, slug, dir) {
     number: 0,
     title: '',
     pageCount: 0,
+    typeset: false,
     chapters: [],
     unreadable: true,
     duplicate: true,
@@ -137,6 +145,7 @@ async function readProject(root, slug, problems, dupes) {
         slug: cslug,
         dir: await fsx.join(dir, cslug),
         pageCount: 0,
+        typeset: false,
         unreadable: true,
       });
     }
@@ -393,6 +402,7 @@ export async function createChapter({ projectId, number, title, files }) {
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       pageCount: pages.length,
+      typeset: false, // fresh raws, nothing placed yet
       unreadable: false,
     };
 
@@ -539,6 +549,7 @@ export async function saveOpenChapter() {
   // The in-memory catalogue follows the disk, never leads it.
   c.updatedAt = record.updatedAt;
   c.pageCount = record.pages.length;
+  c.typeset = isTypeset(record.pages);
   // Only the chapter still on screen can be declared saved.
   if (app.chapterRef === ref) markSaved();
 }

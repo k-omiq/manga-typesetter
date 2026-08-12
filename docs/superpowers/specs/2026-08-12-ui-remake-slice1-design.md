@@ -2,7 +2,9 @@
 
 Date: 2026-08-12
 Branch: `strip-clean`
-Status: proposed
+Status: implemented, with the amendments recorded in "Amendments made during
+implementation" at the end of this document. Where that section and the body
+disagree, the amendments govern.
 
 ## Context
 
@@ -292,3 +294,63 @@ library, project, and editor screens.
 
 Full-bleed canvas, floating chrome pills, draggable/hideable/resizable text-box and queue panels,
 the click-mode rail, floating zoom/undo/redo bar, and the `<n/N>` pager, per the supplied wireframe.
+
+## Amendments made during implementation
+
+Recorded at the final whole-branch review. Each of these overrides the body above.
+
+### `--tint` and `--tintline` are on-page chrome, not theme tint
+
+The token block declares both in each theme and the body implies they invert like everything
+else. They do not. `--paper` is deliberately near-white in **both** themes, so anything drawn
+over a page — the selection outline, the eight transform handles, the rotation stem and grip,
+the bulk-target ring and badge, the JP reference pill, and the text caret — must be dark in
+both. `--tintline` (solid, `#2c2b28`) and `--tint` (translucent, `rgba(42,38,32,.45)`) hold the
+same values in the light and dark blocks, and are the only tokens that do. `--accent` is for
+panel chrome and never appears over `--paper`.
+
+### `renameProject` is not part of the module surface
+
+Listed under `src/lib/library.svelte.js`. Chapter creation writes `project.json` inline from
+locally computed cover values, so nothing ever called it; it has been removed. Renaming a
+project is unimplemented, and will need a new decision about whether the directory slug follows
+the name.
+
+### The chapter-copy progress line is deferred
+
+"Confirm creates the folders, copies the raws with a progress line" — the dialog blocks with a
+busy state and no per-file progress. Copies in this slice are local file-to-file and complete in
+well under a second for a normal chapter; a progress line is worth building when a copy can be
+slow enough to look stalled (a network volume, or a chapter of hundreds of pages), not before.
+**Not built. Deferred, not dropped.**
+
+### The "Choose another folder…" recovery action is superseded
+
+Error handling specifies a *Choose another folder…* action when the library root cannot be
+created. The library screen instead shows the failure as an alert with a **Try again** button,
+and Settings already owns choosing a different folder — a second entry point into the same
+picker would be two ways to do one thing, one of which only ever appears in an error state. The
+retry covers the transient case (the folder was on a volume that has since mounted, or a
+permission prompt has since been answered), which is the common one. **Superseded, not dropped.**
+
+### The library root must be inside `$HOME`
+
+Not stated in the spec. `fs:scope` and the asset protocol scope are both `$HOME/**`, and they
+have to agree, so a root on an external volume or a network share is not supported in this
+slice. Settings' folder picker refuses one up front rather than letting every subsequent call
+fail. Widening this means widening both scopes in the same commit.
+
+### The chapter status mark and chip carry two facts, not a progress model
+
+The table's status mark and 120px status chip render what slice 1 actually knows: a chapter has
+pages, and it has typesetting, or it does not — "No pages", "Raws only", "Typeset". No
+percentage or page-level completion is computed, because nothing in this slice can produce one
+honestly.
+
+### PSD import is refused inside an open chapter
+
+A PSD import substitutes the whole document, and the pages it builds carry no `file`, so inside
+an open chapter the next autosave would orphan every raw in `raws/`. It is refused while a
+chapter is open, with a toast directing the user to import the PSD as a new chapter. The
+editor's Cleaned and Raw image importers are disabled inside a chapter for the same class of
+reason (`file` is never set, and `cleaned` is not in the Page schema).
