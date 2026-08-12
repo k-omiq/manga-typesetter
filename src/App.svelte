@@ -71,7 +71,20 @@
       // when the flush failed and the user has been told (the second consecutive
       // failure returns true, so a disk that will never write cannot pin the
       // window open — see flushBeforeLeaving).
-      const safeToQuit = () => (app.chapterRef ? flushBeforeLeaving('quit') : Promise.resolve(true));
+      //
+      // Single-flight. A close request always prevents the native close and
+      // destroys afterwards, so a second click on the red button while the first
+      // flush is still awaiting a slow, failing write would start a second
+      // attempt — and two attempts against one failure spend the escape
+      // immediately, force-closing milliseconds after the refusal appears. That
+      // is the loss the two-step exists to prevent. Overlapping callers share the
+      // one in-flight answer instead.
+      let inFlight = null;
+      const safeToQuit = () => {
+        if (!app.chapterRef) return Promise.resolve(true);
+        if (!inFlight) inFlight = flushBeforeLeaving('quit').finally(() => (inFlight = null));
+        return inFlight;
+      };
 
       // Route 1: the red close button.
       await w.onCloseRequested(async (e) => {
@@ -101,6 +114,13 @@
   }
 
   async function interceptQuitMenuItem(safeToQuit, w) {
+    // macOS only, deliberately. It is the one platform where Tauri installs a
+    // default application menu at startup, where that menu's Quit is the
+    // dominant way out, and where ⌘Q is the idiom. On Windows there is no menu
+    // on this window at all, and setAsAppMenu would attach one — a File/Edit/
+    // Window/Help bar appearing above the canvas, shifting the layout, to
+    // intercept a Ctrl+Q that is not a Windows quit shortcut. Not worth it.
+    if (!/Mac/i.test(navigator.userAgent)) return;
     const { Menu, MenuItem } = await import('@tauri-apps/api/menu');
     const menu = await Menu.default();
     for (const sub of await menu.items()) {
