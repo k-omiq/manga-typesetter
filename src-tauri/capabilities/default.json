@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions. The fs:scope deny list below is mirrored in tauri.conf.json under app.security.assetProtocol.scope.deny — asset:// is a separate scope that does not inherit these entries, so the two lists must be edited together.",
+  "description": "enables the default permissions. The fs:scope allow and deny lists below are mirrored in tauri.conf.json under app.security.assetProtocol.scope — asset:// is a separate scope that inherits nothing from here, so BOTH pairs of lists must be edited together and must stay identical. Consequence of the $HOME/** allow: a library root outside the home directory (an external volume, a network share) is not supported in this slice. Widening it means widening the asset scope in the same commit.",
   "windows": [
     "main"
   ],
@@ -20,7 +20,7 @@
     {
       "identifier": "fs:scope",
       "allow": [
-        { "path": "**" }
+        { "path": "$HOME/**" }
       ],
       "deny": [
         { "path": "$HOME/.ssh/**" },

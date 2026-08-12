@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   frontend:
-    name: Frontend (vite build)
+    name: Frontend (vitest + vite build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +28,9 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # The persistence layer has no other automated protection: these tests are
+      # what stands between a refactor and a library that eats the user's raws.
+      - run: npm test
       - run: npx vite build
 
   rust:

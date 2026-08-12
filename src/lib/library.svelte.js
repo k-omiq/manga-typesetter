@@ -37,6 +37,17 @@ export async function initRoot() {
   library.root = saved || (await defaultRoot());
 }
 
+// Both filesystem scopes this app is granted are $HOME/** (see
+// src-tauri/capabilities/default.json, and the asset scope it mirrors). A root
+// outside the home directory is not a library it can read or write, so callers
+// check before adopting one rather than letting it fail one call at a time.
+export async function withinHome(dir) {
+  const trim = (s) => String(s).replace(/\/+$/, '');
+  const home = trim(await fsx.homeDir());
+  const d = trim(dir);
+  return d === home || d.startsWith(home + '/');
+}
+
 export async function setRoot(path) {
   library.root = path;
   try {

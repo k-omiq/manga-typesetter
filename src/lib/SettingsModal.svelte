@@ -4,7 +4,7 @@
   import { app, saveExportPrefs, toast } from './store.svelte.js';
   import { checkSidecar, modelsCacheInfo, clearModelsCache, restartSidecar } from './sidecar.js';
   import { theme, setTheme } from './theme.svelte.js';
-  import { library, setRoot, scanLibrary } from './library.svelte.js';
+  import { library, setRoot, scanLibrary, withinHome } from './library.svelte.js';
 
   let { open = $bindable() } = $props();
 
@@ -95,6 +95,14 @@
       const { open: pick } = await import('@tauri-apps/plugin-dialog');
       const dir = await pick({ directory: true, defaultPath: library.root });
       if (!dir) return;
+      // Both filesystem scopes are $HOME/** in this slice (see
+      // src-tauri/capabilities/default.json). Outside it, every read and write
+      // is denied, and the library would appear simply broken — say so here
+      // instead, where the choice is being made.
+      if (!(await withinHome(dir))) {
+        toast('The library has to live inside your home folder for now.');
+        return;
+      }
       await setRoot(dir);
       await scanLibrary();
       toast('Library folder changed');
