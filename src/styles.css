@@ -61,7 +61,6 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
 .logo-btn:hover{ color:var(--text); }
 .logo-btn:disabled{ cursor:default; opacity:.5; }
 .brand .name{ font-weight:600; letter-spacing:.2px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.brand .name .dim{ color:var(--t2); font-weight:500; }
 
 .pagenav{
   margin:0 auto; display:flex; align-items:center; gap:4px;

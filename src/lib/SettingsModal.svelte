@@ -85,6 +85,12 @@
       toast('Choosing a folder needs the desktop app');
       return;
     }
+    // Rescanning replaces library.projects wholesale, which would orphan the open
+    // chapter's ref and turn every later autosave into a silent no-op.
+    if (app.chapterRef) {
+      toast('Close the open chapter before changing the library folder');
+      return;
+    }
     try {
       const { open: pick } = await import('@tauri-apps/plugin-dialog');
       const dir = await pick({ directory: true, defaultPath: library.root });
@@ -148,7 +154,17 @@
           <span>Folder</span>
           <code class="path" title={library.root}>{library.root}</code>
         </div>
-        <button class="btn" disabled={!isTauri()} onclick={chooseRoot}>Change folder…</button>
+        <button
+          class="btn"
+          disabled={!isTauri() || !!app.chapterRef}
+          title={app.chapterRef ? 'Close the open chapter first' : 'Pick a different library folder'}
+          onclick={chooseRoot}
+        >
+          Change folder…
+        </button>
+        {#if app.chapterRef}
+          <div class="qhint">Close the open chapter before changing the library folder.</div>
+        {/if}
       </div>
 
       <!-- Sidecar status + restart -->

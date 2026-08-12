@@ -25,7 +25,15 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$HOME/**"]
+        "scope": {
+          "allow": ["$HOME/**"],
+          "deny": [
+            "$HOME/.ssh/**",
+            "$HOME/.aws/**",
+            "$HOME/.gnupg/**",
+            "$HOME/.config/gh/**"
+          ]
+        }
       }
     }
   },

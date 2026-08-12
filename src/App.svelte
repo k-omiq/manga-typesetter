@@ -24,6 +24,7 @@
   let fontModalOpen = $state(false);
   let settingsOpen = $state(false);
   let newChapterOpen = $state(false);
+  let newChapterBusy = $state(false);
   let newChapterProject = $state(null);
   // The library root is resolved asynchronously. Nothing that scans the library
   // may mount before it is known — a child's onMount runs before its parent's,
@@ -43,7 +44,10 @@
 
   // Hydrate the editor whenever the route lands on a chapter. The guard read is
   // untracked on purpose: openChapter writes app.chapterRef, so tracking it here
-  // would make this effect its own trigger. Its only dependency is the route.
+  // would make this effect its own trigger. The invariant is that nothing the
+  // editor writes can re-run this — the route, plus whatever openChapter's own
+  // synchronous prefix reads (library.projects, p.chapters, c.unreadable), are
+  // its dependencies, and a rescan re-opening the same chapter is a no-op.
   $effect(() => {
     if (route.name !== 'editor') return;
     const { projectId, chapterId } = route;
@@ -65,7 +69,13 @@
     // ignore shortcuts while inline-editing a text box
     if (app.editingId) return;
     if (e.key === 'Escape') {
-      if (newChapterOpen) return (newChapterOpen = false);
+      if (newChapterOpen) {
+        // A chapter copy in flight must not be dismissible — the same guard the
+        // dialog's overlay and Cancel already carry. Unmounting mid-copy would
+        // hide the failure in a component nobody can see.
+        if (!newChapterBusy) newChapterOpen = false;
+        return;
+      }
       if (app.exportOpen) return (app.exportOpen = false);
       if (app.bulk.active) return closeBulk();
       if (settingsOpen) return (settingsOpen = false);
@@ -113,7 +123,7 @@
   <div class="boot"></div>
 {/if}
 
-<NewChapterDialog bind:open={newChapterOpen} projectId={newChapterProject} />
+<NewChapterDialog bind:open={newChapterOpen} bind:busy={newChapterBusy} projectId={newChapterProject} />
 <FontModal bind:open={fontModalOpen} />
 <SettingsModal bind:open={settingsOpen} />
 <ExportDialog />

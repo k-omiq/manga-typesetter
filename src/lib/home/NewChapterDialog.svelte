@@ -8,14 +8,15 @@
   import { pickFilesTauri } from '../importer.js';
   import { toast } from '../store.svelte.js';
 
-  let { open = $bindable(), projectId = null } = $props();
+  // `busy` is bindable so the app-level Escape handler can refuse to dismiss the
+  // dialog mid-copy, matching the overlay and Cancel guards below.
+  let { open = $bindable(), busy = $bindable(false), projectId = null } = $props();
 
   let target = $state('');
   let newProjectName = $state('');
   let number = $state(1);
   let title = $state('');
   let files = $state([]);
-  let busy = $state(false);
   let error = $state('');
 
   function nextNumberFor(id) {
@@ -44,12 +45,18 @@
   }
 
   async function pickRaws() {
-    const picked = await pickFilesTauri({
-      name: 'Images',
-      extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff'],
-      multiple: true,
-    });
-    if (picked) files = [...picked];
+    // The picker is Tauri-only; outside the desktop app the import throws and the
+    // click would otherwise be a silent unhandled rejection.
+    try {
+      const picked = await pickFilesTauri({
+        name: 'Images',
+        extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff'],
+        multiple: true,
+      });
+      if (picked) files = [...picked];
+    } catch (e) {
+      error = `Could not open the file picker — ${e?.message ?? e}`;
+    }
   }
 
   async function submit() {
@@ -63,15 +70,30 @@
       return;
     }
     busy = true;
+    // Set only when this submit created the project, so a later chapter failure
+    // can name what it left behind in the library.
+    let createdProject = null;
     try {
-      const pid =
-        target === '__new__' ? (await createProject(newProjectName.trim())).id : target;
-      const chapter = await createChapter({ projectId: pid, number: Number(number), title, files });
+      if (target === '__new__') {
+        createdProject = await createProject(newProjectName.trim());
+      }
+      const pid = createdProject ? createdProject.id : target;
+      // An emptied number input binds null; that must mean 1, not chapter 000.
+      // An explicit 0 is still honoured — chapter 0 prologues are a real thing.
+      const n = number === null || number === undefined || number === '' ? 1 : Number(number);
+      const chapter = await createChapter({ projectId: pid, number: n, title, files });
       open = false;
       toast(`Created chapter ${chapter.number} · ${files.length} pages copied`);
       await goEditor(pid, chapter.id);
     } catch (e) {
-      error = `Could not create the chapter — ${e?.message ?? e}`;
+      // Deliberately not deleting `createdProject`: silently removing something
+      // the user just named is worse than telling them it is there.
+      const orphan = createdProject
+        ? ` The project "${createdProject.name}" was created and is now empty.`
+        : '';
+      error = `Could not create the chapter — ${e?.message ?? e}.${orphan}`;
+      // Also toasted, so the message survives the dialog being dismissed.
+      toast(error);
     } finally {
       busy = false;
     }
