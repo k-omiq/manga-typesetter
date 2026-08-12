@@ -9,7 +9,7 @@
 // ag-psd auto-initializes its canvas backend when `document` is present (the
 // Tauri webview / vite browser), so no explicit initializeCanvas call is needed.
 import { writePsd, readPsd } from 'ag-psd';
-import { app, toast, loadProjectPages, PAGE_W, PAGE_H } from './store.svelte.js';
+import { app, PAGE_W, PAGE_H } from './store.svelte.js';
 import { isTauri, pickFilesTauri } from './importer.js';
 import { renderPageCanvas, renderBoxLayer } from './exporter.js';
 import { fontCssFor } from './store.svelte.js';
@@ -353,6 +353,10 @@ function findInGroup(psd, groupName, layerName) {
   return grp.children.find((l) => l.name === layerName) || null;
 }
 
+function revokeAll(...urls) {
+  for (const u of new Set(urls.filter(Boolean))) URL.revokeObjectURL(u);
+}
+
 async function layerToUrl(layer) {
   if (!layer) return null;
   if (layer.canvas) return canvasToObjectUrl(layer.canvas);
@@ -376,8 +380,15 @@ async function reconstructFromProject(project, psd) {
       ? { panels: (sp.detect.panels ?? []).slice(), boxes: (sp.detect.boxes ?? []).map((d) => ({ ...d })) }
       : null,
   };
-  if (sp.hasRaw) page.raw = await layerToUrl(findInGroup(psd, 'Base', 'Raw'));
-  if (sp.hasCleaned) page.cleaned = await layerToUrl(findInGroup(psd, 'Base', 'Cleaned'));
+  try {
+    if (sp.hasRaw) page.raw = await layerToUrl(findInGroup(psd, 'Base', 'Raw'));
+    if (sp.hasCleaned) page.cleaned = await layerToUrl(findInGroup(psd, 'Base', 'Cleaned'));
+  } catch (e) {
+    // A URL minted before the failure has no owner to revoke it, and it holds a
+    // whole page raster alive for as long as the app runs.
+    revokeAll(page.raw, page.cleaned);
+    throw e;
+  }
   return page;
 }
 
@@ -403,7 +414,8 @@ async function reconstructForeign(psd) {
   let cleaned = baseLayer ? await layerToUrl(baseLayer) : null;
   if (!cleaned && psd.canvas) cleaned = await canvasToObjectUrl(psd.canvas);
 
-  // Editable text layers → boxes.
+  // Editable text layers → boxes. Anything that throws from here on has to give
+  // the raster URL back first; nothing else holds it yet.
   const boxes = [];
   const collectText = (nodes) => {
     for (const n of nodes ?? []) {
@@ -430,7 +442,12 @@ async function reconstructForeign(psd) {
       }
     }
   };
-  collectText(psd.children);
+  try {
+    collectText(psd.children);
+  } catch (e) {
+    revokeAll(cleaned);
+    throw e;
+  }
 
   return {
     id: undefined,
@@ -453,55 +470,99 @@ export function parsePagePsd(bytes) {
   return { project: supported ? project : null, psd };
 }
 
-// Import one or more .psd files → pages (lossless when embedded JSON present).
-export async function importPsdFiles(files) {
-  // A PSD import substitutes the whole document. Inside an open chapter that is
-  // unrecoverable: the pages it builds carry no `file`, loadProjectPages ends in
-  // markUnsaved(), and 800ms later — with no confirmation asked for and none
-  // given — the autosave writes file:'' over every page in chapter.json. The
-  // raws are still sitting in raws/, but nothing references them any more, and
-  // every page reopens with raw:null forever.
-  //
-  // There is no partial version of this to offer, so it is refused outright.
-  if (app.chapterRef) {
-    toast('Close this chapter first — a PSD comes in as its own new chapter from the home screen.');
-    return;
+// ---------------------------------------------------------------------------
+// import: PSD files → a whole chapter's worth of pages, ready for the library
+// ---------------------------------------------------------------------------
+
+// A PSD describes a whole typeset chapter, so it creates one rather than being
+// merged into an existing one — importing into an open chapter substituted the
+// document and orphaned every raw in raws/, which is why the editor no longer
+// has this button at all.
+//
+// THIS IS THE ONE PLACE A RAW IS NOT THE USER'S ORIGINAL FILE. A PSD carries
+// rasters, not the files they were made from, so pages come out of here as
+// freshly encoded PNG bytes. Callers say so before importing.
+
+const psdBytes = (url) => fetch(url).then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b));
+
+function psdPageName(index, suffix) {
+  return `page-${String(index + 1).padStart(3, '0')}${suffix}.png`;
+}
+
+// A reconstructed page (blob URLs) → the byte-carrying shape the library writes.
+// Returns null when the PSD yielded no raster at all: a page with no image
+// would persist with an empty `file`, unrenderable and impossible to remove.
+async function toChapterPage(page, index) {
+  try {
+    // Every page needs a raw, because `file` is what resolves a page back to an
+    // image on disk. Three cases:
+    //   both rasters      → raw and cleaned, as they were
+    //   one flattened one → written once as the raw (a foreign PSD hands the
+    //                       same URL back as both; so does a PSD whose Base
+    //                       group only has a Cleaned layer)
+    //   none              → not a page this app can store
+    const rawUrl = page.raw ?? page.cleaned;
+    if (!rawUrl) return null;
+    const cleanedUrl = page.cleaned && page.cleaned !== rawUrl ? page.cleaned : null;
+
+    return {
+      // The page's only image came from a Cleaned layer, so what lands in raws/
+      // is text-erased art. Counted and stated by the caller: detection would
+      // find nothing on it, and that should not look like a broken detector.
+      cleanedOnly: !page.raw && !!page.cleaned,
+      rawName: psdPageName(index, ''),
+      rawBytes: await psdBytes(rawUrl),
+      cleanedName: cleanedUrl ? psdPageName(index, '-cleaned') : null,
+      cleanedBytes: cleanedUrl ? await psdBytes(cleanedUrl) : null,
+      w: page.w ?? PAGE_W,
+      h: page.h ?? PAGE_H,
+      lines: (page.lines ?? []).map((l) => ({ ...l })),
+      // Box ids are per-document and are reassigned when the chapter opens;
+      // these only have to be unique inside the record.
+      boxes: (page.boxes ?? []).map((b, i) => ({ ...b, id: `b${i + 1}`, style: { ...b.style } })),
+      detect: page.detect ?? null,
+    };
+  } finally {
+    revokeAll(page.raw, page.cleaned);
   }
+}
+
+export async function chapterPagesFromPsdFiles(files) {
   const list = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-  if (!list.length) return;
   const pages = [];
+  const problems = [];
   let lossless = 0;
   for (const file of list) {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const { project, psd } = parsePagePsd(bytes);
-      if (project) {
-        pages.push(await reconstructFromProject(project, psd));
-        lossless++;
-      } else {
-        pages.push(await reconstructForeign(psd));
+      const page = project ? await reconstructFromProject(project, psd) : await reconstructForeign(psd);
+      const built = await toChapterPage(page, pages.length);
+      if (!built) {
+        problems.push(`${file.name} — no page image in it`);
+        continue;
       }
+      pages.push(built);
+      if (project) lossless++;
     } catch (e) {
-      toast(`Could not read ${file.name}: ${e?.message || e}`);
+      problems.push(`${file.name} — ${e?.message || e}`);
     }
   }
-  if (!pages.length) return;
-  loadProjectPages(pages);
-  toast(
-    lossless === pages.length
-      ? `Imported ${pages.length} page(s) from PSD (lossless)`
-      : `Imported ${pages.length} page(s) from PSD (${lossless} lossless, ${pages.length - lossless} foreign)`,
-  );
+  return {
+    pages,
+    lossless,
+    foreign: pages.length - lossless,
+    cleanedOnly: pages.filter((pg) => pg.cleanedOnly).length,
+    problems,
+  };
 }
 
-export async function pickPsd() {
+export async function pickPsdFiles() {
   // Native dialog under Tauri — a detached <input type=file> never opens in the
   // packaged app (WKWebView runOpenPanel silently fails). Browser keeps the
   // input fallback.
   if (isTauri()) {
-    const files = await pickFilesTauri({ name: 'Photoshop', extensions: ['psd', 'psb'], multiple: true });
-    if (files && files.length) await importPsdFiles(files);
-    return;
+    return pickFilesTauri({ name: 'Photoshop', extensions: ['psd', 'psb'], multiple: true });
   }
   const input = document.createElement('input');
   input.type = 'file';
@@ -511,7 +572,7 @@ export async function pickPsd() {
     input.onchange = resolve;
     input.click();
   });
-  if (input.files && input.files.length) await importPsdFiles(input.files);
+  return input.files && input.files.length ? [...input.files] : null;
 }
 
 // ---------------------------------------------------------------------------

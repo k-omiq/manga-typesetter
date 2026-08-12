@@ -4,7 +4,7 @@
   import { toast } from '../store.svelte.js';
   import { relativeTime, plural } from '../format.js';
 
-  let { onNewChapter } = $props();
+  let { onNewChapter, onImportPsd, onSources } = $props();
 
   // Slice 1 knows two facts about a chapter: whether it has pages, and whether
   // anything has been placed on them. Three states, no progress model — a
@@ -45,6 +45,7 @@
         {plural(project.chapters.length, 'chapter')} · {plural(pageTotal, 'page')}
       </div>
     </div>
+    <button class="soft-btn" onclick={() => onImportPsd(project.id)}>Import from PSD</button>
     <button class="soft-btn" onclick={() => onNewChapter(project.id)}>New chapter</button>
   </div>
 
@@ -78,6 +79,12 @@
           <div class="chapter-pages">{c.unreadable ? '' : plural(c.pageCount, 'page')}</div>
           <div class="chapter-time">{c.unreadable ? '' : relativeTime(c.updatedAt)}</div>
         </button>
+        <button
+          class="chapter-act"
+          onclick={() => onSources(project.id, c.id)}
+          disabled={c.unreadable}
+          title="Cleaned pages and translations">Sources</button
+        >
         <button class="chapter-del" onclick={() => onDelete(c)} title="Delete chapter">Delete</button>
       </div>
       {#if confirmingId === c.id}

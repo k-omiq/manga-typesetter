@@ -1,7 +1,5 @@
 <script>
   import { app, prevPage, nextPage } from './store.svelte.js';
-  import { pickJson, pickImages } from './importer.js';
-  import { pickPsd } from './psd.js';
   import { detectAllPages, sidecarReady } from './sidecar.js';
   import { goProject, goLibrary } from './route.svelte.js';
   import { projectById, chapterById } from './library.svelte.js';
@@ -9,15 +7,6 @@
   let { onFontLib, onSettings } = $props();
 
   const canDetect = $derived(sidecarReady() && app.pages.some((p) => p?.raw) && !app.detecting);
-
-  // The image importers predate the library. Inside a chapter they push pages
-  // with no `file` (which the next autosave writes as file:'' — a page that can
-  // never render and can never be got rid of) and set a `cleaned` field the page
-  // projection discards on the way to disk. Both are wrong in ways this slice
-  // does not have the schema to fix, so the buttons are simply not offered while
-  // a chapter owns the document.
-  const inChapter = $derived(!!app.chapterRef);
-  const IMPORT_TIP = "A chapter's pages come from the library — create a chapter to add raws.";
 
   const label = $derived.by(() => {
     const ref = app.chapterRef;
@@ -71,19 +60,10 @@
   </nav>
 
   <div class="topbar-right">
+    <!-- No import controls here. A chapter's source material — raws, cleaned
+         pages, translations, a PSD — is chosen on the home screen, where the
+         chapter is created; the editor is for typesetting. -->
     <div class="btn-group">
-      <button class="btn" onclick={() => pickJson()}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>JSON
-      </button>
-      <button class="btn" disabled={inChapter} title={inChapter ? IMPORT_TIP : null} onclick={() => pickImages('cleaned')}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>Cleaned
-      </button>
-      <button class="btn" disabled={inChapter} title={inChapter ? IMPORT_TIP : null} onclick={() => pickImages('raw')}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>Raw
-      </button>
-      <button class="btn" onclick={() => pickPsd()} data-tip="Import layered PSD (lossless if exported here)" data-tip-pos="down">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M7 8h4a2 2 0 0 1 0 4H7zM7 8v8" /><path d="M15 8v8h2a2 2 0 0 0 0-4h-2" /></svg>PSD
-      </button>
       <button class="btn" disabled={!canDetect} onclick={() => detectAllPages()} data-tip={sidecarReady() ? 'Detect text + OCR on every loaded page (sidecar)' : 'Sidecar not ready'} data-tip-pos="down">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" /><path d="M7 12h10" /></svg>{app.detectBatch ? `Detecting ${app.detectBatch.done}/${app.detectBatch.total}…` : app.detecting ? 'Detecting…' : 'Detect'}
       </button>

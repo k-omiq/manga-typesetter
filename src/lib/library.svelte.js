@@ -7,6 +7,7 @@
 //   <root>/<project-slug>/thumb.png
 //   <root>/<project-slug>/<chapter-slug>/chapter.json
 //   <root>/<project-slug>/<chapter-slug>/raws/
+//   <root>/<project-slug>/<chapter-slug>/cleaned/   (only once a page has one)
 
 import { fsx } from './fsx.js';
 import { uniqueSlug, chapterSlug } from './paths.js';
@@ -371,44 +372,78 @@ export async function makeThumb(bytes) {
   }
 }
 
-export async function createChapter({ projectId, number, title, files }) {
-  const p = projectById(projectId);
-  if (!p) throw new Error('No such project');
+// Free ON DISK as well as within this batch — the same reasoning as freeDir.
+// `cleaned/` on an existing chapter already holds files this run knows nothing
+// about, and overwriting one would silently change another page's image.
+async function freeFileName(dir, name, used) {
+  const seen = new Set(used);
+  for (;;) {
+    const candidate = uniqueFileName(name, seen);
+    if (!(await fsx.exists(await fsx.join(dir, candidate)))) return candidate;
+    seen.add(candidate);
+  }
+}
 
+// `cleaned/` exists only once a page actually has a cleaned image, so it is
+// created on the way to the first successful copy rather than up front — a copy
+// that fails on its first file must not leave an empty directory behind on a
+// chapter that has no cleaned pages.
+function lazyDir(path) {
+  let made = false;
+  return async () => {
+    if (!made) {
+      await fsx.mkdir(path);
+      made = true;
+    }
+    return path;
+  };
+}
+
+// Copy bytes in under a name that collides with nothing. Bytes in, bytes out —
+// nothing here decodes or re-encodes an image, so bit depth, colour type and
+// ICC profile arrive exactly as they left.
+async function copyInto(dir, name, bytes, used) {
+  const fileName = await freeFileName(dir, name, used);
+  used.add(fileName);
+  await fsx.writeFile(await fsx.join(dir, fileName), bytes);
+  return fileName;
+}
+
+// The shared skeleton of every way a chapter comes into being: pick a free
+// directory, let `copy` fill it, then write the records and update the
+// catalogue — with one rollback that removes only what this run created.
+//
+// `copy(dir, cover)` returns the page list. `cover.offer(bytes)` is how it
+// nominates the project's thumbnail; the first offer wins and a failure to
+// write one is cosmetic.
+async function buildChapter(p, number, title, copy) {
   // Same hole as createProject, and here it fires on the FAILURE path: the
   // rollback below is a recursive remove, and it must never be pointed at a
   // directory this run did not bring into being.
   const taken = new Set(p.chapters.map((c) => c.slug));
   const { slug, dir } = await freeDir(p.dir, chapterSlug(number, title ?? ''), taken);
-  const rawsDir = await fsx.join(dir, 'raws');
 
-  const ordered = [...files].sort(naturalSort);
   const willHaveCover = !p.coverChapterId;
   let thumbWritten = false;
   let dirCreated = false;
 
   try {
-    await fsx.mkdir(rawsDir);
+    await fsx.mkdir(dir);
     dirCreated = true;
 
-    const usedNames = new Set();
-    const pages = [];
-    for (let i = 0; i < ordered.length; i++) {
-      const f = ordered[i];
-      const bytes = new Uint8Array(await f.arrayBuffer());
-      const fileName = uniqueFileName(f.name, usedNames);
-      usedNames.add(fileName);
-      await fsx.writeFile(await fsx.join(rawsDir, fileName), bytes);
-      pages.push({ id: i + 1, file: fileName, w: 0, h: 0, lines: [], detect: null, boxes: [] });
-      if (i === 0 && willHaveCover) {
+    const cover = {
+      async offer(bytes) {
+        if (!willHaveCover || thumbWritten || !bytes) return;
         try {
           await fsx.writeFile(await fsx.join(p.dir, 'thumb.png'), await makeThumb(bytes));
           thumbWritten = true;
         } catch {
           /* a missing cover is cosmetic; never fail chapter creation over it */
         }
-      }
-    }
+      },
+    };
+
+    const pages = await copy(dir, cover);
 
     const record = {
       schema: SCHEMA,
@@ -430,7 +465,9 @@ export async function createChapter({ projectId, number, title, files }) {
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       pageCount: pages.length,
-      typeset: false, // fresh raws, nothing placed yet
+      // Fresh raws carry nothing placed; a chapter rebuilt from a PSD arrives
+      // already typeset, and the catalogue has to say so.
+      typeset: isTypeset(pages),
       unreadable: false,
     };
 
@@ -479,6 +516,327 @@ export async function createChapter({ projectId, number, title, files }) {
   }
 }
 
+// A chapter from picked files: raws, optionally cleaned pages, optionally the
+// lines a translations file supplies.
+//
+// Cleaned pages pair with raws BY POSITION after the same natural sort the raws
+// use — the order a cleaner delivers work in, and the only rule that imposes no
+// naming convention. Because it is positional it is fragile to a mismatched
+// count, so the dialog states the pairing before this is ever called. Extra
+// cleaned files and extra translated pages are ignored here; neither may invent
+// a page, because a page with no raw persists unrenderable.
+export async function createChapter({
+  projectId,
+  number,
+  title,
+  files,
+  cleanedFiles = [],
+  translations = null,
+}) {
+  const p = projectById(projectId);
+  if (!p) throw new Error('No such project');
+
+  const ordered = [...files].sort(naturalSort);
+  const orderedCleaned = [...(cleanedFiles ?? [])].sort(naturalSort);
+
+  return buildChapter(p, number, title, async (dir, cover) => {
+    const rawsDir = await fsx.join(dir, 'raws');
+    await fsx.mkdir(rawsDir);
+
+    const usedRaws = new Set();
+    const pages = [];
+    for (let i = 0; i < ordered.length; i++) {
+      const f = ordered[i];
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const file = await copyInto(rawsDir, f.name, bytes, usedRaws);
+      pages.push({
+        id: i + 1,
+        file,
+        cleaned: null,
+        w: 0,
+        h: 0,
+        lines: translations?.[i]?.lines ?? [],
+        detect: null,
+        boxes: [],
+      });
+      if (i === 0) await cover.offer(bytes);
+    }
+
+    // Created on demand: a chapter with no cleaned pages has no such directory.
+    if (orderedCleaned.length && pages.length) {
+      const cleanedDir = await fsx.join(dir, 'cleaned');
+      await fsx.mkdir(cleanedDir);
+      const usedCleaned = new Set();
+      const n = Math.min(orderedCleaned.length, pages.length);
+      for (let i = 0; i < n; i++) {
+        const f = orderedCleaned[i];
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        pages[i].cleaned = await copyInto(cleanedDir, f.name, bytes, usedCleaned);
+      }
+    }
+    return pages;
+  });
+}
+
+// A chapter rebuilt from PSDs. The one place a raw is not a byte-for-byte copy:
+// a PSD carries rasters, not the original files, so its pages arrive as PNG
+// bytes the caller has already encoded. The dialog says so before importing.
+//
+// Each input page: { rawName, rawBytes, cleanedName, cleanedBytes, w, h,
+// lines, boxes, detect }. A page with no raster is not accepted — it would
+// persist with an empty `file`, unrenderable and impossible to remove.
+export async function createChapterFromPages({ projectId, number, title, pages: input }) {
+  const p = projectById(projectId);
+  if (!p) throw new Error('No such project');
+  if (!input?.length) throw new Error('Nothing to import');
+  if (input.some((pg) => !pg.rawBytes)) throw new Error('A page arrived with no image');
+
+  return buildChapter(p, number, title, async (dir, cover) => {
+    const rawsDir = await fsx.join(dir, 'raws');
+    await fsx.mkdir(rawsDir);
+    const hasCleaned = input.some((pg) => pg.cleanedBytes);
+    let cleanedDir = null;
+    if (hasCleaned) {
+      cleanedDir = await fsx.join(dir, 'cleaned');
+      await fsx.mkdir(cleanedDir);
+    }
+
+    const usedRaws = new Set();
+    const usedCleaned = new Set();
+    const pages = [];
+    for (let i = 0; i < input.length; i++) {
+      const src = input[i];
+      const file = await copyInto(rawsDir, src.rawName, src.rawBytes, usedRaws);
+      let cleaned = null;
+      if (src.cleanedBytes) {
+        cleaned = await copyInto(cleanedDir, src.cleanedName, src.cleanedBytes, usedCleaned);
+      }
+      pages.push({
+        id: i + 1,
+        file,
+        cleaned,
+        w: src.w ?? 0,
+        h: src.h ?? 0,
+        lines: src.lines ?? [],
+        detect: src.detect ?? null,
+        boxes: src.boxes ?? [],
+      });
+      if (i === 0) await cover.offer(src.cleanedBytes ?? src.rawBytes);
+    }
+    return pages;
+  });
+}
+
+// ---------- a chapter's sources, after creation ----------
+
+// Editing the files under a chapter that is open in the editor is the class of
+// bug slice 1 spent nine review cycles removing: the open document would keep
+// its own idea of the pages and the next autosave would write it back over
+// whatever happened here. Refused, the way Settings refuses a library-root
+// change while a chapter is open.
+function assertClosed(chapterId) {
+  if (app.chapterRef?.chapterId === chapterId) {
+    throw new Error('This chapter is open in the editor — leave it first');
+  }
+}
+
+async function chapterFile(projectId, chapterId) {
+  const c = chapterById(projectId, chapterId);
+  if (!c) throw new Error('No such chapter');
+  if (c.unreadable) throw new Error('This chapter could not be read');
+  assertClosed(chapterId);
+  return { c, path: await fsx.join(c.dir, 'chapter.json') };
+}
+
+// What the sources sheet renders: the record's pages plus, for each cleaned
+// page, whether the file is actually still there. A missing one falls back to
+// the raw rather than discarding anything.
+export async function readChapterSources(projectId, chapterId) {
+  const { c, path } = await chapterFile(projectId, chapterId);
+  const record = await readJson(path);
+  const cleanedDir = await fsx.join(c.dir, 'cleaned');
+  const rawsDir = await fsx.join(c.dir, 'raws');
+  const pages = [];
+  for (const pg of record.pages ?? []) {
+    const cleaned = pg.cleaned ?? null;
+    pages.push({
+      id: pg.id,
+      file: pg.file ?? '',
+      cleaned,
+      missing: cleaned ? !(await fsx.exists(await fsx.join(cleanedDir, cleaned))) : false,
+    });
+  }
+  return { rawsDir, cleanedDir, pages };
+}
+
+// The record leads, the catalogue follows. Nothing in memory changes until the
+// write has landed.
+async function commitPages(c, path, record, pages) {
+  record.updatedAt = now();
+  record.pages = pages;
+  await writeJson(path, record);
+  c.updatedAt = record.updatedAt;
+  c.pageCount = pages.length;
+  c.typeset = isTypeset(pages);
+}
+
+// Unlink the cleaned files nothing points at any more. Only names that came out
+// of the record, only inside this chapter's own `cleaned/`, and only once the
+// record no longer references them — so a failure here leaves a stray file,
+// never a page pointing at one that is gone.
+async function dropCleaned(cleanedDir, names, pages) {
+  const kept = new Set(pages.map((pg) => pg.cleaned).filter(Boolean));
+  for (const name of names) {
+    if (!name || kept.has(name)) continue;
+    try {
+      await fsx.remove(await fsx.join(cleanedDir, name));
+    } catch {
+      /* already gone, or never written; the record is what matters */
+    }
+  }
+}
+
+// Copy files onto pages 1..N, replacing whatever those pages had. Pages past N
+// keep theirs; files past the page count are ignored.
+//
+// A failure part-way is NOT rolled back. The pages already replaced keep their
+// new image and the error names the page it stopped at — the previous files are
+// gone by then, and a half-restored chapter is worse than a stated partial one.
+export async function replaceCleanedPages(projectId, chapterId, files) {
+  const { c, path } = await chapterFile(projectId, chapterId);
+  const record = await readJson(path);
+  const pages = record.pages ?? [];
+  const ordered = [...files].sort(naturalSort);
+  const n = Math.min(ordered.length, pages.length);
+  if (!n) return { replaced: 0, ignored: ordered.length };
+
+  const cleanedDir = await fsx.join(c.dir, 'cleaned');
+  const ensureCleaned = lazyDir(cleanedDir);
+
+  const used = new Set();
+  const copied = [];
+  let failure = null;
+  for (let i = 0; i < n; i++) {
+    try {
+      const bytes = new Uint8Array(await ordered[i].arrayBuffer());
+      await ensureCleaned();
+      copied.push({ index: i, name: await copyInto(cleanedDir, ordered[i].name, bytes, used) });
+    } catch (e) {
+      failure = { page: i + 1, e };
+      break;
+    }
+  }
+
+  if (copied.length) {
+    const previous = copied.map(({ index }) => pages[index].cleaned);
+    const next = pages.map((pg) => ({ ...pg }));
+    for (const { index, name } of copied) next[index].cleaned = name;
+    try {
+      await commitPages(c, path, record, next);
+    } catch (e) {
+      // Nothing points at the new files, so they are this run's own litter.
+      await dropCleaned(cleanedDir, copied.map(({ name }) => name), pages);
+      throw e;
+    }
+    await dropCleaned(cleanedDir, previous, next);
+  }
+
+  if (failure) {
+    throw new Error(
+      `Copied ${copied.length} of ${n} — stopped at page ${failure.page}: ${failure.e?.message ?? failure.e}`,
+    );
+  }
+  return { replaced: copied.length, ignored: ordered.length - n };
+}
+
+// One page, addressed by its durable id rather than its position.
+export async function setPageCleaned(projectId, chapterId, pageId, file) {
+  const { c, path } = await chapterFile(projectId, chapterId);
+  const record = await readJson(path);
+  const pages = record.pages ?? [];
+  const idx = pages.findIndex((pg) => pg.id === pageId);
+  if (idx === -1) throw new Error('That page is no longer in this chapter');
+
+  const cleanedDir = await fsx.join(c.dir, 'cleaned');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  await fsx.mkdir(cleanedDir);
+  const name = await copyInto(cleanedDir, file.name, bytes, new Set());
+
+  const previous = pages[idx].cleaned;
+  const next = pages.map((pg) => ({ ...pg }));
+  next[idx].cleaned = name;
+  try {
+    await commitPages(c, path, record, next);
+  } catch (e) {
+    await dropCleaned(cleanedDir, [name], pages);
+    throw e;
+  }
+  await dropCleaned(cleanedDir, [previous], next);
+  return name;
+}
+
+export async function clearPageCleaned(projectId, chapterId, pageId) {
+  const { c, path } = await chapterFile(projectId, chapterId);
+  const record = await readJson(path);
+  const pages = record.pages ?? [];
+  const idx = pages.findIndex((pg) => pg.id === pageId);
+  if (idx === -1) throw new Error('That page is no longer in this chapter');
+  const previous = pages[idx].cleaned;
+  if (!previous) return;
+  const next = pages.map((pg) => ({ ...pg }));
+  next[idx].cleaned = null;
+  await commitPages(c, path, record, next);
+  await dropCleaned(await fsx.join(c.dir, 'cleaned'), [previous], next);
+}
+
+export async function removeAllCleaned(projectId, chapterId) {
+  const { c, path } = await chapterFile(projectId, chapterId);
+  const record = await readJson(path);
+  const pages = record.pages ?? [];
+  const previous = pages.map((pg) => pg.cleaned).filter(Boolean);
+  if (!previous.length) return 0;
+  const next = pages.map((pg) => ({ ...pg, cleaned: null }));
+  await commitPages(c, path, record, next);
+  await dropCleaned(await fsx.join(c.dir, 'cleaned'), previous, next);
+  return previous.length;
+}
+
+// Lines for the pages a translations file covers. It says what is on pages
+// 1..N; it says nothing about whether the chapter has pages after that, so it
+// never shortens the chapter and never appends to it.
+export async function applyTranslations(projectId, chapterId, parsed) {
+  const { c, path } = await chapterFile(projectId, chapterId);
+  const record = await readJson(path);
+  const pages = record.pages ?? [];
+  const covered = Math.min(parsed.length, pages.length);
+  const next = pages.map((pg, i) => (i < covered ? { ...pg, lines: parsed[i].lines } : pg));
+  await commitPages(c, path, record, next);
+
+  // A box placed from the queue carries no text of its own — it renders
+  // whichever line has its number. A file that numbers its lines differently
+  // leaves those boxes pointing at nothing, and they render empty. Nothing is
+  // lost (re-applying the old file brings them back) but it is not something to
+  // discover later, so it is counted and the caller states it.
+  const orphaned = next
+    .slice(0, covered)
+    .reduce(
+      (n, pg) =>
+        n +
+        (pg.boxes ?? []).filter(
+          (b) => b.text == null && !(pg.lines ?? []).some((l) => l.n === b.lineN),
+        ).length,
+      0,
+    );
+
+  return {
+    covered,
+    kept: pages.length - covered,
+    ignored: parsed.length - covered,
+    lines: parsed.slice(0, covered).reduce((n, pg) => n + pg.lines.length, 0),
+    orphaned,
+  };
+}
+
 // ---------- open / save the editor's chapter ----------
 
 // Blob URLs minted for the open chapter's raws. Held here so closing or
@@ -506,25 +864,38 @@ export async function openChapter(projectId, chapterId) {
 
   const record = await readJson(await fsx.join(c.dir, 'chapter.json'));
   const rawsDir = await fsx.join(c.dir, 'raws');
+  const cleanedDir = await fsx.join(c.dir, 'cleaned');
 
   const urls = [];
+  // A missing image must not discard the typesetting that references it, and
+  // must not drop the name either — a page that came back with cleaned:null
+  // would have its cleaned page unlinked by the very next save.
+  const mint = async (dir, name) => {
+    if (!name) return null;
+    try {
+      const bytes = await fsx.readFile(await fsx.join(dir, name));
+      const url = URL.createObjectURL(new Blob([bytes]));
+      urls.push(url);
+      return url;
+    } catch {
+      return null;
+    }
+  };
+
   const pages = [];
   try {
     for (const pg of record.pages ?? []) {
-      let url = null;
-      try {
-        // `file` is the deduped on-disk name chosen at import; it is the only
-        // thing that resolves a page back to its raw.
-        const bytes = await fsx.readFile(await fsx.join(rawsDir, pg.file));
-        url = URL.createObjectURL(new Blob([bytes]));
-        urls.push(url);
-      } catch {
-        // A missing raw must not discard the typesetting that references it.
-        url = null;
-      }
-      // `file` travels onto the store page: from here on the page carries its
-      // own raw's name, so nothing downstream has to pair by position.
-      pages.push({ ...pg, file: pg.file ?? null, raw: url, cleaned: null });
+      // `file` and `cleaned` are the deduped on-disk names chosen at import;
+      // they are the only things that resolve a page back to its images. Both
+      // travel onto the store page, so nothing downstream pairs by position.
+      // A slice 1 chapter.json has no `cleaned` key at all: absent reads null.
+      pages.push({
+        ...pg,
+        file: pg.file ?? null,
+        cleanedFile: pg.cleaned ?? null,
+        raw: await mint(rawsDir, pg.file),
+        cleaned: await mint(cleanedDir, pg.cleaned),
+      });
     }
   } catch (e) {
     // Nothing was swapped in, so these URLs have no owner to revoke them.
@@ -559,12 +930,14 @@ export async function saveOpenChapter() {
   if (app.chapterRef !== ref) return;
 
   record.updatedAt = now();
-  // Blob URLs are runtime-only. `file` is the durable reference and it is read
-  // off the page itself, so a document whose pages were replaced or reordered
-  // in the editor can never hand one page's raw to another.
+  // Blob URLs are runtime-only. `file` and `cleanedFile` are the durable
+  // references and both are read off the page itself, so a document whose pages
+  // were replaced or reordered in the editor can never hand one page's images
+  // to another.
   record.pages = app.pages.map((pg) => ({
     id: pg.id,
     file: pg.file ?? '',
+    cleaned: pg.cleanedFile ?? null,
     w: pg.w,
     h: pg.h,
     // $state.snapshot is a deep clone: the nested style objects inside boxes

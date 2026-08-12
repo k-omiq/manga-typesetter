@@ -16,16 +16,10 @@
     zoomReset,
     openBulk,
   } from './store.svelte.js';
-  import { pickJson, pickImages } from './importer.js';
 
   let scrollEl;
   let pageFrameEl;
   let lastFitKey = '';
-
-  // Same reason as the top bar's copies: importing images into a chapter pushes
-  // pages with no `file`, which reach disk as file:'' and can never render.
-  const inChapter = $derived(!!app.chapterRef);
-  const IMPORT_TIP = "A chapter's pages come from the library — create a chapter to add raws.";
 
   const p = $derived(page());
   const zoomPct = $derived(Math.round(app.zoom * 100));
@@ -166,13 +160,8 @@
       <div class="empty-state" style="display:grid">
         <div class="dropzone">
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>
-          <h2>Import a cleaned page to begin</h2>
-          <p>Drop your cleaned manga pages, raw references and translated JSON.</p>
-          <div class="row">
-            <button class="btn" onclick={() => pickJson()}>Import JSON</button>
-            <button class="btn" disabled={inChapter} title={inChapter ? IMPORT_TIP : null} onclick={() => pickImages('cleaned')}>Import Cleaned</button>
-            <button class="btn" disabled={inChapter} title={inChapter ? IMPORT_TIP : null} onclick={() => pickImages('raw')}>Import Raw</button>
-          </div>
+          <h2>Nothing open</h2>
+          <p>Pages come from your library — open a chapter to typeset it.</p>
         </div>
       </div>
     {/if}

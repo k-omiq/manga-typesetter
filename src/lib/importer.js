@@ -1,11 +1,9 @@
-// Real import: tolerant JSON parsing → pages, and image files → pages by order.
-import { app, toast, markUnsaved, PAGE_W, PAGE_H, firstUnplaced } from './store.svelte.js';
-
-let pageSeq = 1000;
-
-function naturalSort(a, b) {
-  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
-}
+// Source material coming in from outside the library: the native file picker,
+// and the tolerant normalisation of a translations JSON.
+//
+// Nothing here touches the open document. Imports belong to the home screen —
+// a chapter's pages come from the library, and the editor is for typesetting.
+import { toast } from './store.svelte.js';
 
 // Normalize one line object/string → { n, jp, en, type }
 // Back-compat: a bare string or a `{ text }`-only object becomes `en`; legacy
@@ -37,7 +35,7 @@ function normPage(obj) {
 }
 
 // Accept: [pages], {pages:[...]}, single {page,texts}, or bare [lines]/{texts}
-function normalizeJson(data) {
+export function normalizeTranslations(data) {
   let rawPages;
   if (Array.isArray(data)) {
     // could be array of pages or array of lines
@@ -53,96 +51,17 @@ function normalizeJson(data) {
   return rawPages.map(normPage);
 }
 
-function blankPage(lines, prev) {
-  const p = {
-    id: prev?.id ?? pageSeq++,
-    raw: prev?.raw ?? null,
-    cleaned: prev?.cleaned ?? null,
-    // The name of this page's raw inside its chapter. Preserved for the same
-    // reason `raw` and `boxes` are: after a JSON re-import each surviving page
-    // must still point at its own file on disk, not at its neighbour's.
-    file: prev?.file ?? null,
-    w: prev?.w ?? PAGE_W,
-    h: prev?.h ?? PAGE_H,
-    lines,
-    // Preserve placed boxes across a JSON re-import so re-importing a lines file
-    // (e.g. updated translations) doesn't discard existing typesetting.
-    boxes: (prev?.boxes ?? []).map((b) => ({ ...b, style: { ...b.style } })),
-    detect: prev?.detect ?? null,
-    activeLineN: null,
-  };
-  p.activeLineN = firstUnplaced(p);
-  return p;
-}
-
-export async function importJsonFile(file) {
+// A picked .json → one entry per page it describes. Throws on unparseable
+// input so the caller can say so where the file was chosen, rather than
+// leaving the user with a picker that appears to have done nothing.
+export async function readTranslations(file) {
   let data;
   try {
     data = JSON.parse(await file.text());
   } catch (e) {
-    toast('Invalid JSON — could not parse');
-    return;
+    throw new Error(`Invalid JSON — could not parse ${file.name}`);
   }
-  const parsed = normalizeJson(data);
-  const old = app.pages;
-  const inChapter = !!app.chapterRef;
-
-  // A translations file is source material for pages that already exist. It
-  // says what the lines on page 1..N are; it says nothing about whether the
-  // chapter has pages after that. So it never shortens the document:
-  //
-  //   - Pages the JSON covers take its lines and keep everything else they
-  //     have — their raw, their `file`, and every box already placed on them.
-  //   - Pages past its end are left exactly as they are. Truncating them threw
-  //     away the user's typesetting on one click, with only a toast afterwards,
-  //     and the next navigation flushed that loss to chapter.json.
-  //   - Pages past the END OF THE DOCUMENT are only appended outside a chapter,
-  //     where that is the one way a document gets created. Inside a chapter a
-  //     page's raw comes from the library; an appended page would carry no
-  //     `file`, persist as file:'' and be unrenderable and unremovable.
-  const covered = inChapter ? Math.min(parsed.length, old.length) : parsed.length;
-  const next = [];
-  for (let i = 0; i < covered; i++) next.push(blankPage(parsed[i].lines, old[i]));
-  // Untouched pages are carried across by identity — nothing to rebuild, and
-  // nothing that could go missing in the rebuilding.
-  for (let i = covered; i < old.length; i++) next.push(old[i]);
-
-  app.pages = next;
-  app.pageIndex = 0;
-  app.selectedId = null;
-  app.editingId = null;
-  if (next.length) app.loaded = true;
-  // The imported lines are a real edit to the open chapter, so they are saved
-  // like one instead of waiting for whatever happens to flush next.
-  if (inChapter && covered) markUnsaved();
-
-  const total = parsed
-    .slice(0, covered)
-    .reduce((s, p) => s + p.lines.length, 0);
-  const kept = old.length - covered;
-  const ignored = parsed.length - covered;
-  const notes = [];
-  if (kept) notes.push(`${kept} later page(s) left unchanged`);
-  if (ignored) {
-    notes.push(`${ignored} page(s) past the end of the chapter ignored — add pages in the library`);
-  }
-  toast(
-    `Imported ${covered} page(s), ${total} line(s)${notes.length ? ' — ' + notes.join(' · ') : ''}`,
-  );
-}
-
-// Transient file picker (runs inside a user gesture, so .click() is allowed).
-// Browser-only fallback: in the packaged Tauri app WKWebView's runOpenPanel
-// silently fails for a detached input, so Tauri uses the dialog plugin below.
-function pick(accept, multiple) {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = accept;
-    input.multiple = multiple;
-    input.onchange = () => resolve(input.files);
-    input.click();
-  });
+  return normalizeTranslations(data);
 }
 
 // Tauri injects __TAURI_INTERNALS__; absent in the browser (same check as sidecar.js).
@@ -194,47 +113,13 @@ export async function pickFilesTauri({ name, extensions, multiple }) {
   return files.length ? files : null;
 }
 
-export async function pickJson() {
-  if (isTauri()) {
-    const files = await pickFilesTauri({ name: 'JSON', extensions: ['json'], multiple: false });
-    if (files && files[0]) await importJsonFile(files[0]);
-    return;
-  }
-  const f = await pick('.json,application/json', false);
-  if (f && f[0]) await importJsonFile(f[0]);
+// The image extensions every picker in the app offers.
+export const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff'];
+
+export function pickImageFiles(multiple = true) {
+  return pickFilesTauri({ name: 'Images', extensions: IMAGE_EXTENSIONS, multiple });
 }
 
-export async function pickImages(kind) {
-  if (isTauri()) {
-    const files = await pickFilesTauri({
-      name: 'Images',
-      extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff'],
-      multiple: true,
-    });
-    if (files && files.length) await importImageFiles(files, kind);
-    return;
-  }
-  const f = await pick('image/*', true);
-  if (f && f.length) await importImageFiles(f, kind);
-}
-
-export async function importImageFiles(files, kind) {
-  const list = [...files].sort(naturalSort);
-  if (!list.length) return;
-  // ensure enough pages
-  while (app.pages.length < list.length) {
-    app.pages.push(blankPage([], null));
-  }
-  list.forEach((file, i) => {
-    const url = URL.createObjectURL(file);
-    // Revoke the blob URL we're replacing so re-importing doesn't orphan it.
-    const prev = kind === 'cleaned' ? app.pages[i].cleaned : app.pages[i].raw;
-    if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
-    if (kind === 'cleaned') app.pages[i].cleaned = url;
-    else app.pages[i].raw = url;
-  });
-  // Either kind counts as "loaded" so the starter overlay dismisses instead of
-  // covering the page you just imported.
-  app.loaded = true;
-  toast(`Imported ${list.length} ${kind} page(s)`);
+export function pickJsonFile() {
+  return pickFilesTauri({ name: 'JSON', extensions: ['json'], multiple: false });
 }

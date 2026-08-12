@@ -24,10 +24,12 @@ export function loadProjectPages(rawPages) {
       id: p.id ?? pageLoadSeq++,
       raw: p.raw ?? null,
       cleaned: p.cleaned ?? null,
-      // The page's own durable filename inside the chapter's raws/. Carried on
-      // the page, never re-derived by position, so a save can never hand one
-      // page's raw to another.
+      // The page's own durable filenames inside the chapter's raws/ and
+      // cleaned/. Carried on the page, never re-derived by position, so a save
+      // can never hand one page's images to another. `raw` and `cleaned` above
+      // are the runtime blob URLs and never reach disk.
       file: p.file ?? null,
+      cleanedFile: p.cleanedFile ?? null,
       w: p.w ?? PAGE_W,
       h: p.h ?? PAGE_H,
       lines: (p.lines ?? []).map((l) => ({ ...l })),
@@ -109,6 +111,7 @@ const NO_PAGE = Object.freeze({
   raw: null,
   cleaned: null,
   file: null,
+  cleanedFile: null,
   w: PAGE_W,
   h: PAGE_H,
   lines: Object.freeze([]),

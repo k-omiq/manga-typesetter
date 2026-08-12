@@ -6,7 +6,7 @@
   import { plural } from '../format.js';
   import ProjectCard from './ProjectCard.svelte';
 
-  let { onNewChapter } = $props();
+  let { onNewChapter, onImportPsd } = $props();
 
   let confirmingId = $state(null); // inline two-step delete confirm
   let naming = $state(false);
@@ -62,6 +62,7 @@
   {:else}
     <button class="soft-btn wide" onclick={() => (naming = true)}>New project</button>
   {/if}
+  <button class="soft-btn wide" onclick={onImportPsd}>Import chapter from PSD</button>
 </div>
 
 <div class="section-label">PROJECTS</div>

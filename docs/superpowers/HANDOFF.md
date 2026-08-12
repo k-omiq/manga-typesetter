@@ -52,10 +52,42 @@ Remaining step, which must run in the parent checkout because `main` is checked 
 
 ---
 
-## 2. Slice 2a — chapter sources (next)
+## 2. Slice 2a — chapter sources — BUILT, NOT YET VERIFIED IN THE APP
 
-**Specified.** `docs/superpowers/specs/2026-08-13-slice2a-chapter-sources-design.md`. It needs a
-plan (`superpowers:writing-plans`) and then `superpowers:subagent-driven-development`.
+**Specified and implemented.** `docs/superpowers/specs/2026-08-13-slice2a-chapter-sources-design.md`.
+`npm test` is 104 passing and `npm run build` and the release `cargo` build are clean, but **the
+manual acceptance pass in the spec's "Testing" section has not been run**: the agent that built it
+could not be granted control of the app window, so nothing in this slice has been exercised against
+real files on disk. Everything below is proven by unit tests against the `fsx` mock only.
+
+What still needs a human at the keyboard, from the spec:
+
+- create a chapter with 6 raws and 4 cleaned; confirm the summary states the mismatch before
+  creating; confirm pages 1–4 typeset on the cleaned image and 5–6 on the raw
+- `cmp` a file in `cleaned/` against its source — byte-identical (a 16-bit greyscale PNG is the
+  case worth using)
+- swap one page's cleaned image from the sources sheet; reopen; the swap survived
+- import a chapter from a PSD; confirm the warning about re-encoded rasters appeared
+- both themes on the sources sheet and the extended new-chapter dialog
+
+What it added, all reviewed once by an adversarial pass whose findings were fixed:
+
+- `Page` gains `cleaned`; a `cleaned/` directory sits beside `raws/`, created only when a page
+  actually has one, copied byte-for-byte with the same discipline
+- the new-chapter dialog takes raws + optional cleaned pages + an optional translations JSON, and
+  states the positional pairing before the user commits
+- a chapter sources sheet (`src/lib/home/ChapterSourcesSheet.svelte`), reached from a chapter row,
+  for per-page and bulk changes to cleaned pages and for applying translations later
+- "Import chapter from PSD" on both home screens, sharing the new-chapter dialog via a `mode` prop
+- the editor's JSON / Cleaned / Raw / PSD buttons and the empty state's offers are gone, along with
+  `importImageFiles`, `importJsonFile`, `pickImages`, `pickJson` and `importPsdFiles`
+
+Two judgement calls worth knowing about, both stated in the UI rather than hidden:
+
+- a PSD page whose Base group has only a Cleaned layer is written to `raws/` as its own raw; the
+  import summary counts those pages, because detection on them will find nothing
+- applying a translations file whose line numbering differs orphans the boxes placed from the old
+  numbering; they are counted and named in the toast, and nothing is deleted
 
 The governing decision: **imports do not belong in the editor.** Source material is chosen when a chapter is created, on the home screen. That resolves a bug currently worked around by disabling buttons — the editor's "Cleaned" import sets `pages[i].cleaned`, which `saveOpenChapter`'s page projection discards, so it silently loses its result on reopen.
 
@@ -67,6 +99,10 @@ Scope:
 - Once this lands, the editor's import buttons are deleted rather than disabled (see `src/lib/TopBar.svelte` and `Editor.svelte`'s empty state).
 
 Data-safety note: this slice touches the schema and the copy path, which is where every serious bug in slice 1 lived. Budget for adversarial review.
+
+Deferred out of this slice: the library card's status chip and Continue button, which slice 1 also
+left unbuilt. The card was not reworked here after all — nothing in this slice changed what a
+project card knows.
 
 ---
 

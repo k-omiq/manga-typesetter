@@ -13,6 +13,7 @@
   import LibraryView from './lib/home/LibraryView.svelte';
   import ProjectView from './lib/home/ProjectView.svelte';
   import NewChapterDialog from './lib/home/NewChapterDialog.svelte';
+  import ChapterSourcesSheet from './lib/home/ChapterSourcesSheet.svelte';
   import { onMount, untrack } from 'svelte';
   import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast } from './lib/store.svelte.js';
   import { restoreFonts } from './lib/fonts.js';
@@ -27,6 +28,10 @@
   let newChapterOpen = $state(false);
   let newChapterBusy = $state(false);
   let newChapterProject = $state(null);
+  let newChapterMode = $state('files');
+  let sourcesOpen = $state(false);
+  let sourcesBusy = $state(false);
+  let sourcesRef = $state({ projectId: null, chapterId: null });
   // The library root is resolved asynchronously. Nothing that scans the library
   // may mount before it is known — a child's onMount runs before its parent's,
   // so LibraryView would otherwise scan an empty path and report an error.
@@ -165,9 +170,15 @@
     });
   });
 
-  function openNewChapter(projectId = null) {
+  function openNewChapter(projectId = null, mode = 'files') {
     newChapterProject = projectId;
+    newChapterMode = mode;
     newChapterOpen = true;
+  }
+
+  function openSources(projectId, chapterId) {
+    sourcesRef = { projectId, chapterId };
+    sourcesOpen = true;
   }
 
   function onKeydown(e) {
@@ -181,6 +192,12 @@
         // dialog's overlay and Cancel already carry. Unmounting mid-copy would
         // hide the failure in a component nobody can see.
         if (!newChapterBusy) newChapterOpen = false;
+        return;
+      }
+      if (sourcesOpen) {
+        // A copy in flight must not be dismissible, for the same reason the
+        // chapter dialog's is not.
+        if (!sourcesBusy) sourcesOpen = false;
         return;
       }
       if (app.exportOpen) return (app.exportOpen = false);
@@ -221,16 +238,34 @@
 {:else if booted}
   <HomeFrame onSettings={() => (settingsOpen = true)}>
     {#if route.name === 'project'}
-      <ProjectView onNewChapter={openNewChapter} />
+      <ProjectView
+        onNewChapter={(id) => openNewChapter(id)}
+        onImportPsd={(id) => openNewChapter(id, 'psd')}
+        onSources={openSources}
+      />
     {:else}
-      <LibraryView onNewChapter={() => openNewChapter(null)} />
+      <LibraryView
+        onNewChapter={() => openNewChapter(null)}
+        onImportPsd={() => openNewChapter(null, 'psd')}
+      />
     {/if}
   </HomeFrame>
 {:else}
   <div class="boot"></div>
 {/if}
 
-<NewChapterDialog bind:open={newChapterOpen} bind:busy={newChapterBusy} projectId={newChapterProject} />
+<NewChapterDialog
+  bind:open={newChapterOpen}
+  bind:busy={newChapterBusy}
+  projectId={newChapterProject}
+  mode={newChapterMode}
+/>
+<ChapterSourcesSheet
+  bind:open={sourcesOpen}
+  bind:busy={sourcesBusy}
+  projectId={sourcesRef.projectId}
+  chapterId={sourcesRef.chapterId}
+/>
 <FontModal bind:open={fontModalOpen} />
 <SettingsModal bind:open={settingsOpen} />
 <ExportDialog />
