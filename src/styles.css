@@ -97,6 +97,7 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
   font-size:12.5px; transition:background .12s,border-color .12s;
 }
 .btn:hover{ background:var(--panel2); border-color:var(--t3); }
+.btn:disabled{ opacity:.45; cursor:default; background:var(--surface); border-color:var(--line2); color:var(--t2); }
 .btn svg{ width:15px; height:15px; opacity:.85; }
 .btn-group{ display:flex; align-items:center; gap:6px; }
 .btn-icon{

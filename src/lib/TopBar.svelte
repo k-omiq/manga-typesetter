@@ -10,6 +10,15 @@
 
   const canDetect = $derived(sidecarReady() && app.pages.some((p) => p?.raw) && !app.detecting);
 
+  // The image importers predate the library. Inside a chapter they push pages
+  // with no `file` (which the next autosave writes as file:'' — a page that can
+  // never render and can never be got rid of) and set a `cleaned` field the page
+  // projection discards on the way to disk. Both are wrong in ways this slice
+  // does not have the schema to fix, so the buttons are simply not offered while
+  // a chapter owns the document.
+  const inChapter = $derived(!!app.chapterRef);
+  const IMPORT_TIP = "A chapter's pages come from the library — create a chapter to add raws.";
+
   const label = $derived.by(() => {
     const ref = app.chapterRef;
     if (!ref) return 'Untitled';
@@ -66,10 +75,10 @@
       <button class="btn" onclick={() => pickJson()}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>JSON
       </button>
-      <button class="btn" onclick={() => pickImages('cleaned')}>
+      <button class="btn" disabled={inChapter} title={inChapter ? IMPORT_TIP : null} onclick={() => pickImages('cleaned')}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>Cleaned
       </button>
-      <button class="btn" onclick={() => pickImages('raw')}>
+      <button class="btn" disabled={inChapter} title={inChapter ? IMPORT_TIP : null} onclick={() => pickImages('raw')}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>Raw
       </button>
       <button class="btn" onclick={() => pickPsd()} data-tip="Import layered PSD (lossless if exported here)" data-tip-pos="down">

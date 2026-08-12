@@ -22,6 +22,11 @@
   let pageFrameEl;
   let lastFitKey = '';
 
+  // Same reason as the top bar's copies: importing images into a chapter pushes
+  // pages with no `file`, which reach disk as file:'' and can never render.
+  const inChapter = $derived(!!app.chapterRef);
+  const IMPORT_TIP = "A chapter's pages come from the library — create a chapter to add raws.";
+
   const p = $derived(page());
   const zoomPct = $derived(Math.round(app.zoom * 100));
   // Typeset on the cleaned page when there is one; otherwise fall back to the
@@ -165,8 +170,8 @@
           <p>Drop your cleaned manga pages, raw references and translated JSON.</p>
           <div class="row">
             <button class="btn" onclick={() => pickJson()}>Import JSON</button>
-            <button class="btn" onclick={() => pickImages('cleaned')}>Import Cleaned</button>
-            <button class="btn" onclick={() => pickImages('raw')}>Import Raw</button>
+            <button class="btn" disabled={inChapter} title={inChapter ? IMPORT_TIP : null} onclick={() => pickImages('cleaned')}>Import Cleaned</button>
+            <button class="btn" disabled={inChapter} title={inChapter ? IMPORT_TIP : null} onclick={() => pickImages('raw')}>Import Raw</button>
           </div>
         </div>
       </div>
