@@ -385,7 +385,8 @@ describe('createChapter', () => {
   });
 });
 
-const { openChapter, saveOpenChapter, closeChapter, chapterById } = await import('./library.svelte.js');
+const { openChapter, saveOpenChapter, closeChapter, chapterById, flushBeforeLeaving, resetSaveFailures } =
+  await import('./library.svelte.js');
 const { app, markUnsaved, page, loadProjectPages } = await import('./store.svelte.js');
 const { importJsonFile } = await import('./importer.js');
 const { importPsdFiles } = await import('./psd.js');
@@ -645,6 +646,111 @@ describe('a failed save is visible', () => {
     expect(app.toast.msg).toMatch(/staying in the editor/);
     resetRoute();
     closeChapter();
+  });
+
+  // A disk that will never write must not be able to pin the user in the editor
+  // — or, via the same guard on the window, inside a window that will not close.
+  describe('the second-attempt escape', () => {
+    // Swap in a filesystem that cannot write, for the duration of `fn`.
+    async function withBrokenDisk(fn) {
+      const orig = fsx.writeTextFile;
+      fsx.writeTextFile = async () => {
+        throw new Error('disk full');
+      };
+      try {
+        return await fn();
+      } finally {
+        fsx.writeTextFile = orig;
+      }
+    }
+
+    it('lets the user out of the editor on a second consecutive failure', async () => {
+      const { p, c } = await seedOpenChapter();
+      resetRoute();
+      await goEditor(p.id, c.id);
+      app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+
+      const [first, second] = await withBrokenDisk(async () => {
+        const a = await goLibrary();
+        const firstMsg = app.toast.msg;
+        const b = await goLibrary();
+        return [
+          { moved: a, msg: firstMsg },
+          { moved: b, msg: app.toast.msg },
+        ];
+      });
+
+      expect(first.moved).toBe(false);
+      expect(first.msg).toMatch(/ask to leave again/i);
+      expect(second.moved).toBe(true);
+      expect(route.name).toBe('library');
+      expect(app.chapterRef).toBeNull();
+      // The message names the cost rather than repeating the error.
+      expect(second.msg).toMatch(/never written to disk/i);
+      // Nothing reached the file — which is exactly what the user was told.
+      expect(chapterJson(c).pages[0].lines).toHaveLength(0);
+      resetRoute();
+    });
+
+    it('starts the two-step over once a save works again', async () => {
+      const { p, c } = await seedOpenChapter();
+      resetRoute();
+      await goEditor(p.id, c.id);
+      app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+
+      // One failure banks an escape...
+      expect(await withBrokenDisk(() => goLibrary())).toBe(false);
+      // ...but a save that lands spends it, so the next failure refuses again
+      // rather than walking out on work the user never agreed to lose.
+      await saveOpenChapter();
+      expect(await withBrokenDisk(() => goLibrary())).toBe(false);
+      expect(route.name).toBe('editor');
+      expect(app.toast.msg).toMatch(/staying in the editor/);
+
+      resetRoute();
+      closeChapter();
+    });
+
+    it('refuses the first quit and releases the second, in quit wording', async () => {
+      await seedOpenChapter();
+      app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+
+      const first = await withBrokenDisk(() => flushBeforeLeaving('quit'));
+      expect(first).toBe(false);
+      expect(app.toast.msg).toMatch(/not quitting/);
+      expect(app.toast.msg).toMatch(/ask to quit again/i);
+
+      const second = await withBrokenDisk(() => flushBeforeLeaving('quit'));
+      expect(second).toBe(true);
+      expect(app.toast.msg).toMatch(/never written to disk/i);
+      // The chapter is still open: quitting is the caller's job, not the guard's.
+      expect(app.chapterRef).not.toBeNull();
+      closeChapter();
+    });
+
+    it('counts the streak across both ways out, not per button', async () => {
+      // One refused quit, then one attempt to leave the editor: the escape is
+      // about a disk that keeps failing, not about which button was pressed.
+      await seedOpenChapter();
+      app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+      expect(await withBrokenDisk(() => flushBeforeLeaving('quit'))).toBe(false);
+      expect(await withBrokenDisk(() => flushBeforeLeaving('editor'))).toBe(true);
+      closeChapter();
+    });
+
+    it('closing the chapter clears the streak', async () => {
+      await seedOpenChapter();
+      app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+      expect(await withBrokenDisk(() => flushBeforeLeaving('quit'))).toBe(false);
+      closeChapter();
+
+      await seedOpenChapter();
+      app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+      // A fresh chapter must get its own first refusal, not inherit one.
+      expect(await withBrokenDisk(() => flushBeforeLeaving('quit'))).toBe(false);
+      closeChapter();
+      resetSaveFailures();
+    });
   });
 
   it('leaves the editor normally when the save succeeds', async () => {

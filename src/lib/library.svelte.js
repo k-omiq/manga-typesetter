@@ -546,6 +546,10 @@ export async function saveOpenChapter() {
     boxes: $state.snapshot(pg.boxes),
   }));
   await writeJson(path, record);
+  // Any write that lands ends the failure streak, whoever asked for it — the
+  // debounced autosave included. The escape below is for a disk that keeps
+  // failing, not for one that failed once an hour ago.
+  saveFailures = 0;
   // The in-memory catalogue follows the disk, never leads it.
   c.updatedAt = record.updatedAt;
   c.pageCount = record.pages.length;
@@ -566,19 +570,76 @@ export function closeChapter() {
   // No document is loaded any more, so the editor falls back to its empty
   // state instead of offering a canvas over the blank stand-in page.
   app.loaded = false;
+  // The failure streak belongs to the chapter that was open. Nothing is pending
+  // any more, so the next chapter starts its own two-step from scratch.
+  saveFailures = 0;
+}
+
+// ---------- putting the chapter away when the disk says no ----------
+
+// Failing closed on the first attempt is right: the work is still on screen, the
+// user may be able to fix the cause (free some space, plug the volume back in,
+// re-grant the folder), and walking away would silently drop the very edits the
+// flush exists to protect.
+//
+// But a full disk, a revoked permission or an unplugged volume fails EVERY time,
+// and a chapter that cannot be closed inside a window that cannot be closed is a
+// worse outcome than the paragraph being protected — the only way out would be
+// the quit path, which drops the same work without asking. So the SECOND
+// consecutive attempt says exactly what is about to be lost and lets the user
+// through. Two deliberate requests, same shape as the two-step deletes on the
+// home screens.
+let saveFailures = 0;
+
+const LEAVING = {
+  editor: {
+    refuse: (why) =>
+      `Could not save — staying in the editor. ${why}. Your last edits are still on screen; ask to leave again to discard them and go back to the library.`,
+    force: 'Left the editor. The last edits to this chapter were never written to disk.',
+  },
+  quit: {
+    refuse: (why) =>
+      `Could not save — not quitting. ${why}. Your last edits are still on screen; ask to quit again to close anyway and discard them.`,
+    force: 'Quitting. The last edits to this chapter were never written to disk.',
+  },
+};
+
+// Test-only: clear the streak without going through a chapter close.
+export function resetSaveFailures() {
+  saveFailures = 0;
+}
+
+// Flush whatever the debounce is holding, on the way out of the chapter.
+// `where` picks the wording — 'editor' for closing the chapter, 'quit' for
+// closing the window. Resolves true when it is safe to go, false when the caller
+// must stay put.
+export async function flushBeforeLeaving(where) {
+  const copy = LEAVING[where] ?? LEAVING.editor;
+  try {
+    await flushSave();
+    saveFailures = 0;
+    return true;
+  } catch (e) {
+    saveFailures += 1;
+    if (saveFailures < 2) {
+      toast(copy.refuse(e?.message ?? e));
+      return false;
+    }
+    // The escape is spent. A later attempt starts the two-step over rather than
+    // inheriting a streak from a problem that may since have been fixed.
+    saveFailures = 0;
+    toast(copy.force);
+    return true;
+  }
 }
 
 // Wire the store's autosave and the route's leave-editor flush to this module.
 setSaver(saveOpenChapter);
 setLeaveEditorHook(async () => {
-  try {
-    await flushSave();
-  } catch (e) {
-    // Fail closed, and say so. Rethrowing keeps the route on the editor, so the
-    // work is still on screen and the next edit will retry the save; leaving
-    // would close the chapter and drop it.
-    toast(`Could not save — staying in the editor. ${e?.message ?? e}`);
-    throw e;
-  }
+  // Rethrowing keeps the route on the editor, so the work is still on screen and
+  // the next edit will retry the save; leaving would close the chapter and drop
+  // it. flushBeforeLeaving has already said why, and on a second consecutive
+  // failure it returns true instead, which is the way out.
+  if (!(await flushBeforeLeaving('editor'))) throw new Error('The chapter could not be saved');
   closeChapter();
 });

@@ -14,12 +14,12 @@
   import ProjectView from './lib/home/ProjectView.svelte';
   import NewChapterDialog from './lib/home/NewChapterDialog.svelte';
   import { onMount, untrack } from 'svelte';
-  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast, flushSave } from './lib/store.svelte.js';
+  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast } from './lib/store.svelte.js';
   import { restoreFonts } from './lib/fonts.js';
   import { isTauri } from './lib/importer.js';
   import { checkSidecar } from './lib/sidecar.js';
   import { initTheme } from './lib/theme.svelte.js';
-  import { library, initRoot, openChapter } from './lib/library.svelte.js';
+  import { library, initRoot, openChapter, flushBeforeLeaving } from './lib/library.svelte.js';
   import { route, goBack } from './lib/route.svelte.js';
 
   let fontModalOpen = $state(false);
@@ -70,16 +70,10 @@
       await w.onCloseRequested(async (e) => {
         if (!app.chapterRef) return; // nothing pending; let it close
         e.preventDefault();
-        try {
-          await flushSave();
-        } catch (err) {
-          // Fails closed, same as leaving the editor does: quitting now would
-          // silently discard the very work that could not be written. Say so
-          // and stay open — the next quit retries.
-          toast(`Could not save — not quitting. ${err?.message ?? err}`);
-          return;
-        }
-        await w.destroy();
+        // Fails closed on the first failure and says why; a second consecutive
+        // failure names what is about to be lost and lets the window close, so a
+        // disk that will never write cannot pin it open. See flushBeforeLeaving.
+        if (await flushBeforeLeaving('quit')) await w.destroy();
       });
     } catch {
       // No close hook is better than a boot that fails over one.
