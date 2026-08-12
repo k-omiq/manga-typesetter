@@ -3,6 +3,8 @@
   // Reuses the sidecar bridges + Tauri dialog.
   import { app, saveExportPrefs, toast } from './store.svelte.js';
   import { checkSidecar, modelsCacheInfo, clearModelsCache, restartSidecar } from './sidecar.js';
+  import { theme, setTheme } from './theme.svelte.js';
+  import { library, setRoot, scanLibrary } from './library.svelte.js';
 
   let { open = $bindable() } = $props();
 
@@ -78,6 +80,23 @@
     }
   }
 
+  async function chooseRoot() {
+    if (!isTauri()) {
+      toast('Choosing a folder needs the desktop app');
+      return;
+    }
+    try {
+      const { open: pick } = await import('@tauri-apps/plugin-dialog');
+      const dir = await pick({ directory: true, defaultPath: library.root });
+      if (!dir) return;
+      await setRoot(dir);
+      await scanLibrary();
+      toast('Library folder changed');
+    } catch (e) {
+      toast(`Couldn't set folder: ${e}`);
+    }
+  }
+
   // Refresh live sidecar status + cache size each time the panel opens.
   $effect(() => {
     if (open) {
@@ -112,6 +131,26 @@
     </div>
 
     <div class="modal-body">
+      <div class="settings-section">
+        <div class="settings-title">APPEARANCE</div>
+        <div class="field">
+          <span>Theme</span>
+          <div class="seg">
+            <button class:on={theme.mode === 'light'} onclick={() => setTheme('light')}>Light</button>
+            <button class:on={theme.mode === 'dark'} onclick={() => setTheme('dark')}>Dark</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-title">LIBRARY</div>
+        <div class="field">
+          <span>Folder</span>
+          <code class="path" title={library.root}>{library.root}</code>
+        </div>
+        <button class="btn" disabled={!isTauri()} onclick={chooseRoot}>Change folder…</button>
+      </div>
+
       <!-- Sidecar status + restart -->
       <div class="srow">
         <span class="slabel">ML sidecar</span>

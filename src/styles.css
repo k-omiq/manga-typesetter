@@ -53,13 +53,14 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
   padding:0 12px; background:var(--panel);
   border-bottom:1px solid var(--line); position:relative; z-index:30;
 }
-.brand{ display:flex; align-items:center; gap:9px; min-width:200px; }
-.brand .logo{
-  width:24px; height:24px; border-radius:6px;
-  background:var(--accent); color:var(--accent-fg);
-  display:grid; place-items:center; font-weight:800; font-size:14px;
+.brand{ display:flex; align-items:center; gap:9px; min-width:200px; max-width:34vw; }
+.logo-btn{
+  width:24px; height:24px; flex:none; display:grid; place-items:center;
+  border:none; border-radius:6px; background:var(--accent-soft); color:var(--t2); cursor:pointer;
 }
-.brand .name{ font-weight:600; letter-spacing:.2px; }
+.logo-btn:hover{ color:var(--text); }
+.logo-btn:disabled{ cursor:default; opacity:.5; }
+.brand .name{ font-weight:600; letter-spacing:.2px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .brand .name .dim{ color:var(--t2); font-weight:500; }
 
 .pagenav{
@@ -582,3 +583,40 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 .chapter-open:disabled{ cursor:default; opacity:.5; }
 .chapter-open:disabled:hover{ background:transparent; }
 .chapter-row.unreadable .chapter-num{ color:var(--t3); }
+
+/* ---------- new chapter dialog ---------- */
+/* `.field`, `.seg` and `.modal-head` are already taken by the inspector and the
+   existing modals, so the dialog's variants are scoped rather than redefined —
+   a bare `.field{flex-direction:row}` would relayout every inspector control. */
+.dialog-narrow{ width:380px; max-width:92vw; padding:18px; }
+.dialog-narrow .modal-head{
+  height:auto; flex:none; display:block; padding:0; border-bottom:none;
+  font-size:13px; font-weight:600; margin-bottom:18px;
+}
+.dialog-narrow .field,.settings-section .field{
+  display:flex; flex-direction:row; align-items:center; gap:12px; margin-bottom:12px;
+}
+.dialog-narrow .field > span,.settings-section .field > span{
+  width:110px; flex:none; font-size:11.5px; color:var(--t2);
+}
+.dialog-narrow .field input,.dialog-narrow .field select{
+  flex:1; min-width:0; height:30px; padding:0 9px;
+  border:1px solid var(--line2); border-radius:6px;
+  background:var(--surface); color:var(--text); font-size:12px;
+}
+.dialog-narrow .field input:focus,.dialog-narrow .field select:focus{ outline:none; border-color:var(--accent); }
+.dialog-narrow .field .soft-btn{ flex:1; min-width:0; height:30px; color:var(--text); }
+.dialog-narrow .home-error{ padding:0 0 4px; }
+.modal-foot{ display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
+.modal-foot .soft-btn{ height:30px; }
+.accent-btn.narrow{ width:auto; height:30px; padding:0 16px; font-size:12px; }
+.accent-btn:disabled,.soft-btn:disabled{ opacity:.55; cursor:default; }
+
+/* ---------- settings: appearance + library ---------- */
+.settings-section{ margin-bottom:22px; }
+.settings-title{ font-size:10.5px; letter-spacing:.22em; color:var(--t3); margin-bottom:12px; }
+.settings-section .seg{ flex:none; }
+.settings-section .seg button{ height:26px; padding:0 14px; font-size:11.5px; }
+
+/* Boot placeholder: the frame before the library root is known. */
+.boot{ height:100vh; background:var(--bg); }

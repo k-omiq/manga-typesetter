@@ -3,10 +3,39 @@
   import { pickJson, pickImages } from './importer.js';
   import { pickPsd } from './psd.js';
   import { detectAllPages, sidecarReady } from './sidecar.js';
+  import { goProject, goLibrary } from './route.svelte.js';
+  import { projectById, chapterById } from './library.svelte.js';
 
   let { onFontLib, onSettings } = $props();
 
   const canDetect = $derived(sidecarReady() && app.pages.some((p) => p?.raw) && !app.detecting);
+
+  const label = $derived.by(() => {
+    const ref = app.chapterRef;
+    if (!ref) return 'Untitled';
+    const p = projectById(ref.projectId);
+    const c = chapterById(ref.projectId, ref.chapterId);
+    if (!p || !c) return 'Untitled';
+    return `${p.name} · ${c.title || 'Chapter ' + c.number}`;
+  });
+
+  // Leaving the editor awaits a save before the route moves. A second click in
+  // that window would run the leave hook twice and push a duplicate history
+  // entry, so the control is inert until the first navigation settles.
+  let leaving = $state(false);
+
+  async function goHome() {
+    if (leaving) return;
+    leaving = true;
+    try {
+      const pid = app.chapterRef?.projectId;
+      // A refused leave has already told the user why and left them here; there
+      // is nothing more to do.
+      await (pid ? goProject(pid) : goLibrary());
+    } finally {
+      leaving = false;
+    }
+  }
 
   function openExport() {
     app.exportOpen = true;
@@ -15,8 +44,10 @@
 
 <header class="topbar">
   <div class="brand">
-    <div class="logo">場</div>
-    <div class="name">Manga&nbsp;Typesetter <span class="dim">· Untitled</span></div>
+    <button class="logo-btn" onclick={goHome} disabled={leaving} title="Back to the project">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 7.4 8 3l5.4 4.4" /><path d="M4.3 6.9v6.3h7.4V6.9" /></svg>
+    </button>
+    <div class="name">{label}</div>
   </div>
 
   <nav class="pagenav">
