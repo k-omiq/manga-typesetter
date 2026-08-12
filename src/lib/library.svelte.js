@@ -165,12 +165,31 @@ async function readProject(root, slug, problems, dupes) {
   };
 }
 
+// Every scan takes a ticket. A scan can sit for a long time on a folder
+// permission prompt, and the app's own documented recovery from that is Settings
+// ▸ Change folder — which points the library somewhere else and scans again. The
+// blocked scan then rejects long after the new one has painted the screen, so it
+// must not put its results anywhere.
+let scanSeq = 0;
+
 export async function scanLibrary() {
+  const token = ++scanSeq;
+  // Captured once, at entry. Read live, `library.root` is a different value
+  // after every await, and the failure message at the bottom would name the root
+  // now in force against the error of the one this scan actually read.
+  const root = library.root;
+  // `loading` belongs to the newest scan whichever root it is reading — a
+  // superseded scan clearing it would blank a spinner the live one still owns.
+  // Results belong to a scan only while the root they describe is still the one
+  // on screen.
+  const isNewest = () => scanSeq === token;
+  const owns = () => isNewest() && library.root === root;
+
   // No root means initRoot never finished. Scanning '' would either fail with
   // something unrecognisable or read the wrong place, and clearing the error
   // would throw away the only explanation the user has — including across the
   // retry button, which lands back here.
-  if (!library.root) {
+  if (!root) {
     library.projects = [];
     library.loading = false;
     if (!library.error) {
@@ -185,12 +204,12 @@ export async function scanLibrary() {
   const dupes = [];
   const seenIds = new Set();
   try {
-    if (!(await fsx.exists(library.root))) await fsx.mkdir(library.root);
-    for (const slug of await subdirs(library.root)) {
-      const marker = await fsx.join(library.root, slug, 'project.json');
+    if (!(await fsx.exists(root))) await fsx.mkdir(root);
+    for (const slug of await subdirs(root)) {
+      const marker = await fsx.join(root, slug, 'project.json');
       if (!(await fsx.exists(marker))) continue; // not a project directory
       try {
-        const project = await readProject(library.root, slug, problems, dupes);
+        const project = await readProject(root, slug, problems, dupes);
         if (seenIds.has(project.id)) {
           dupes.push(slug);
           found.push(duplicateStub(project.name, slug, project.dir));
@@ -205,13 +224,16 @@ export async function scanLibrary() {
           id: `unreadable:${slug}`,
           name: slug,
           slug,
-          dir: await fsx.join(library.root, slug),
+          dir: await fsx.join(root, slug),
           chapters: [],
           unreadable: true,
         });
       }
     }
     found.sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
+    // Superseded: the catalogue on screen describes a root this scan was not
+    // reading, and nothing here is an improvement on it.
+    if (!owns()) return;
     library.projects = found;
     const notes = [];
     if (problems.length) notes.push(`Could not read: ${problems.join(', ')}`);
@@ -222,10 +244,13 @@ export async function scanLibrary() {
     }
     library.error = notes.join(' · ');
   } catch (e) {
+    // A failure against a root the user has already moved on from is not news,
+    // and reporting it would blank a library that is being read perfectly well.
+    if (!owns()) return;
     library.projects = [];
-    library.error = `Could not read the library at ${library.root} — ${e?.message ?? e}`;
+    library.error = `Could not read the library at ${root} — ${e?.message ?? e}`;
   } finally {
-    library.loading = false;
+    if (isNewest()) library.loading = false;
   }
 }
 

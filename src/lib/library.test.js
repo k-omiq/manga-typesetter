@@ -178,6 +178,63 @@ describe('scanLibrary', () => {
     expect(library.error).toMatch(/Could not work out where your library lives/);
   });
 
+  it('lets the newer scan win when a blocked one settles late', async () => {
+    // Scan A goes out against the old root and blocks — on this machine that was
+    // a macOS folder-permission prompt sitting unanswered at boot.
+    fsx._tree.dirs.add('/old');
+    await setRoot('/old');
+    let refuse;
+    const blocked = new Promise((_, reject) => {
+      refuse = reject;
+    });
+    // The prompt sits in front of the very first call the scan makes, so the
+    // old root is the one this scan is provably reading.
+    const origExists = fsx.exists;
+    fsx.exists = async (p) => (p === '/old' ? blocked : origExists(p));
+    const scanA = scanLibrary();
+
+    try {
+      // The user takes the app's own documented recovery — Settings ▸ Change
+      // folder — and scan B reads the new root successfully.
+      seedProject('kept', PROJECT('p1', 'Kept'));
+      await setRoot('/lib');
+      await scanLibrary();
+      expect(library.projects.map((p) => p.slug)).toEqual(['kept']);
+
+      // Only now does the blocked scan give up.
+      refuse(
+        new Error('failed to read directory at path: /old with error: Operation not permitted'),
+      );
+      await scanA;
+    } finally {
+      fsx.exists = origExists;
+    }
+
+    // The freshly scanned library survives, and the user is not told that the
+    // folder they are looking at cannot be read.
+    expect(library.projects.map((p) => p.slug)).toEqual(['kept']);
+    expect(library.error).toBe('');
+    // The flag belongs to the scan that finished last in sequence, not in time.
+    expect(library.loading).toBe(false);
+  });
+
+  it('names the root it actually read when a scan fails', async () => {
+    await setRoot('/old');
+    const origReadDir = fsx.readDir;
+    fsx.readDir = async (p) => {
+      if (p === '/old') throw new Error('Operation not permitted');
+      return origReadDir(p);
+    };
+    try {
+      fsx._tree.dirs.add('/old');
+      await scanLibrary();
+    } finally {
+      fsx.readDir = origReadDir;
+    }
+    expect(library.error).toMatch(/library at \/old/);
+    expect(library.error).not.toMatch(/\/lib\b/);
+  });
+
   it('marks a corrupt chapter.json as unreadable without failing the scan', async () => {
     seedProject('y', PROJECT('p1', 'Y'), [['001', CHAPTER('c1', 1, [])]]);
     fsx._tree.dirs.add('/lib/y/002');
