@@ -248,3 +248,201 @@ describe('createChapter', () => {
     expect(projectById(p.id).coverChapterId).toBeNull();
   });
 });
+
+const { openChapter, saveOpenChapter, closeChapter, chapterById } = await import('./library.svelte.js');
+const { app, markUnsaved } = await import('./store.svelte.js');
+
+// The editor store is module-global, so no case may inherit another's open
+// chapter — a stale chapterRef would let a save land in the wrong file.
+beforeEach(() => closeChapter());
+
+// A chapter with two same-named picked files, so the on-disk names are deduped
+// and `pages[].file` is provably not the name the user picked.
+async function seedOpenChapter() {
+  const p = await createProject('Series');
+  const c = await createChapter({
+    projectId: p.id,
+    number: 1,
+    title: '',
+    files: [fakeFile('page.png', 1), fakeFile('page.png', 2)],
+  });
+  await openChapter(p.id, c.id);
+  return { p, c };
+}
+
+const chapterJson = (c) => JSON.parse(fsx._tree.files.get(`${c.dir}/chapter.json`));
+
+describe('openChapter', () => {
+  it('loads a page per record entry and resolves raws by file name', async () => {
+    const { p, c } = await seedOpenChapter();
+    expect(app.pages).toHaveLength(2);
+    expect(app.pages.every((pg) => String(pg.raw).startsWith('blob:'))).toBe(true);
+    expect(app.chapterRef).toEqual({ projectId: p.id, chapterId: c.id });
+    expect(app.saved).toBe(true);
+    closeChapter();
+  });
+
+  it('keeps the typesetting when a raw is missing from disk', async () => {
+    const { p, c } = await seedOpenChapter();
+    closeChapter();
+    const record = chapterJson(c);
+    record.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+    fsx._tree.files.set(`${c.dir}/chapter.json`, JSON.stringify(record));
+    fsx._tree.files.delete(`${c.dir}/raws/${record.pages[0].file}`);
+    const orig = fsx.readFile;
+    fsx.readFile = async (path) => {
+      if (!fsx._tree.files.has(path)) throw new Error('ENOENT ' + path);
+      return orig(path);
+    };
+    try {
+      await openChapter(p.id, c.id);
+    } finally {
+      fsx.readFile = orig;
+    }
+    expect(app.pages[0].raw).toBeNull();
+    expect(app.pages[0].lines).toHaveLength(1);
+    closeChapter();
+  });
+
+  it('refuses to open an unreadable chapter rather than loading a blank one', async () => {
+    closeChapter();
+    seedProject('z', PROJECT('p1', 'Z'));
+    fsx._tree.dirs.add('/lib/z/001');
+    fsx._tree.files.set('/lib/z/001/chapter.json', '{ this is not json');
+    await scanLibrary();
+    const c = projectById('p1').chapters[0];
+    expect(c.unreadable).toBe(true);
+    await expect(openChapter('p1', c.id)).rejects.toThrow();
+    expect(app.chapterRef).toBeNull();
+  });
+});
+
+describe('saveOpenChapter', () => {
+  it('keeps pages[].file exactly as it is on disk and never writes a blob URL', async () => {
+    const { c } = await seedOpenChapter();
+    const before = chapterJson(c).pages.map((pg) => pg.file);
+    app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+    await saveOpenChapter();
+    const after = chapterJson(c);
+    expect(after.pages.map((pg) => pg.file)).toEqual(before);
+    expect(fsx._tree.files.get(`${c.dir}/chapter.json`)).not.toContain('blob:');
+    expect(after.pages[0]).not.toHaveProperty('raw');
+    closeChapter();
+  });
+
+  it('round-trips boxes with their nested style objects as plain data', async () => {
+    const { p, c } = await seedOpenChapter();
+    app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+    app.pages[0].boxes = [
+      {
+        id: 'b1',
+        lineN: 1,
+        text: null,
+        x: 10,
+        y: 20,
+        w: 100,
+        h: 40,
+        style: { font: 'Bangers', size: 30, shadow: { on: true, x: 3 }, roughen: { on: false } },
+      },
+    ];
+    await saveOpenChapter();
+    expect(chapterJson(c).pages[0].boxes[0].style.shadow.on).toBe(true);
+    closeChapter();
+    await openChapter(p.id, c.id);
+    expect(app.pages[0].boxes[0].style.font).toBe('Bangers');
+    expect(app.pages[0].boxes[0].style.shadow.on).toBe(true);
+    // Unset keys are filled from the current schema, not left undefined.
+    expect(app.pages[0].boxes[0].style.shadow.blur).toBe(2);
+    closeChapter();
+  });
+
+  it('updates the catalogue entry only after the write lands', async () => {
+    const { p, c } = await seedOpenChapter();
+    const entry = chapterById(p.id, c.id);
+    const stale = entry.updatedAt;
+    fsx._tree.files.delete(`${c.dir}/chapter.json`); // read fails -> no write
+    await expect(saveOpenChapter()).rejects.toThrow();
+    expect(chapterById(p.id, c.id).updatedAt).toBe(stale);
+    closeChapter();
+  });
+
+  it('does nothing when no chapter is open', async () => {
+    const { c } = await seedOpenChapter();
+    const before = fsx._tree.files.get(`${c.dir}/chapter.json`);
+    closeChapter();
+    await saveOpenChapter();
+    expect(fsx._tree.files.get(`${c.dir}/chapter.json`)).toBe(before);
+  });
+});
+
+describe('autosave debounce', () => {
+  function countChapterWrites(c) {
+    const orig = fsx.writeTextFile;
+    const state = { n: 0, restore: () => (fsx.writeTextFile = orig) };
+    fsx.writeTextFile = async (path, contents) => {
+      if (path === `${c.dir}/chapter.json`) state.n++;
+      return orig(path, contents);
+    };
+    return state;
+  }
+
+  it('writes the open chapter once the debounce elapses', async () => {
+    const { c } = await seedOpenChapter();
+    const writes = countChapterWrites(c);
+    vi.useFakeTimers();
+    try {
+      app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+      markUnsaved();
+      await vi.advanceTimersByTimeAsync(1000);
+    } finally {
+      vi.useRealTimers();
+      writes.restore();
+    }
+    expect(writes.n).toBe(1);
+    expect(chapterJson(c).pages[0].lines).toHaveLength(1);
+    closeChapter();
+  });
+
+  it('does not write after the chapter has been closed', async () => {
+    const { c } = await seedOpenChapter();
+    const writes = countChapterWrites(c);
+    vi.useFakeTimers();
+    try {
+      app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+      markUnsaved();
+      closeChapter();
+      await vi.advanceTimersByTimeAsync(1000);
+    } finally {
+      vi.useRealTimers();
+      writes.restore();
+    }
+    expect(writes.n).toBe(0);
+    expect(chapterJson(c).pages[0].lines).toEqual([]);
+  });
+
+  it('does not write into the chapter opened next', async () => {
+    const { p, c } = await seedOpenChapter();
+    const second = await createChapter({
+      projectId: p.id,
+      number: 2,
+      title: '',
+      files: [fakeFile('a.png', 3)],
+    });
+    const writes = countChapterWrites(second);
+    vi.useFakeTimers();
+    try {
+      app.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }];
+      markUnsaved();
+      closeChapter();
+      await openChapter(p.id, second.id);
+      await vi.advanceTimersByTimeAsync(1000);
+    } finally {
+      vi.useRealTimers();
+      writes.restore();
+    }
+    expect(writes.n).toBe(0);
+    expect(chapterJson(second).pages[0].lines).toEqual([]);
+    expect(chapterJson(c).pages[0].lines).toEqual([]);
+    closeChapter();
+  });
+});

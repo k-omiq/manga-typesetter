@@ -117,10 +117,15 @@ export const app = $state({
   sidecar: { status: 'unknown', device: null, info: null }, // Python ML sidecar health
   detecting: false, // detection/OCR request in flight
   detectBatch: null, // { done, total } while a whole-chapter detect runs, else null
+  chapterRef: null, // { projectId, chapterId } while a chapter is open
 });
 
 // ---------- derived helpers ----------
-export const page = () => app.pages[app.pageIndex];
+// A blank stand-in keeps every consumer total while no chapter is open. The
+// editor is only routed to with pages loaded, so this is a safety net, not a
+// code path with a UI.
+const NO_PAGE = { id: 0, raw: null, cleaned: null, w: PAGE_W, h: PAGE_H, lines: [], detect: null, boxes: [], activeLineN: null };
+export const page = () => app.pages[app.pageIndex] ?? NO_PAGE;
 export const byId = (id) => page().boxes.find((b) => b.id === id);
 // English text for a line. Back-compat: fall back to legacy natural/stylised/text
 // fields so projects saved under the old schema still render.
@@ -168,12 +173,26 @@ export function saveExportPrefs(dir, name) {
   }
 }
 
-// ---------- save indicator ----------
+// ---------- save indicator + autosave ----------
+// The saver is registered by library.svelte.js rather than imported, so the
+// store stays unaware of the filesystem and the two modules do not cycle.
+let saver = null;
+let saveT;
+export function setSaver(fn) {
+  saver = fn;
+}
 export function markUnsaved() {
   app.saved = false;
+  if (!saver || !app.chapterRef) return;
+  clearTimeout(saveT);
+  saveT = setTimeout(() => saver(), 800);
 }
 export function markSaved() {
   app.saved = true;
+}
+export function flushSave() {
+  clearTimeout(saveT);
+  return saver && app.chapterRef ? saver() : Promise.resolve();
 }
 
 // ---------- toast ----------
@@ -298,6 +317,7 @@ export function placeActiveAt(imgX, imgY) {
 
 // ---------- empty text box (free-typed) ----------
 export function addEmptyBox(imgX, imgY) {
+  if (!app.pages.length) return null; // no chapter open: never write into the stand-in page
   const p = page();
   const w = 200,
     h = 70;

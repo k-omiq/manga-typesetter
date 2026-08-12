@@ -10,6 +10,8 @@
 
 import { fsx } from './fsx.js';
 import { slugify, uniqueSlug, chapterSlug } from './paths.js';
+import { app, loadProjectPages, markSaved, setSaver, flushSave } from './store.svelte.js';
+import { setLeaveEditorHook } from './route.svelte.js';
 
 const ROOT_KEY = 'mt.libraryRoot';
 const SCHEMA = 1;
@@ -357,3 +359,114 @@ export async function createChapter({ projectId, number, title, files }) {
     throw e;
   }
 }
+
+// ---------- open / save the editor's chapter ----------
+
+// Blob URLs minted for the open chapter's raws. Held here so closing or
+// switching chapters can revoke them — leaking these keeps whole page images
+// alive for as long as the app runs.
+let openUrls = [];
+
+function revokeOpenUrls() {
+  for (const u of openUrls) URL.revokeObjectURL(u);
+  openUrls = [];
+}
+
+export async function openChapter(projectId, chapterId) {
+  const p = projectById(projectId);
+  const c = chapterById(projectId, chapterId);
+  if (!p || !c) throw new Error('No such chapter');
+  // A scan stub for an unparseable chapter.json carries no pages. Loading one
+  // would present an empty document that the next save would write back over
+  // whatever is really in that file.
+  if (c.unreadable) throw new Error('This chapter could not be read');
+
+  // Write anything still pending for the chapter being replaced — and cancel
+  // its debounce either way — before app.pages stops being that chapter.
+  await flushSave();
+
+  const record = await readJson(await fsx.join(c.dir, 'chapter.json'));
+  const rawsDir = await fsx.join(c.dir, 'raws');
+
+  const urls = [];
+  const pages = [];
+  try {
+    for (const pg of record.pages ?? []) {
+      let url = null;
+      try {
+        // `file` is the deduped on-disk name chosen at import; it is the only
+        // thing that resolves a page back to its raw.
+        const bytes = await fsx.readFile(await fsx.join(rawsDir, pg.file));
+        url = URL.createObjectURL(new Blob([bytes]));
+        urls.push(url);
+      } catch {
+        // A missing raw must not discard the typesetting that references it.
+        url = null;
+      }
+      pages.push({ ...pg, raw: url, cleaned: null });
+    }
+  } catch (e) {
+    // Nothing was swapped in, so these URLs have no owner to revoke them.
+    for (const u of urls) URL.revokeObjectURL(u);
+    throw e;
+  }
+
+  // Swap last: the chapter on screen stays intact until the new one is ready.
+  revokeOpenUrls();
+  openUrls = urls;
+  loadProjectPages(pages);
+  // Order matters. loadProjectPages ends in markUnsaved(), which only schedules
+  // a save while a chapterRef is set; setting the ref after it, then marking
+  // saved, means opening a chapter never schedules a write of what it just read.
+  app.chapterRef = { projectId, chapterId };
+  markSaved();
+}
+
+export async function saveOpenChapter() {
+  const ref = app.chapterRef;
+  if (!ref) return;
+  const c = chapterById(ref.projectId, ref.chapterId);
+  if (!c) return;
+  const record = await readJson(await fsx.join(c.dir, 'chapter.json'));
+  const onDisk = record.pages ?? [];
+  record.updatedAt = now();
+  // Blob URLs are runtime-only; `file` is the durable reference, carried across
+  // from disk untouched rather than re-derived from anything in memory.
+  record.pages = app.pages.map((pg, i) => ({
+    id: pg.id,
+    file: onDisk[i]?.file ?? '',
+    w: pg.w,
+    h: pg.h,
+    // $state.snapshot is a deep clone: the nested style objects inside boxes
+    // and the detect geometry come out as plain data, never proxies.
+    lines: $state.snapshot(pg.lines),
+    detect: $state.snapshot(pg.detect),
+    boxes: $state.snapshot(pg.boxes),
+  }));
+  await writeJson(await fsx.join(c.dir, 'chapter.json'), record);
+  // The in-memory catalogue follows the disk, never leads it.
+  c.updatedAt = record.updatedAt;
+  c.pageCount = record.pages.length;
+  markSaved();
+}
+
+export function closeChapter() {
+  revokeOpenUrls();
+  // Cleared before the pages are: a debounce that lands after this point finds
+  // no chapterRef and is a no-op, rather than a write of stale state.
+  app.chapterRef = null;
+  app.pages = [];
+  app.pageIndex = 0;
+  app.selectedId = null;
+  app.editingId = null;
+  // No document is loaded any more, so the editor falls back to its empty
+  // state instead of offering a canvas over the blank stand-in page.
+  app.loaded = false;
+}
+
+// Wire the store's autosave and the route's leave-editor flush to this module.
+setSaver(saveOpenChapter);
+setLeaveEditorHook(async () => {
+  await flushSave();
+  closeChapter();
+});

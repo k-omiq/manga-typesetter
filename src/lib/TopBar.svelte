@@ -23,8 +23,9 @@
     <button onclick={prevPage} disabled={app.pageIndex === 0} data-tip="Previous page" data-tip-pos="down">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6" /></svg>
     </button>
-    <span class="indicator">Page <b>{app.pageIndex + 1}</b> / {app.pages.length}</span>
-    <button onclick={nextPage} disabled={app.pageIndex === app.pages.length - 1} data-tip="Next page" data-tip-pos="down">
+    <!-- No chapter open: "Page 0 / 0" rather than a first page that isn't there. -->
+    <span class="indicator">Page <b>{app.pages.length ? app.pageIndex + 1 : 0}</b> / {app.pages.length}</span>
+    <button onclick={nextPage} disabled={app.pageIndex >= app.pages.length - 1} data-tip="Next page" data-tip-pos="down">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6" /></svg>
     </button>
   </nav>

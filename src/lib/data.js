@@ -61,8 +61,6 @@ export function normalizeStyle(s) {
   return { ...defaultStyle(), ...s, shadow: { ...defaultStyle().shadow, ...(s.shadow || {}) }, roughen: { ...defaultStyle().roughen, ...(s.roughen || {}) } };
 }
 
-// Clean initial state: one empty page, no images, no text. The empty-state
-// dropzone is shown until the user imports real cleaned pages / JSON.
-export const PAGES = [
-  { id: 1, raw: null, cleaned: null, lines: [], boxes: [] },
-];
+// No seed pages. `app.pages` is empty until a chapter is opened from the
+// library; the editor is only routed to once one has been.
+export const PAGES = [];
