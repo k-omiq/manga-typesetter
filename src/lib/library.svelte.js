@@ -174,10 +174,32 @@ export const chapterById = (projectId, chapterId) =>
 
 // ---------- mutations ----------
 
+// Pick a directory name that is free ON DISK, not merely free in the catalogue.
+//
+// `taken` is built from what the scan found, and the scan by design ignores any
+// directory without a marker file. `fsx.mkdir` passes { recursive: true }, so it
+// succeeds silently on a directory that already exists. Together those two make
+// a folder the app has never seen invisible to collision avoidance: a project
+// named after it would write project.json inside the user's own folder, adopt
+// it, and hand a later delete — or a creation rollback — a recursive remove of
+// files this app never put there.
+//
+// So every candidate is checked against the filesystem, and an existing
+// directory counts as taken. uniqueSlug's numbering is unchanged; it is just
+// fed the truth.
+async function freeDir(parent, name, taken) {
+  const seen = new Set(taken);
+  for (;;) {
+    const slug = uniqueSlug(name, seen);
+    const dir = await fsx.join(parent, slug);
+    if (!(await fsx.exists(dir))) return { slug, dir };
+    seen.add(slug);
+  }
+}
+
 export async function createProject(name) {
   const taken = new Set(library.projects.map((p) => p.slug));
-  const slug = uniqueSlug(name, taken);
-  const dir = await fsx.join(library.root, slug);
+  const { slug, dir } = await freeDir(library.root, name, taken);
   await fsx.mkdir(dir);
   const record = {
     schema: SCHEMA,
@@ -262,17 +284,21 @@ export async function createChapter({ projectId, number, title, files }) {
   const p = projectById(projectId);
   if (!p) throw new Error('No such project');
 
+  // Same hole as createProject, and here it fires on the FAILURE path: the
+  // rollback below is a recursive remove, and it must never be pointed at a
+  // directory this run did not bring into being.
   const taken = new Set(p.chapters.map((c) => c.slug));
-  const slug = uniqueSlug(chapterSlug(number, title ?? ''), taken);
-  const dir = await fsx.join(p.dir, slug);
+  const { slug, dir } = await freeDir(p.dir, chapterSlug(number, title ?? ''), taken);
   const rawsDir = await fsx.join(dir, 'raws');
 
   const ordered = [...files].sort(naturalSort);
   const willHaveCover = !p.coverChapterId;
   let thumbWritten = false;
+  let dirCreated = false;
 
   try {
     await fsx.mkdir(rawsDir);
+    dirCreated = true;
 
     const usedNames = new Set();
     const pages = [];
@@ -347,10 +373,15 @@ export async function createChapter({ projectId, number, title, files }) {
         /* ignore */
       }
     }
-    try {
-      await fsx.remove(dir);
-    } catch {
-      /* ignore */
+    // Only what this run created. If mkdir itself failed there is nothing of
+    // ours down there, and a recursive remove would be destroying someone
+    // else's files to tidy up after an error we caused.
+    if (dirCreated) {
+      try {
+        await fsx.remove(dir);
+      } catch {
+        /* ignore */
+      }
     }
     throw e;
   }

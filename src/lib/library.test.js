@@ -155,6 +155,24 @@ describe('createProject', () => {
     const second = await createProject('Dup');
     expect(second.slug).toBe('dup-2');
   });
+
+  it('never writes into an existing directory the scan never saw', async () => {
+    // The user's own folder, holding the only copies of their raws. It carries
+    // no project.json, so the scan ignores it and the catalogue has no idea it
+    // is there — which is exactly why the check has to reach the disk.
+    fsx._tree.dirs.add('/lib/one-piece');
+    fsx._tree.files.set('/lib/one-piece/ch1-p001.png', new Uint8Array([7]));
+
+    const p = await createProject('One Piece');
+
+    expect(p.slug).toBe('one-piece-2');
+    expect(fsx._tree.files.has('/lib/one-piece/project.json')).toBe(false);
+    expect(fsx._tree.files.has('/lib/one-piece-2/project.json')).toBe(true);
+    // And the folder is still theirs: deleting the project they just made
+    // cannot reach it.
+    await deleteProject(p.id);
+    expect(fsx._tree.files.get('/lib/one-piece/ch1-p001.png')).toEqual(new Uint8Array([7]));
+  });
 });
 
 describe('deleteProject', () => {
@@ -215,6 +233,59 @@ describe('createChapter', () => {
     ).rejects.toThrow();
     expect(fsx._tree.dirs.has(`${p.dir}/001`)).toBe(false);
     expect(projectById(p.id).chapters).toHaveLength(0);
+  });
+
+  it('sidesteps an existing directory rather than merging into it', async () => {
+    const p = await createProject('Series');
+    fsx._tree.dirs.add(`${p.dir}/001`);
+    fsx._tree.files.set(`${p.dir}/001/scan-001.png`, new Uint8Array([9]));
+    const c = await createChapter({
+      projectId: p.id,
+      number: 1,
+      title: '',
+      files: [fakeFile('a.png', 1)],
+    });
+    expect(c.slug).toBe('001-2');
+    expect(fsx._tree.files.has(`${p.dir}/001/chapter.json`)).toBe(false);
+    expect(fsx._tree.files.get(`${p.dir}/001/scan-001.png`)).toEqual(new Uint8Array([9]));
+  });
+
+  it("rolls back nothing when the directory was not this run's to remove", async () => {
+    const p = await createProject('Series');
+    fsx._tree.dirs.add(`${p.dir}/001`);
+    fsx._tree.files.set(`${p.dir}/001/scan-001.png`, new Uint8Array([9]));
+    const broken = { name: 'bad.png', arrayBuffer: async () => { throw new Error('read failed'); } };
+    await expect(
+      createChapter({ projectId: p.id, number: 1, title: '', files: [broken] }),
+    ).rejects.toThrow();
+    // The rollback took out the directory this run made, and left the one it
+    // stepped around completely alone.
+    expect(fsx._tree.dirs.has(`${p.dir}/001-2`)).toBe(false);
+    expect(fsx._tree.dirs.has(`${p.dir}/001`)).toBe(true);
+    expect(fsx._tree.files.get(`${p.dir}/001/scan-001.png`)).toEqual(new Uint8Array([9]));
+  });
+
+  it('removes nothing at all when the directory could not be created', async () => {
+    const p = await createProject('Series');
+    const removed = [];
+    const origMkdir = fsx.mkdir;
+    const origRemove = fsx.remove;
+    fsx.mkdir = async () => {
+      throw new Error('read-only filesystem');
+    };
+    fsx.remove = async (path) => {
+      removed.push(path);
+      return origRemove(path);
+    };
+    try {
+      await expect(
+        createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] }),
+      ).rejects.toThrow('read-only filesystem');
+    } finally {
+      fsx.mkdir = origMkdir;
+      fsx.remove = origRemove;
+    }
+    expect(removed).toEqual([]);
   });
 
   it('dedupes colliding filenames instead of overwriting on disk', async () => {
