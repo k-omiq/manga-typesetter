@@ -1,6 +1,5 @@
 // ===== Central reactive store (Svelte 5 runes) =====
 import {
-  PAGES,
   PAGE_W,
   PAGE_H,
   BUILTIN_FONTS,
@@ -14,37 +13,9 @@ export { PAGE_W, PAGE_H };
 let boxSeq = 1;
 let pageLoadSeq = 5000; // page ids for imported projects that carry none
 
-function clonePage(p) {
-  const cloned = {
-    id: p.id,
-    raw: p.raw,
-    cleaned: p.cleaned,
-    w: p.w ?? PAGE_W,
-    h: p.h ?? PAGE_H,
-    lines: p.lines.map((l) => ({ ...l })),
-    // Detection geometry (drives the text queue + box auto-placement).
-    detect: p.detect
-      ? { panels: (p.detect.panels ?? []).slice(), boxes: p.detect.boxes.map((b) => ({ ...b })) }
-      : null,
-    boxes: p.boxes.map((b) => ({
-      id: 'b' + boxSeq++,
-      lineN: b.lineN,
-      text: b.text ?? null,
-      x: b.x,
-      y: b.y,
-      w: b.w,
-      h: b.h,
-      style: normalizeStyle(b.style),
-    })),
-    activeLineN: null,
-  };
-  cloned.activeLineN = firstUnplaced(cloned);
-  return cloned;
-}
-
-// Replace all pages from an imported project (e.g. a lossless PSD). Mirrors
-// clonePage but assigns fresh box ids from the store's own sequence (so nothing
-// collides with existing state) and normalizes styles up to the current schema.
+// Replace all pages from an imported project (e.g. a lossless PSD). Assigns
+// fresh box ids from the store's own sequence (so nothing collides with
+// existing state) and normalizes styles up to the current schema.
 // Object URLs (raw/cleaned) are passed through as-is — the caller regenerates
 // them from the source.
 export function loadProjectPages(rawPages) {
@@ -96,7 +67,9 @@ export const lineByN = (p, n) => p.lines.find((l) => l.n === n);
 export const app = $state({
   loaded: false, // becomes true once real pages/images/JSON are imported
   pageIndex: 0,
-  pages: PAGES.map(clonePage),
+  // Empty until a chapter is opened from the library; the editor is only
+  // routed to once one has been.
+  pages: [],
   selectedId: null,
   editingId: null, // box currently in inline-edit mode
   tool: 'place', // 'place' | 'text'

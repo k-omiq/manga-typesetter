@@ -18,8 +18,14 @@
     if (!name) return;
     naming = false;
     newName = '';
-    const p = await createProject(name);
-    goProject(p.id);
+    // Every other mutation on this screen reports its own failure; a create
+    // that throws must not become a silent unhandled rejection.
+    try {
+      const p = await createProject(name);
+      goProject(p.id);
+    } catch (e) {
+      toast(`Could not create ${name}: ${e?.message ?? e}`);
+    }
   }
 
   function pageCountOf(project) {
@@ -60,7 +66,10 @@
 <div class="section-label">PROJECTS</div>
 
 {#if library.error}
-  <div class="home-error">{library.error}</div>
+  <div class="home-error" role="alert">
+    <div>{library.error}</div>
+    <button class="soft-btn" onclick={scanLibrary}>Try again</button>
+  </div>
 {/if}
 
 {#if library.projects.length}
@@ -79,7 +88,12 @@
       {/if}
     {/each}
   </div>
-{:else if !library.loading}
+{:else if library.loading}
+  <!-- A scan in flight must say so. Rendering nothing here is what made a
+       stalled scan look exactly like a library with nothing in it. -->
+  <div class="home-empty">Reading your library…</div>
+{:else if !library.error}
+  <!-- Only claim the library is empty when it was actually read. -->
   <div class="home-empty">
     <div>No projects yet.</div>
     <div>Start a chapter and the raws you pick will be copied into your library.</div>

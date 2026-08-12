@@ -40,12 +40,6 @@ export const fsx = {
   async exists(p) {
     return (await fs()).exists(p);
   },
-  // Byte-for-byte. Never decodes, never re-encodes — raws must survive a copy
-  // unchanged, including bit depth, colour type, and any ICC profile.
-  async copyFile(from, to) {
-    const m = await fs();
-    await m.writeFile(to, await m.readFile(from));
-  },
   async join(...parts) {
     return (await path()).join(...parts);
   },

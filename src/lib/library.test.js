@@ -23,8 +23,14 @@ vi.mock('./fsx.js', () => {
       async writeTextFile(p, c) {
         tree.files.set(p, c);
       },
+      // Mirrors `{ recursive: true }`: every ancestor comes into being too, so
+      // a directory the app created is visible to `exists` at every level.
       async mkdir(p) {
-        tree.dirs.add(p);
+        const parts = p.split('/');
+        for (let i = 1; i <= parts.length; i++) {
+          const d = parts.slice(0, i).join('/');
+          if (d) tree.dirs.add(d);
+        }
       },
       async remove(p) {
         for (const d of [...tree.dirs]) if (d === p || d.startsWith(p + '/')) tree.dirs.delete(d);
@@ -44,9 +50,6 @@ vi.mock('./fsx.js', () => {
       },
       async writeFile(p, bytes) {
         tree.files.set(p, bytes);
-      },
-      async copyFile(from, to) {
-        tree.files.set(to, tree.files.get(from));
       },
     },
   };

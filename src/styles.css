@@ -305,10 +305,6 @@ input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:14px; he
 .seg button.on{ background:var(--accent); color:var(--accent-fg); }
 .seg button svg{ width:15px; height:15px; }
 
-/* version switch in the top bar (text labels, not icons) */
-.version-seg{ height:30px; }
-.version-seg button{ padding:0 12px; font-size:12px; font-weight:600; white-space:nowrap; }
-
 /* color field */
 .color-field{ display:flex; align-items:center; gap:8px; }
 .swatch{ width:30px; height:30px; border-radius:6px; border:1px solid var(--line2); cursor:pointer; flex:0 0 auto; position:relative; overflow:hidden; }

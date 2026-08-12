@@ -60,7 +60,3 @@ export function defaultStyle() {
 export function normalizeStyle(s) {
   return { ...defaultStyle(), ...s, shadow: { ...defaultStyle().shadow, ...(s.shadow || {}) }, roughen: { ...defaultStyle().roughen, ...(s.roughen || {}) } };
 }
-
-// No seed pages. `app.pages` is empty until a chapter is opened from the
-// library; the editor is only routed to once one has been.
-export const PAGES = [];

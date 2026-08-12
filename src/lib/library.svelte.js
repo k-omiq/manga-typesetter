@@ -9,7 +9,7 @@
 //   <root>/<project-slug>/<chapter-slug>/raws/
 
 import { fsx } from './fsx.js';
-import { slugify, uniqueSlug, chapterSlug } from './paths.js';
+import { uniqueSlug, chapterSlug } from './paths.js';
 import { app, loadProjectPages, markSaved, setSaver, flushSave, toast } from './store.svelte.js';
 import { setLeaveEditorHook } from './route.svelte.js';
 
@@ -180,22 +180,6 @@ export async function createProject(name) {
   const project = { ...record, slug, dir, chapters: [], unreadable: false };
   library.projects = [project, ...library.projects];
   return project;
-}
-
-export async function renameProject(projectId, name) {
-  const p = projectById(projectId);
-  if (!p) return;
-  p.name = String(name).trim() || p.name;
-  p.updatedAt = now();
-  await writeJson(await fsx.join(p.dir, 'project.json'), {
-    schema: SCHEMA,
-    id: p.id,
-    name: p.name,
-    createdAt: p.createdAt,
-    updatedAt: p.updatedAt,
-    coverChapterId: p.coverChapterId,
-    coverPageId: p.coverPageId,
-  });
 }
 
 export async function deleteProject(projectId) {
