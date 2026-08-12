@@ -18,6 +18,7 @@
     "fs:allow-mkdir",
     "fs:allow-remove",
     "fs:allow-exists",
+    "fs:allow-rename",
     {
       "identifier": "fs:scope",
       "allow": [

@@ -64,8 +64,11 @@ async function readJson(path) {
   return JSON.parse(await fsx.readTextFile(path));
 }
 
+// Every record file — project.json and chapter.json alike — goes down
+// atomically. chapter.json is the only copy of a chapter's typesetting and it is
+// rewritten on an 800ms debounce, so a half-written one is a chapter lost.
 async function writeJson(path, value) {
-  await fsx.writeTextFile(path, JSON.stringify(value, null, 2));
+  await fsx.writeTextFileAtomic(path, JSON.stringify(value, null, 2));
 }
 
 async function subdirs(dir) {

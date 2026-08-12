@@ -23,6 +23,14 @@ vi.mock('./fsx.js', () => {
       async writeTextFile(p, c) {
         tree.files.set(p, c);
       },
+      // Modelled by its contract, not its mechanics: the target ends up holding
+      // either the previous contents or the new ones. It routes through this
+      // object's own writeTextFile so a test that swaps in a disk which cannot
+      // write still breaks the writes it means to break. The real temp-file and
+      // rename dance is fsx's own and is tested in fsx.test.js.
+      async writeTextFileAtomic(p, c) {
+        return this.writeTextFile(p, c);
+      },
       // Mirrors `{ recursive: true }`: every ancestor comes into being too, so
       // a directory the app created is visible to `exists` at every level.
       async mkdir(p) {
