@@ -116,6 +116,36 @@ describe('scanLibrary', () => {
     expect(library.projects[0].chapters.map((c) => c.number)).toEqual([2, 10]);
   });
 
+  it('flags a duplicated project folder instead of keying two cards on one id', async () => {
+    // Duplicating a folder inside the library root is the obvious way to back
+    // one up, and it copies the id along with everything else.
+    seedProject('one-piece', PROJECT('p1', 'One Piece'));
+    seedProject('one-piece-backup', PROJECT('p1', 'One Piece'));
+    await scanLibrary();
+    expect(library.projects).toHaveLength(2);
+    // The {#each} key holds, so the grid neither throws nor mis-associates.
+    expect(new Set(library.projects.map((p) => p.id)).size).toBe(2);
+    // The first one keeps the id and stays usable; the copy is inert, so a
+    // delete cannot remove one directory and leave the other entry behind.
+    expect(projectById('p1').slug).toBe('one-piece');
+    const flagged = library.projects.filter((p) => p.duplicate);
+    expect(flagged.map((p) => p.slug)).toEqual(['one-piece-backup']);
+    expect(flagged[0].unreadable).toBe(true);
+    expect(library.error).toMatch(/one-piece-backup/);
+  });
+
+  it('flags a duplicated chapter folder the same way', async () => {
+    seedProject('x', PROJECT('p1', 'X'), [
+      ['001', CHAPTER('c1', 1, [{ id: 1 }])],
+      ['001-copy', CHAPTER('c1', 1, [{ id: 1 }])],
+    ]);
+    await scanLibrary();
+    const chapters = library.projects[0].chapters;
+    expect(new Set(chapters.map((c) => c.id)).size).toBe(2);
+    expect(chapters.filter((c) => c.duplicate).map((c) => c.slug)).toEqual(['001-copy']);
+    expect(library.error).toMatch(/001-copy/);
+  });
+
   it('keeps the boot failure on screen instead of scanning nowhere', async () => {
     // What a failed initRoot leaves behind: no root, and a message the library
     // screen is already rendering. The scan the screen runs on mount — and the

@@ -50,7 +50,10 @@
         >
           <div class="chapter-num">{c.unreadable ? '—' : c.number}</div>
           <div class="chapter-title">
-            {#if c.unreadable}
+            {#if c.duplicate}
+              <div class="warn">Same chapter as another folder</div>
+              <div class="chapter-sub">{c.slug} — rename or remove the copy</div>
+            {:else if c.unreadable}
               <div class="warn">Unreadable chapter</div>
               <div class="chapter-sub">{c.slug} — check this folder</div>
             {:else}

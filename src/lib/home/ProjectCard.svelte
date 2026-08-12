@@ -18,7 +18,9 @@
   </button>
   <div class="pcard-meta">
     <div class="pcard-name">{project.name}</div>
-    {#if project.unreadable}
+    {#if project.duplicate}
+      <div class="pcard-sub warn">Same project as another folder — rename or remove {project.slug}</div>
+    {:else if project.unreadable}
       <div class="pcard-sub warn">Unreadable — check this folder</div>
     {:else}
       <div class="pcard-sub">{chapterLine}</div>

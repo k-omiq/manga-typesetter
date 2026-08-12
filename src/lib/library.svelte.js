@@ -91,15 +91,42 @@ async function readChapter(projectDir, slug) {
   };
 }
 
-async function readProject(root, slug, problems) {
+// A folder copied inside the library — the obvious way to back one up — carries
+// the original's id. Two entries under one id break the keyed {#each} that
+// renders them and make every id lookup ambiguous, so the later one is flagged
+// rather than admitted. The first occurrence keeps the id and stays usable.
+function duplicateStub(name, slug, dir) {
+  return {
+    id: `duplicate:${slug}`,
+    name,
+    slug,
+    dir,
+    number: 0,
+    title: '',
+    pageCount: 0,
+    chapters: [],
+    unreadable: true,
+    duplicate: true,
+  };
+}
+
+async function readProject(root, slug, problems, dupes) {
   const dir = await fsx.join(root, slug);
   const raw = await readJson(await fsx.join(dir, 'project.json'));
   const chapters = [];
+  const seenIds = new Set();
   for (const cslug of await subdirs(dir)) {
     const marker = await fsx.join(dir, cslug, 'chapter.json');
     if (!(await fsx.exists(marker))) continue; // not a chapter directory
     try {
-      chapters.push(await readChapter(dir, cslug));
+      const chapter = await readChapter(dir, cslug);
+      if (seenIds.has(chapter.id)) {
+        dupes.push(`${slug}/${cslug}`);
+        chapters.push(duplicateStub(cslug, cslug, chapter.dir));
+      } else {
+        seenIds.add(chapter.id);
+        chapters.push(chapter);
+      }
     } catch (e) {
       // One bad chapter folder must never blank the project's chapter list.
       problems.push(`${slug}/${cslug}`);
@@ -146,13 +173,22 @@ export async function scanLibrary() {
   library.error = '';
   const found = [];
   const problems = [];
+  const dupes = [];
+  const seenIds = new Set();
   try {
     if (!(await fsx.exists(library.root))) await fsx.mkdir(library.root);
     for (const slug of await subdirs(library.root)) {
       const marker = await fsx.join(library.root, slug, 'project.json');
       if (!(await fsx.exists(marker))) continue; // not a project directory
       try {
-        found.push(await readProject(library.root, slug, problems));
+        const project = await readProject(library.root, slug, problems, dupes);
+        if (seenIds.has(project.id)) {
+          dupes.push(slug);
+          found.push(duplicateStub(project.name, slug, project.dir));
+        } else {
+          seenIds.add(project.id);
+          found.push(project);
+        }
       } catch (e) {
         // One bad folder must never blank the library.
         problems.push(slug);
@@ -168,7 +204,14 @@ export async function scanLibrary() {
     }
     found.sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
     library.projects = found;
-    if (problems.length) library.error = `Could not read: ${problems.join(', ')}`;
+    const notes = [];
+    if (problems.length) notes.push(`Could not read: ${problems.join(', ')}`);
+    if (dupes.length) {
+      notes.push(
+        `Already in the library under another folder: ${dupes.join(', ')} — rename or remove the copy.`,
+      );
+    }
+    library.error = notes.join(' · ');
   } catch (e) {
     library.projects = [];
     library.error = `Could not read the library at ${library.root} — ${e?.message ?? e}`;
