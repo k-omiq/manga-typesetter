@@ -53,8 +53,17 @@ async function imageDataFromSrc(src, w, h) {
 
 // Re-encode a canvas/ImageData source into a PNG object URL (used to rebuild
 // page.raw / page.cleaned from PSD base layers on import).
+// toBlob hands back null when the encode fails — a PSB-sized canvas under
+// memory pressure is exactly that case. Resolving on null would throw inside
+// the callback, leaving this promise neither settled nor rejected and every
+// awaiting import hung behind a busy state that has no way out.
 function canvasToObjectUrl(canvas) {
-  return new Promise((resolve) => canvas.toBlob((b) => resolve(URL.createObjectURL(b)), 'image/png'));
+  return new Promise((resolve, reject) =>
+    canvas.toBlob(
+      (b) => (b ? resolve(URL.createObjectURL(b)) : reject(new Error('Could not encode that layer'))),
+      'image/png',
+    ),
+  );
 }
 
 function imageDataToCanvas(imageData) {

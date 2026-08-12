@@ -51,22 +51,47 @@
     untrack(() => reload(pid, cid));
   });
 
-  async function reload(pid = projectId, cid = chapterId) {
+  // Every read takes a ticket, the way scanLibrary does. readChapterSources
+  // costs one existence check per cleaned page, so a long chapter's read
+  // routinely lands after a short one started later — and page ids are
+  // per-chapter integers, so painting chapter A's rows under chapter B's id
+  // would aim Remove at B's page of the same number. Only the newest read may
+  // put its result anywhere.
+  let readSeq = 0;
+
+  async function read(pid, cid) {
+    const token = ++readSeq;
+    const next = await readChapterSources(pid, cid);
+    if (token !== readSeq) return null;
+    sources = next;
+    return next;
+  }
+
+  async function reload(pid, cid) {
     error = '';
     pendingBulk = null;
     confirmingRemoveAll = false;
     try {
-      sources = await readChapterSources(pid, cid);
+      await read(pid, cid);
     } catch (e) {
+      // A superseded read's failure describes a chapter that is no longer on
+      // screen, and reporting it would blank one that read perfectly well.
+      if (pid !== projectId || cid !== chapterId) return;
       sources = null;
       error = `Could not read this chapter — ${e?.message ?? e}`;
     }
   }
 
   // Every mutation runs the same way: block the sheet, do it, say what happened,
-  // then re-read from disk so what is on screen is what is in the record.
-  async function run(fn) {
-    if (busy) return;
+  // then re-read from disk so what is on screen is what is in the record. The
+  // re-read is aimed at the chapter the mutation was aimed at, not at whatever
+  // the props say by the time it lands.
+  async function run(pid, cid, fn) {
+    if (busy) {
+      // Never drop a requested action in silence — the user picked a file for it.
+      toast('Still working on the last change — try again in a moment');
+      return;
+    }
     busy = true;
     error = '';
     try {
@@ -76,7 +101,7 @@
       toast(error);
     } finally {
       try {
-        sources = await readChapterSources(projectId, chapterId);
+        await read(pid, cid);
       } catch {
         /* the error above already says what went wrong */
       }
@@ -138,7 +163,7 @@
     if (!files?.length) return;
     const pid = projectId;
     const cid = chapterId;
-    await run(async () => {
+    await run(pid, cid, async () => {
       const { replaced, ignored } = await replaceCleanedPages(pid, cid, files);
       // Cleared only once it worked. A failed apply keeps the selection rather
       // than sending the user back to re-pick two hundred files.
@@ -157,7 +182,7 @@
     confirmingRemoveAll = false;
     const pid = projectId;
     const cid = chapterId;
-    return run(async () => {
+    return run(pid, cid, async () => {
       const n = await removeAllCleaned(pid, cid);
       toast(`Removed the cleaned image from ${plural(n, 'page')}`);
     });
@@ -174,7 +199,7 @@
       const picked = await pickJsonFile();
       if (!picked || !picked[0]) return;
       const parsed = await readTranslations(picked[0]);
-      await run(async () => {
+      await run(pid, cid, async () => {
         const { covered, kept, ignored, lines, orphaned } = await applyTranslations(pid, cid, parsed);
         const notes = [];
         if (kept) notes.push(`${plural(kept, 'later page')} left unchanged`);
@@ -197,7 +222,7 @@
     return picking('Could not open the file picker', async () => {
       const picked = await pickImageFiles(false);
       if (!picked || !picked[0]) return;
-      await run(async () => {
+      await run(pid, cid, async () => {
         const name = await setPageCleaned(pid, cid, pg.id, picked[0]);
         toast(`Page ${n} now uses ${name}`);
       });
@@ -208,7 +233,7 @@
     const pid = projectId;
     const cid = chapterId;
     const n = pageNumber(pg);
-    return run(async () => {
+    return run(pid, cid, async () => {
       await clearPageCleaned(pid, cid, pg.id);
       toast(`Page ${n} is back on its raw`);
     });

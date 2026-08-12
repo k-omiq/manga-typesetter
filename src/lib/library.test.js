@@ -2,6 +2,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('./fsx.js', () => {
   const tree = { dirs: new Set(), files: new Map() };
+  // A write into a directory that does not exist fails, the way the real one
+  // does. Without this, deleting an mkdir anywhere in the library would not
+  // break a single test. Kept off the object: tests swap these methods for
+  // arrows that call the original unbound.
+  const requireParent = (p) => {
+    const parent = p.slice(0, p.lastIndexOf('/'));
+    if (parent && !tree.dirs.has(parent)) throw new Error('ENOENT ' + parent);
+  };
   return {
     fsx: {
       _tree: tree,
@@ -21,6 +29,7 @@ vi.mock('./fsx.js', () => {
         return tree.files.get(p);
       },
       async writeTextFile(p, c) {
+        requireParent(p);
         tree.files.set(p, c);
       },
       // Modelled by its contract, not its mechanics: the target ends up holding
@@ -59,6 +68,7 @@ vi.mock('./fsx.js', () => {
         return tree.files.get(p) ?? new Uint8Array();
       },
       async writeFile(p, bytes) {
+        requireParent(p);
         tree.files.set(p, bytes);
       },
     },
@@ -820,6 +830,69 @@ describe('the chapter sources sheet', () => {
     expect(fsx._tree.files.has(`${c.dir}/cleaned/1-new.png`)).toBe(true);
   });
 
+  it('leaves the record untouched and clears up after itself when the write fails', async () => {
+    const { p, c } = await seedThree([fakeFile('x.png', 9)]);
+    const before = fsx._tree.files.get(`${c.dir}/chapter.json`);
+    const orig = fsx.writeTextFileAtomic;
+    fsx.writeTextFileAtomic = async () => {
+      throw new Error('disk full');
+    };
+    try {
+      await expect(replaceCleanedPages(p.id, c.id, [fakeFile('new.png', 20)])).rejects.toThrow(
+        /disk full/,
+      );
+    } finally {
+      fsx.writeTextFileAtomic = orig;
+    }
+    // The record still says what it said, the image it named is still there,
+    // and the copy nothing ever pointed at is gone.
+    expect(fsx._tree.files.get(`${c.dir}/chapter.json`)).toBe(before);
+    expect(fsx._tree.files.has(`${c.dir}/cleaned/x.png`)).toBe(true);
+    expect(fsx._tree.files.has(`${c.dir}/cleaned/new.png`)).toBe(false);
+  });
+
+  it('never hands a new copy a name a page still claims, even a missing one', async () => {
+    const { p, c } = await seedThree([fakeFile('x.png', 9), fakeFile('y.png', 8)]);
+    // Page 1's image has gone missing from disk — one of the states this sheet
+    // exists to repair — while the record still names it.
+    fsx._tree.files.delete(`${c.dir}/cleaned/x.png`);
+    await replaceCleanedPages(p.id, c.id, [fakeFile('x.png', 30)]);
+    const cleaned = chapterJson(c).pages.map((pg) => pg.cleaned);
+    // Page 1 gets its own file. If the free name had been chosen from the disk
+    // alone it would have been `x.png` again — and page 1 would then be sharing
+    // one image with whatever else still claimed that name.
+    expect(cleaned[0]).not.toBe('x.png');
+    expect(new Set(cleaned.filter(Boolean)).size).toBe(cleaned.filter(Boolean).length);
+    expect(fsx._tree.files.get(`${c.dir}/cleaned/${cleaned[0]}`)).toEqual(new Uint8Array([30]));
+  });
+
+  it('keeps a file two pages point at until the last of them lets go', async () => {
+    const { p, c } = await seedThree([fakeFile('x.png', 9)]);
+    // A record can name one file from two pages — a hand edit, or a chapter
+    // folder copied and re-pointed. Unlinking on the first release would leave
+    // the second page pointing at nothing.
+    const record = chapterJson(c);
+    record.pages[1].cleaned = 'x.png';
+    fsx._tree.files.set(`${c.dir}/chapter.json`, JSON.stringify(record));
+    await clearPageCleaned(p.id, c.id, record.pages[0].id);
+    expect(fsx._tree.files.has(`${c.dir}/cleaned/x.png`)).toBe(true);
+    await clearPageCleaned(p.id, c.id, record.pages[1].id);
+    expect(fsx._tree.files.has(`${c.dir}/cleaned/x.png`)).toBe(false);
+  });
+
+  it('refuses to aim a delete outside the chapter, whatever the record says', async () => {
+    const { p, c } = await seedThree([fakeFile('x.png', 9)]);
+    // chapter.json is an ordinary file: a hand edit or a foreign tool can put
+    // a path in a name field, and fsx.remove is recursive.
+    const record = chapterJson(c);
+    record.pages[0].cleaned = '../raws';
+    fsx._tree.files.set(`${c.dir}/chapter.json`, JSON.stringify(record));
+    await clearPageCleaned(p.id, c.id, record.pages[0].id);
+    expect(chapterJson(c).pages[0].cleaned).toBeNull();
+    // The raws are still there. The name was left alone rather than resolved.
+    expect(fsx._tree.files.get(`${c.dir}/raws/a.png`)).toEqual(new Uint8Array([1]));
+  });
+
   it('sets one page by its id, not its position', async () => {
     const { p, c } = await seedThree([fakeFile('x.png', 9)]);
     const id = chapterJson(c).pages[2].id;
@@ -857,9 +930,12 @@ describe('the chapter sources sheet', () => {
 
   it('refuses every edit while the chapter is open in the editor', async () => {
     const { p, c } = await seedThree([fakeFile('x.png', 9)]);
+    const pageId = chapterJson(c).pages[0].id;
     await openChapter(p.id, c.id);
     try {
       await expect(replaceCleanedPages(p.id, c.id, [fakeFile('n.png', 1)])).rejects.toThrow(/open/);
+      await expect(setPageCleaned(p.id, c.id, pageId, fakeFile('n.png', 1))).rejects.toThrow(/open/);
+      await expect(clearPageCleaned(p.id, c.id, pageId)).rejects.toThrow(/open/);
       await expect(removeAllCleaned(p.id, c.id)).rejects.toThrow(/open/);
       await expect(applyTranslations(p.id, c.id, parsed('One'))).rejects.toThrow(/open/);
       await expect(readChapterSources(p.id, c.id)).rejects.toThrow(/open/);

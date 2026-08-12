@@ -55,7 +55,7 @@ Remaining step, which must run in the parent checkout because `main` is checked 
 ## 2. Slice 2a — chapter sources — BUILT, NOT YET VERIFIED IN THE APP
 
 **Specified and implemented.** `docs/superpowers/specs/2026-08-13-slice2a-chapter-sources-design.md`.
-`npm test` is 104 passing and `npm run build` and the release `cargo` build are clean, but **the
+`npm test` is 108 passing and `npm run build` and the release `cargo` build are clean, but **the
 manual acceptance pass in the spec's "Testing" section has not been run**: the agent that built it
 could not be granted control of the app window, so nothing in this slice has been exercised against
 real files on disk. Everything below is proven by unit tests against the `fsx` mock only.
@@ -70,7 +70,16 @@ What still needs a human at the keyboard, from the spec:
 - import a chapter from a PSD; confirm the warning about re-encoded rasters appeared
 - both themes on the sources sheet and the extended new-chapter dialog
 
-What it added, all reviewed once by an adversarial pass whose findings were fixed:
+Two adversarial review passes ran, the second independent of the first; every finding either fixed
+or answered. The second pass found four things worth remembering because they are the shapes this
+codebase keeps producing: a stale async read painting one chapter's rows under another chapter's id
+(page ids are per-chapter integers, so a click then landed on the wrong chapter — fixed with the
+same ticket `scanLibrary` uses); a picker that dropped unreadable files silently, which positional
+pairing cannot survive; a free-name check that consulted only the disk, so a page whose cleaned
+file had gone missing could have its name handed to another page's new copy; and `canvas.toBlob`
+returning null, which hung an import behind a busy state with no way out.
+
+What it added, all reviewed:
 
 - `Page` gains `cleaned`; a `cleaned/` directory sits beside `raws/`, created only when a page
   actually has one, copied byte-for-byte with the same discipline

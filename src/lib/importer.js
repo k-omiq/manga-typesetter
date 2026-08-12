@@ -1,9 +1,9 @@
 // Source material coming in from outside the library: the native file picker,
 // and the tolerant normalisation of a translations JSON.
 //
-// Nothing here touches the open document. Imports belong to the home screen —
-// a chapter's pages come from the library, and the editor is for typesetting.
-import { toast } from './store.svelte.js';
+// Nothing here touches the open document — it does not import the store at all.
+// Imports belong to the home screen: a chapter's pages come from the library,
+// and the editor is for typesetting.
 
 // Normalize one line object/string → { n, jp, en, type }
 // Back-compat: a bare string or a `{ text }`-only object becomes `en`; legacy
@@ -101,14 +101,22 @@ export async function pickFilesTauri({ name, extensions, multiple }) {
   if (!paths.length) return null;
   const { readFile } = await import('@tauri-apps/plugin-fs');
   const files = [];
+  const unreadable = [];
   for (const path of paths) {
     const fname = basename(path);
     try {
       const bytes = await readFile(path);
       files.push(new File([bytes], fname, { type: mimeFromExt(fname) }));
     } catch (e) {
-      toast(`Could not read ${fname}: ${e?.message || e}`);
+      unreadable.push(`${fname} (${e?.message || e})`);
     }
+  }
+  // Everything downstream of this pairs the list with pages BY POSITION. A list
+  // that quietly skipped file 5 of 20 is not 19 good files — it is 15 pages
+  // about to be given the wrong image, under a summary that reports the loss as
+  // one missing page at the end. So a partial read is a failure, not a result.
+  if (unreadable.length) {
+    throw new Error(`Could not read ${unreadable.length} of ${paths.length}: ${unreadable.join(', ')}`);
   }
   return files.length ? files : null;
 }

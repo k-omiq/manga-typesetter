@@ -684,10 +684,18 @@ async function commitPages(c, path, record, pages) {
 // of the record, only inside this chapter's own `cleaned/`, and only once the
 // record no longer references them — so a failure here leaves a stray file,
 // never a page pointing at one that is gone.
+// A name that could resolve anywhere but inside cleaned/. `fsx.remove` is
+// recursive, and chapter.json is an ordinary file on disk that a half-written
+// save, a hand edit or a foreign tool can put anything into — so a separator or
+// a dot-dot in a `cleaned` value would aim a recursive delete at a directory
+// this app never created. Such a name is not one of ours; it is left alone.
+const isPlainFileName = (name) =>
+  !!name && !name.includes('/') && !name.includes('\\') && name !== '.' && name !== '..';
+
 async function dropCleaned(cleanedDir, names, pages) {
   const kept = new Set(pages.map((pg) => pg.cleaned).filter(Boolean));
   for (const name of names) {
-    if (!name || kept.has(name)) continue;
+    if (!isPlainFileName(name) || kept.has(name)) continue;
     try {
       await fsx.remove(await fsx.join(cleanedDir, name));
     } catch {
@@ -713,7 +721,11 @@ export async function replaceCleanedPages(projectId, chapterId, files) {
   const cleanedDir = await fsx.join(c.dir, 'cleaned');
   const ensureCleaned = lazyDir(cleanedDir);
 
-  const used = new Set();
+  // Seeded with every name the record already claims, not just what is on disk.
+  // A page whose cleaned file has gone missing still points at that name, and
+  // handing the same name to a new copy would silently alias two pages onto one
+  // image — the missing file being exactly what this sheet exists to repair.
+  const used = new Set(pages.map((pg) => pg.cleaned).filter(Boolean));
   const copied = [];
   let failure = null;
   for (let i = 0; i < n; i++) {
@@ -758,9 +770,16 @@ export async function setPageCleaned(projectId, chapterId, pageId, file) {
   if (idx === -1) throw new Error('That page is no longer in this chapter');
 
   const cleanedDir = await fsx.join(c.dir, 'cleaned');
+  const ensureCleaned = lazyDir(cleanedDir);
   const bytes = new Uint8Array(await file.arrayBuffer());
-  await fsx.mkdir(cleanedDir);
-  const name = await copyInto(cleanedDir, file.name, bytes, new Set());
+  await ensureCleaned();
+  // Same reasoning as the bulk path: never reuse a name the record still claims.
+  const name = await copyInto(
+    cleanedDir,
+    file.name,
+    bytes,
+    new Set(pages.map((pg) => pg.cleaned).filter(Boolean)),
+  );
 
   const previous = pages[idx].cleaned;
   const next = pages.map((pg) => ({ ...pg }));
