@@ -219,6 +219,21 @@ function naturalSort(a, b) {
   return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
 }
 
+// Two picked files can share a name (routine when the user selects from two
+// folders). Give the second one a disk-unique name rather than silently
+// overwriting the first — same numbering style as uniqueSlug, but the
+// extension and the user's original stem are preserved, never slugified.
+function uniqueFileName(name, taken) {
+  if (!taken.has(name)) return name;
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  for (let i = 2; ; i++) {
+    const candidate = `${stem}-${i}${ext}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
 // Cover art for the library grid. A derived asset written to its own path — it
 // is never written back over a raw, and the raw it came from is untouched.
 export async function makeThumb(bytes) {
@@ -255,19 +270,25 @@ export async function createChapter({ projectId, number, title, files }) {
   const rawsDir = await fsx.join(dir, 'raws');
 
   const ordered = [...files].sort(naturalSort);
+  const willHaveCover = !p.coverChapterId;
+  let thumbWritten = false;
 
   try {
     await fsx.mkdir(rawsDir);
 
+    const usedNames = new Set();
     const pages = [];
     for (let i = 0; i < ordered.length; i++) {
       const f = ordered[i];
       const bytes = new Uint8Array(await f.arrayBuffer());
-      await fsx.writeFile(await fsx.join(rawsDir, f.name), bytes);
-      pages.push({ id: i + 1, file: f.name, w: 0, h: 0, lines: [], detect: null, boxes: [] });
-      if (i === 0 && !p.coverChapterId) {
+      const fileName = uniqueFileName(f.name, usedNames);
+      usedNames.add(fileName);
+      await fsx.writeFile(await fsx.join(rawsDir, fileName), bytes);
+      pages.push({ id: i + 1, file: fileName, w: 0, h: 0, lines: [], detect: null, boxes: [] });
+      if (i === 0 && willHaveCover) {
         try {
           await fsx.writeFile(await fsx.join(p.dir, 'thumb.png'), await makeThumb(bytes));
+          thumbWritten = true;
         } catch {
           /* a missing cover is cosmetic; never fail chapter creation over it */
         }
@@ -296,16 +317,38 @@ export async function createChapter({ projectId, number, title, files }) {
       pageCount: pages.length,
       unreadable: false,
     };
+
+    // Compute the project's next persisted state into locals first, so the
+    // in-memory catalogue is only mutated once every disk write —
+    // including this one — has actually succeeded.
+    const coverChapterId = willHaveCover ? chapter.id : p.coverChapterId;
+    const coverPageId = willHaveCover ? (pages[0]?.id ?? null) : p.coverPageId;
+    const updatedAt = now();
+    await writeJson(await fsx.join(p.dir, 'project.json'), {
+      schema: SCHEMA,
+      id: p.id,
+      name: p.name,
+      createdAt: p.createdAt,
+      updatedAt,
+      coverChapterId,
+      coverPageId,
+    });
+
     p.chapters = [...p.chapters, chapter].sort((a, b) => a.number - b.number);
-    if (!p.coverChapterId) {
-      p.coverChapterId = chapter.id;
-      p.coverPageId = pages[0]?.id ?? null;
-    }
-    p.updatedAt = now();
-    await renameProject(p.id, p.name); // rewrites project.json with the new cover + timestamp
+    p.coverChapterId = coverChapterId;
+    p.coverPageId = coverPageId;
+    p.updatedAt = updatedAt;
     return chapter;
   } catch (e) {
-    // No half-written chapter is left behind for the scan to find.
+    // No half-written chapter is left behind for the scan to find, and no
+    // thumbnail is left orphaned for a chapter that never came into being.
+    if (thumbWritten) {
+      try {
+        await fsx.remove(await fsx.join(p.dir, 'thumb.png'));
+      } catch {
+        /* ignore */
+      }
+    }
     try {
       await fsx.remove(dir);
     } catch {

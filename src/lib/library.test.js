@@ -39,11 +39,15 @@ vi.mock('./fsx.js', () => {
       async homeDir() {
         return '/home/u';
       },
-      async readFile() {
-        return new Uint8Array();
+      async readFile(p) {
+        return tree.files.get(p) ?? new Uint8Array();
       },
-      async writeFile() {},
-      async copyFile() {},
+      async writeFile(p, bytes) {
+        tree.files.set(p, bytes);
+      },
+      async copyFile(from, to) {
+        tree.files.set(to, tree.files.get(from));
+      },
     },
   };
 });
@@ -196,5 +200,51 @@ describe('createChapter', () => {
     ).rejects.toThrow();
     expect(fsx._tree.dirs.has(`${p.dir}/001`)).toBe(false);
     expect(projectById(p.id).chapters).toHaveLength(0);
+  });
+
+  it('dedupes colliding filenames instead of overwriting on disk', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({
+      projectId: p.id,
+      number: 1,
+      title: '',
+      files: [fakeFile('page.png', 1), fakeFile('page.png', 2)],
+    });
+    const json = JSON.parse(fsx._tree.files.get(`${c.dir}/chapter.json`));
+    const names = json.pages.map((pg) => pg.file);
+    expect(names).toHaveLength(2);
+    expect(new Set(names).size).toBe(2);
+    for (const name of names) {
+      expect(fsx._tree.files.has(`${c.dir}/raws/${name}`)).toBe(true);
+    }
+    const bytesA = fsx._tree.files.get(`${c.dir}/raws/${names[0]}`);
+    const bytesB = fsx._tree.files.get(`${c.dir}/raws/${names[1]}`);
+    expect(bytesA).not.toEqual(bytesB);
+  });
+
+  it('rolls back when the project.json write fails after raws and chapter.json succeed', async () => {
+    const orig = fsx.writeTextFile;
+    let projectWrites = 0;
+    fsx.writeTextFile = async (path, contents) => {
+      if (path.endsWith('/project.json')) {
+        projectWrites++;
+        // First write is createProject's own project.json; the second is the
+        // one createChapter performs after copying raws and writing chapter.json.
+        if (projectWrites === 2) throw new Error('disk full');
+      }
+      return orig(path, contents);
+    };
+    let p;
+    try {
+      p = await createProject('Series');
+      await expect(
+        createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] }),
+      ).rejects.toThrow();
+    } finally {
+      fsx.writeTextFile = orig;
+    }
+    expect(fsx._tree.dirs.has(`${p.dir}/001`)).toBe(false);
+    expect(projectById(p.id).chapters).toHaveLength(0);
+    expect(projectById(p.id).coverChapterId).toBeNull();
   });
 });
