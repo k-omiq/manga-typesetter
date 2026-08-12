@@ -455,6 +455,18 @@ export function parsePagePsd(bytes) {
 
 // Import one or more .psd files → pages (lossless when embedded JSON present).
 export async function importPsdFiles(files) {
+  // A PSD import substitutes the whole document. Inside an open chapter that is
+  // unrecoverable: the pages it builds carry no `file`, loadProjectPages ends in
+  // markUnsaved(), and 800ms later — with no confirmation asked for and none
+  // given — the autosave writes file:'' over every page in chapter.json. The
+  // raws are still sitting in raws/, but nothing references them any more, and
+  // every page reopens with raw:null forever.
+  //
+  // There is no partial version of this to offer, so it is refused outright.
+  if (app.chapterRef) {
+    toast('Close this chapter first — a PSD comes in as its own new chapter from the home screen.');
+    return;
+  }
   const list = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
   if (!list.length) return;
   const pages = [];

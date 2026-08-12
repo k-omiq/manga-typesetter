@@ -338,6 +338,7 @@ describe('createChapter', () => {
 const { openChapter, saveOpenChapter, closeChapter, chapterById } = await import('./library.svelte.js');
 const { app, markUnsaved, page, loadProjectPages } = await import('./store.svelte.js');
 const { importJsonFile } = await import('./importer.js');
+const { importPsdFiles } = await import('./psd.js');
 const { route, goEditor, goLibrary, resetRoute } = await import('./route.svelte.js');
 
 // The editor store is module-global, so no case may inherit another's open
@@ -496,12 +497,24 @@ describe('pages[].file is durable, not positional', () => {
     expect(app.toast.msg).not.toMatch(/dropped/);
   });
 
-  it("never lends this chapter's filenames to a foreign document", async () => {
+  it('refuses a PSD substitution inside an open chapter rather than orphaning its raws', async () => {
     const { c } = await seedOpenChapter();
-    // What psd.js does: substitute a whole different document under the open chapter.
-    loadProjectPages([{ id: 99, lines: [], boxes: [] }]);
+    const before = chapterJson(c).pages.map((pg) => pg.file);
+    // Would throw if it were ever read: the guard has to return before the
+    // import touches the file at all.
+    const psd = {
+      name: 'page.psd',
+      arrayBuffer: async () => {
+        throw new Error('the guard let this through');
+      },
+    };
+    await importPsdFiles([psd]);
+    expect(app.pages.map((pg) => pg.file)).toEqual(before);
+    expect(app.toast.msg).toMatch(/new chapter/i);
+    // And the refusal holds all the way to disk: nothing scheduled a write of
+    // a foreign document over this chapter.
     await saveOpenChapter();
-    expect(chapterJson(c).pages[0].file).toBe('');
+    expect(chapterJson(c).pages.map((pg) => pg.file)).toEqual(before);
     closeChapter();
   });
 });
