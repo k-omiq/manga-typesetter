@@ -3,7 +3,16 @@
   // around whatever the caller renders. It owns pointer work only — every rule
   // about where a panel may end up lives in panels.svelte.js, which is tested
   // without a browser.
-  import { panels, movePanel, resizePanel, setHidden, raisePanel, MIN_W, MIN_H } from './panels.svelte.js';
+  import {
+    panels,
+    movePanel,
+    resizePanel,
+    setHidden,
+    raisePanel,
+    clampAll,
+    MIN_W,
+    MIN_H,
+  } from './panels.svelte.js';
 
   let { id, title, count = null, children } = $props();
 
@@ -25,9 +34,6 @@
       const dx = ev.clientX - sx;
       const dy = ev.clientY - sy;
       if (kind === 'move') {
-        // Not clamped per frame: clamping while the pointer is down fights the
-        // cursor, and clampAll runs on every window resize anyway, so nothing
-        // can be stranded.
         movePanel(id, o.x + dx, o.y + dy);
       } else {
         resizePanel(id, Math.max(MIN_W, o.w + dx), Math.max(MIN_H, o.h + dy));
@@ -36,6 +42,12 @@
     const up = () => {
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerup', up);
+      // Clamped on drop, not per frame: clamping under a held pointer fights the
+      // cursor, the panel lagging behind the hand that is dragging it. Waiting
+      // for the release keeps the gesture honest and still guarantees the
+      // invariant — no drag can leave a panel, or its collapsed stub, outside
+      // the window where the user cannot reach it again.
+      clampAll(window.innerWidth, window.innerHeight);
     };
     document.addEventListener('pointermove', move);
     document.addEventListener('pointerup', up);
