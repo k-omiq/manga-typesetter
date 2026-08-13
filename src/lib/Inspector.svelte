@@ -75,6 +75,15 @@
   setEditSettleHook(settle);
   owner = settle;
   onDestroy(() => {
+    // Settled first, because this panel does not only go away when the editor
+    // does: hiding the Options panel unmounts it too — `FloatingPanel` renders
+    // its children in the branch the hide chevron leaves — and an edit made and
+    // hidden inside the settle window would otherwise stand in the document
+    // with no entry to rewind it, so the next undo would rewind the step
+    // before it instead. Safe on the teardown path for the same reason
+    // `settle` is safe anywhere: `page()` is the frozen stand-in by then, so
+    // the pending entry's page id cannot match and nothing is recorded.
+    settle();
     // Only ours to release — see `owner` above.
     if (owner === settle) {
       setEditSettleHook(null);
