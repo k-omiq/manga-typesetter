@@ -1,28 +1,33 @@
 <script>
+  // The page itself, and nothing else. Everything that used to sit around it —
+  // the panel header, the tool dock, the zoom dock — is now chrome floating over
+  // the full-bleed canvas, owned by EditorRoot. What is left is the scroll
+  // viewport, the page frame and the boxes on it.
   import { onMount } from 'svelte';
-  import TextBox from './TextBox.svelte';
-  import BulkStylePanel from './BulkStylePanel.svelte';
+  import TextBox from '../TextBox.svelte';
   import {
     app,
     page,
     placeActiveAt,
     addEmptyBox,
-    setTool,
     setPageDims,
     deselect,
     lineByN,
     applyFit,
     setZoom,
-    zoomReset,
-    openBulk,
-  } from './store.svelte.js';
+  } from '../store.svelte.js';
+
+  // The dock's Fit button has no page geometry of its own, and the fit has to be
+  // measured against this scroll container rather than the window — the canvas
+  // layer is inset from the left by the reference sidebar and the rail. So the
+  // measurement stays here and the button reaches it through this handle.
+  let { onReady } = $props();
 
   let scrollEl;
   let pageFrameEl;
   let lastFitKey = '';
 
   const p = $derived(page());
-  const zoomPct = $derived(Math.round(app.zoom * 100));
   // Typeset on the cleaned page when there is one; otherwise fall back to the
   // raw so an imported raws-only chapter still shows something to place on.
   const baseSrc = $derived(p.cleaned ?? p.raw);
@@ -84,14 +89,6 @@
     document.addEventListener('pointerup', up);
   }
 
-  function onMouseMove(e) {
-    const r = pageFrameEl.getBoundingClientRect();
-    const x = Math.round((e.clientX - r.left) / app.zoom);
-    const y = Math.round((e.clientY - r.top) / app.zoom);
-    if (x >= 0 && y >= 0 && x <= p.w && y <= p.h) app.cursor = { x, y };
-    else app.cursor = { x: '—', y: '—' };
-  }
-
   function onCleanedLoad(e) {
     const img = e.currentTarget;
     if (img.naturalWidth && img.naturalHeight) {
@@ -107,7 +104,15 @@
   });
 
   onMount(() => {
+    // Handed up before the first fit, so a parent that wants to drive one has it
+    // from the first frame.
+    onReady?.({ fit: () => computeFit(true) });
     computeFit(true);
+    // The observer is why the fit needs no knowledge of the sidebar: dragging the
+    // rail, hiding the reference, resizing the window all change this element's
+    // box, and each of them re-measures. The floating panels do not — they are
+    // deliberately ignored, so a panel dragged over the page covers it rather
+    // than reflowing it.
     const ro = new ResizeObserver(() => {
       if (app.isFit) computeFit();
     });
@@ -126,54 +131,28 @@
   });
 </script>
 
-<section class="col col-center">
-  <div class="panel-head">Editor <span class="tag">{p.cleaned ? 'cleaned page' : p.raw ? 'raw page' : 'blank page'}</span></div>
-  <div class="editor-wrap">
-    <BulkStylePanel />
-    <!-- tool dock -->
-    <div class="tooldock">
-      <button class:on={app.tool === 'place'} onclick={() => setTool('place')} data-tip="Place tool — drop queued lines">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3l7 18 2.5-7.5L20 11z" /></svg>
-      </button>
-      <button class:on={app.tool === 'text'} class:bulkon={app.bulk.active} onclick={() => setTool('text')} ondblclick={openBulk} data-tip="Text tool — drag to pan, click to add · double-click for bulk style">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7V5h16v2" /><path d="M12 5v14" /><path d="M9 19h6" /></svg>
-      </button>
-    </div>
-
-    <div class="editor-scroll" bind:this={scrollEl} onmousemove={onMouseMove}>
-      <div class="stage" style={app.bulk.active ? 'cursor:pointer' : app.tool === 'text' ? 'cursor:grab' : ''}>
-        <div class="page-frame" bind:this={pageFrameEl} style="width:{p.w * app.zoom}px; height:{p.h * app.zoom}px">
-          {#if baseSrc}
-            <img class="page-img" src={baseSrc} alt="Page" onload={onCleanedLoad} />
-          {/if}
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="boxlayer" onpointerdown={onLayerPointerDown}>
-            {#each p.boxes as box (box.id)}
-              <TextBox {box} {pageFrameEl} />
-            {/each}
-          </div>
-        </div>
+<div class="editor-scroll" bind:this={scrollEl}>
+  <div class="stage" style={app.bulk.active ? 'cursor:pointer' : app.tool === 'text' ? 'cursor:grab' : ''}>
+    <div class="page-frame" bind:this={pageFrameEl} style="width:{p.w * app.zoom}px; height:{p.h * app.zoom}px">
+      {#if baseSrc}
+        <img class="page-img" src={baseSrc} alt="Page" onload={onCleanedLoad} />
+      {/if}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="boxlayer" onpointerdown={onLayerPointerDown}>
+        {#each p.boxes as box (box.id)}
+          <TextBox {box} {pageFrameEl} />
+        {/each}
       </div>
     </div>
-
-    {#if !app.loaded}
-      <div class="empty-state" style="display:grid">
-        <div class="dropzone">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>
-          <h2>Nothing open</h2>
-          <p>Pages come from your library — open a chapter to typeset it.</p>
-        </div>
-      </div>
-    {/if}
-
-    {#if app.loaded}
-      <div class="zoomdock">
-        <button onclick={() => computeFit(true)} data-tip="Fit to window">Fit</button>
-        <span class="sep"></span>
-        <button onclick={() => setZoom(app.zoom / 1.2)}>−</button>
-        <button class="zval" onclick={zoomReset}>{zoomPct}%</button>
-        <button onclick={() => setZoom(app.zoom * 1.2)}>+</button>
-      </div>
-    {/if}
   </div>
-</section>
+</div>
+
+{#if !app.loaded}
+  <div class="empty-state">
+    <div class="dropzone">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>
+      <h2>Nothing open</h2>
+      <p>Pages come from your library — open a chapter to typeset it.</p>
+    </div>
+  </div>
+{/if}

@@ -18,8 +18,6 @@
   --edge:0 1px 1px rgba(42,38,32,.05), 0 5px 14px rgba(42,38,32,.07);
   --edge-soft:0 1px 2px rgba(42,38,32,.05);
   --scrim:rgba(42,38,32,.28);
-  --topbar-h:46px;
-  --status-h:26px;
   /* Mirrored by RAIL_W in src/lib/editor/RailTools.svelte — see the note there. */
   --rail-w:44px;
   /* The right panel column, and the vertical room the floating chrome claims at
@@ -66,41 +64,6 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
 ::-webkit-scrollbar-thumb{ background:var(--line2); border-radius:5px; border:2px solid transparent; background-clip:padding-box; }
 ::-webkit-scrollbar-thumb:hover{ background:var(--t3); background-clip:padding-box; }
 
-/* ---------- app shell ---------- */
-.app{ display:flex; flex-direction:column; height:100vh; }
-
-/* ---------- top bar ---------- */
-.topbar{
-  height:var(--topbar-h); flex:0 0 auto;
-  display:flex; align-items:center; gap:14px;
-  padding:0 12px; background:var(--panel);
-  border-bottom:1px solid var(--line); position:relative; z-index:30;
-}
-.brand{ display:flex; align-items:center; gap:9px; min-width:200px; max-width:34vw; }
-.logo-btn{
-  width:24px; height:24px; flex:none; display:grid; place-items:center;
-  border:none; border-radius:6px; background:var(--accent-soft); color:var(--t2); cursor:pointer;
-}
-.logo-btn:hover{ color:var(--text); }
-.logo-btn:disabled{ cursor:default; opacity:.5; }
-.brand .name{ font-weight:600; letter-spacing:.2px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
-.pagenav{
-  margin:0 auto; display:flex; align-items:center; gap:4px;
-  background:var(--surface); border:1px solid var(--line);
-  border-radius:8px; padding:3px;
-}
-.pagenav button{
-  width:28px; height:26px; border:none; background:transparent;
-  color:var(--text); border-radius:5px; cursor:pointer; display:grid; place-items:center;
-}
-.pagenav button:hover{ background:var(--panel2); }
-.pagenav button:disabled{ color:var(--t3); cursor:default; background:transparent; }
-.pagenav .indicator{ padding:0 12px; font-variant-numeric:tabular-nums; font-weight:500; white-space:nowrap; }
-.pagenav .indicator b{ color:var(--text); }
-
-.topbar-right{ display:flex; align-items:center; gap:8px; min-width:200px; justify-content:flex-end; }
-
 /* buttons */
 .btn{
   height:30px; padding:0 11px; border:1px solid var(--line2);
@@ -111,57 +74,36 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
 .btn:hover{ background:var(--panel2); border-color:var(--t3); }
 .btn:disabled{ opacity:.45; cursor:default; background:var(--surface); border-color:var(--line2); color:var(--t2); }
 .btn svg{ width:15px; height:15px; opacity:.85; }
-.btn-group{ display:flex; align-items:center; gap:6px; }
-.btn-icon{
-  width:30px; height:30px; padding:0; justify-content:center;
-}
 .btn-accent{
   background:var(--accent); border-color:var(--accent);
   color:var(--accent-fg); font-weight:600;
 }
 .btn-accent:hover{ background:var(--accent); border-color:var(--accent); }
-.divider-v{ width:1px; height:22px; background:var(--line); margin:0 2px; }
 
-/* export combo */
-.export-combo{ display:flex; align-items:stretch; }
-.export-combo .fmt{
-  height:30px; border:1px solid var(--line2); border-right:none;
-  background:var(--surface); color:var(--text); border-radius:var(--radius) 0 0 var(--radius);
-  padding:0 8px; font-size:12.5px; cursor:pointer; outline:none;
+/* ---------- editor shell ---------- */
+/* One layer for the page and a stack of chrome floating over it. The root takes
+   no z-index of its own, deliberately: a stacking context here would trap the
+   floating panels (50+) underneath the modal layer's 100 no matter what they
+   ask for. Every child inside it orders itself against the same root context —
+   sidebar 20, rail 21, chrome 30, bulk panel 40, panels 50+. */
+.ed-root{ position:fixed; inset:0; background:var(--art); }
+/* Inset from the left by the sidebar plus the rail, and by nothing else. That
+   inset is what makes fit-to-window measure the canvas viewport rather than the
+   window: the scroll container inside fills this layer, and a ResizeObserver on
+   it re-fits whenever the rail moves. The floating panels are outside this
+   measurement on purpose — a panel dragged over the page covers it. */
+.ed-canvas{ position:absolute; inset:0 0 0 var(--canvas-left); }
+/* The bottom dock: zoom/undo and the pager side by side, centred over the
+   canvas viewport rather than the window, for the same reason. The row itself
+   spans the viewport and lets pointers through — only the two pills catch
+   them — so it never steals a click meant for the page beneath it. */
+.ed-dockrow{
+  position:absolute; left:var(--canvas-left); right:0; bottom:16px; z-index:30;
+  display:flex; align-items:center; justify-content:center; gap:10px;
+  pointer-events:none;
 }
-.export-combo .btn-accent{ border-radius:0 var(--radius) var(--radius) 0; }
+.ed-dockrow > *{ pointer-events:auto; }
 
-/* ---------- main area ---------- */
-.main{ flex:1 1 auto; display:flex; min-height:0; }
-.col{ display:flex; flex-direction:column; min-width:0; background:var(--panel); }
-.col-left{ width:280px; }
-.col-center{ flex:1 1 auto; background:var(--art); }
-.col-right{ width:312px; }
-
-.panel-head{
-  height:32px; flex:0 0 auto; display:flex; align-items:center; gap:8px;
-  padding:0 12px; background:var(--panel); border-bottom:1px solid var(--line);
-  font-size:11.5px; font-weight:600; letter-spacing:.5px; text-transform:uppercase; color:var(--t2);
-}
-.panel-head .tag{ margin-left:auto; font-weight:500; letter-spacing:0; text-transform:none; color:var(--t3); }
-
-/* resize handles between columns */
-.resizer{ flex:0 0 5px; cursor:col-resize; background:var(--panel); position:relative; z-index:5; }
-.resizer::after{ content:""; position:absolute; inset:0 2px; background:var(--line); transition:background .12s; }
-.resizer:hover::after{ background:var(--accent); }
-
-/* ---------- left: raw reference ---------- */
-.raw-scroll{ flex:1 1 auto; overflow:auto; background:var(--art); padding:14px; display:flex; justify-content:center; }
-.raw-scroll img{ width:100%; height:auto; box-shadow:var(--edge); align-self:flex-start; }
-.raw-zoombar{
-  flex:0 0 auto; height:32px; display:flex; align-items:center; gap:6px; padding:0 12px;
-  border-top:1px solid var(--line); color:var(--t2); font-size:11.5px;
-}
-.raw-zoombar .mini{ width:24px; height:22px; border:1px solid var(--line2); background:var(--surface); border-radius:5px; cursor:pointer; display:grid; place-items:center; color:var(--text); }
-.raw-zoombar .mini:hover{ background:var(--panel2); }
-
-/* ---------- center: editor ---------- */
-.editor-wrap{ flex:1 1 auto; position:relative; overflow:hidden; }
 .editor-scroll{ position:absolute; inset:0; overflow:auto; }
 .stage{ min-width:100%; min-height:100%; display:flex; align-items:center; justify-content:center; padding:60px; }
 .page-frame{
@@ -235,12 +177,13 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
 .dropzone p{ margin:0 0 20px; color:var(--t2); font-size:13px; }
 .dropzone .row{ display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
 
-/* floating zoom controls */
+/* floating zoom + undo controls. Like the pager below it, this positions
+   nothing: `.ed-dockrow` places the pair, and a self-centring pill would fight
+   the row it now sits in. */
 .zoomdock{
-  position:absolute; left:50%; bottom:16px; transform:translateX(-50%);
   display:flex; align-items:center; gap:2px; background:color-mix(in srgb, var(--panel) 92%, transparent);
   border:1px solid var(--line); border-radius:9px; padding:4px;
-  box-shadow:var(--edge); backdrop-filter:blur(6px); z-index:10;
+  box-shadow:var(--edge); backdrop-filter:blur(6px);
 }
 .zoomdock button{ height:28px; min-width:30px; padding:0 8px; border:none; background:transparent; color:var(--text); border-radius:6px; cursor:pointer; font-size:12.5px; display:grid; place-items:center; }
 .zoomdock button:hover{ background:var(--panel2); }
@@ -249,8 +192,8 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
 .zoomdock .sep{ width:1px; height:18px; background:var(--line); margin:0 3px; }
 
 /* floating pager — same pill chrome as .zoomdock so the two dock pieces read
-   as one family. Neither positions itself: Task 10's `.ed-dockrow` places
-   both side by side, bottom-centred over the canvas viewport. */
+   as one family. Neither positions itself: `.ed-dockrow` places both side by
+   side, bottom-centred over the canvas viewport. */
 .pager{
   display:flex; align-items:center; gap:2px; background:color-mix(in srgb, var(--panel) 92%, transparent);
   border:1px solid var(--line); border-radius:9px; padding:4px;
@@ -267,25 +210,7 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
 .pager input.pnum:focus{ border-color:var(--t3); }
 .pager .pof{ color:var(--t2); padding:0 4px 0 2px; white-space:nowrap; }
 
-/* ---------- right panel ---------- */
-.col-right{ overflow:hidden; }
-.rpanel{ flex:1 1 auto; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
-.section{ display:flex; flex-direction:column; min-height:0; border-bottom:1px solid var(--line); }
-.section.queue{ flex:1 1 auto; }
-.section.inspector{ flex:1 1 auto; }
-.section.collapsed{ flex:0 0 auto; }
-.section-head{
-  height:34px; flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:0 12px;
-  background:var(--panel); cursor:pointer; user-select:none;
-  font-size:11.5px; font-weight:600; letter-spacing:.5px; text-transform:uppercase; color:var(--text);
-}
-.section-head .chev{ width:14px; height:14px; transition:transform .15s; color:var(--t2); }
-.section.collapsed .chev{ transform:rotate(-90deg); }
-.section-head .count{ margin-left:auto; font-size:11px; font-weight:500; letter-spacing:0; text-transform:none; color:var(--t2); background:var(--surface); border:1px solid var(--line); padding:1px 7px; border-radius:10px; }
-.section-body{ flex:1 1 auto; overflow-y:auto; overflow-x:hidden; min-height:0; }
-.section.collapsed .section-body{ display:none; }
-
-/* queue list */
+/* queue list — inside the floating "Text queue" panel */
 .qlist{ padding:6px; display:flex; flex-direction:column; gap:4px; }
 .qrow{
   display:flex; align-items:center; gap:9px; padding:8px 9px; border-radius:7px;
@@ -378,21 +303,6 @@ input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:14px; he
 .insp-empty{ padding:30px 20px; text-align:center; color:var(--t3); font-size:12.5px; line-height:1.6; }
 .insp-empty svg{ width:34px; height:34px; opacity:.4; margin-bottom:10px; }
 
-/* ---------- status bar ---------- */
-.statusbar{
-  height:var(--status-h); flex:0 0 auto; display:flex; align-items:center; gap:0;
-  background:var(--panel); border-top:1px solid var(--line); padding:0 4px;
-  font-size:11.5px; color:var(--t2); font-variant-numeric:tabular-nums;
-}
-.statusbar .item{ display:flex; align-items:center; gap:6px; padding:0 12px; height:100%; border-right:1px solid var(--line); }
-.statusbar .item:last-child{ border-right:none; }
-.statusbar .item b{ color:var(--text); font-weight:500; }
-.statusbar .spacer{ flex:1 1 auto; }
-.statusbar .save-ind{ display:flex; align-items:center; gap:7px; }
-.statusbar .save-ind .d{ width:7px; height:7px; border-radius:50%; }
-.statusbar .save-ind.unsaved .d{ background:var(--warn); box-shadow:0 0 0 2px color-mix(in srgb, var(--warn) 20%, transparent); }
-.statusbar .save-ind.saved .d{ background:var(--text); }
-
 /* ---------- modal ---------- */
 .modal-overlay{ position:fixed; inset:0; background:var(--scrim); display:none; align-items:center; justify-content:center; z-index:100; backdrop-filter:blur(2px); }
 .modal-overlay.open{ display:flex; }
@@ -461,22 +371,6 @@ input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:14px; he
 .arc-ch{ position:absolute; left:50%; top:50%; display:inline-block; transform-origin:center center; white-space:pre; }
 svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 
-/* editor tool dock (Place / Text) */
-.tooldock{
-  position:absolute; left:14px; top:44px; display:flex; flex-direction:column; gap:3px;
-  background:color-mix(in srgb, var(--panel) 92%, transparent); border:1px solid var(--line); border-radius:9px; padding:4px;
-  box-shadow:var(--edge); backdrop-filter:blur(6px); z-index:10;
-}
-.tooldock button{
-  width:34px; height:34px; border:none; background:transparent; color:var(--text);
-  border-radius:6px; cursor:pointer; display:grid; place-items:center;
-}
-.tooldock button:hover:not(.on){ background:var(--panel2); }
-.tooldock button.on{ background:var(--accent); color:var(--accent-fg); }
-.tooldock button.bulkon{ background:var(--accent); color:var(--accent-fg); box-shadow:0 0 0 2px var(--accent-soft); }
-.tooldock button svg{ width:17px; height:17px; }
-.tooldock .sep{ height:1px; background:var(--line); margin:1px 3px; }
-
 /* inspector collapsible sub-sections */
 .insp-sub{ border:1px solid var(--line); border-radius:8px; overflow:hidden; }
 .insp-sub-head{
@@ -511,10 +405,6 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 
 /* disabled sub-controls */
 .insp-sub-body.disabled{ opacity:.45; pointer-events:none; }
-
-/* empty raw reference placeholder */
-.raw-scroll.empty{ align-items:center; }
-.raw-empty{ margin:auto; text-align:center; color:var(--t3); font-size:12px; line-height:1.6; }
 
 /* ===== Bulk style floating panel ===== */
 .bulk-panel{

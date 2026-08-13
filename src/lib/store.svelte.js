@@ -130,11 +130,8 @@ export const app = $state({
   // toast fades.
   saveFailed: false,
   exporting: false,
-  collapsed: { queue: false, inspector: false },
   leftWidth: 280,
   sidebarHidden: false, // raw reference sidebar collapsed to the rail's caret
-  rightWidth: 312,
-  cursor: { x: '—', y: '—' },
   toast: { msg: '', seq: 0 },
   sidecar: { status: 'unknown', device: null, info: null }, // Python ML sidecar health
   detecting: false, // detection/OCR request in flight
@@ -450,7 +447,6 @@ export function selectBox(id) {
   }
   app.selectedId = id;
   if (app.editingId && app.editingId !== id) app.editingId = null;
-  app.collapsed.inspector = false;
 }
 export function deselect() {
   if (app.editingId) {

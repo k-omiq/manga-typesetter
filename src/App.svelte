@@ -1,14 +1,9 @@
 <script>
-  import TopBar from './lib/TopBar.svelte';
-  import RawPanel from './lib/RawPanel.svelte';
-  import Editor from './lib/Editor.svelte';
-  import RightPanel from './lib/RightPanel.svelte';
-  import StatusBar from './lib/StatusBar.svelte';
+  import EditorRoot from './lib/editor/EditorRoot.svelte';
   import FontModal from './lib/FontModal.svelte';
   import SettingsModal from './lib/SettingsModal.svelte';
   import ExportDialog from './lib/ExportDialog.svelte';
   import Toast from './lib/Toast.svelte';
-  import Resizer from './lib/Resizer.svelte';
   import HomeFrame from './lib/home/HomeFrame.svelte';
   import LibraryView from './lib/home/LibraryView.svelte';
   import ProjectView from './lib/home/ProjectView.svelte';
@@ -248,20 +243,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 {#if route.name === 'editor'}
-  <div class="app">
-    <TopBar onFontLib={() => (fontModalOpen = true)} onSettings={() => (settingsOpen = true)} />
-
-    <div class="main">
-      <!-- Raw reference: the original page alongside the one you're typesetting. -->
-      <RawPanel />
-      <Resizer side="left" />
-      <Editor />
-      <Resizer side="right" />
-      <RightPanel />
-    </div>
-
-    <StatusBar />
-  </div>
+  <EditorRoot onFontLib={() => (fontModalOpen = true)} onSettings={() => (settingsOpen = true)} />
 {:else if booted}
   <HomeFrame onSettings={() => (settingsOpen = true)}>
     {#if route.name === 'project'}
