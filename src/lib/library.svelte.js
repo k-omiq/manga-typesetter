@@ -11,7 +11,15 @@
 
 import { fsx } from './fsx.js';
 import { uniqueSlug, chapterSlug } from './paths.js';
-import { app, loadProjectPages, markSaved, setSaver, flushSave, toast } from './store.svelte.js';
+import {
+  app,
+  loadProjectPages,
+  markSaved,
+  markUnsaved,
+  setSaver,
+  flushSave,
+  toast,
+} from './store.svelte.js';
 import { setLeaveEditorHook } from './route.svelte.js';
 
 const ROOT_KEY = 'mt.libraryRoot';
@@ -925,12 +933,18 @@ export async function openChapter(projectId, chapterId) {
   // Swap last: the chapter on screen stays intact until the new one is ready.
   revokeOpenUrls();
   openUrls = urls;
-  loadProjectPages(pages);
+  const minted = loadProjectPages(pages);
   // Order matters. loadProjectPages ends in markUnsaved(), which only schedules
   // a save while a chapterRef is set; setting the ref after it, then marking
   // saved, means opening a chapter never schedules a write of what it just read.
   app.chapterRef = { projectId, chapterId };
-  markSaved();
+  // Unless the load had to mint ids, because then what is in memory is not what
+  // is in the file. Those ids come off counters whose value depends on what else
+  // was opened this session, so a repair that never reaches disk is redone
+  // differently on every open, and the undo history has no stable box to address.
+  // Mark it dirty instead and let the debounce write the repair now.
+  if (minted) markUnsaved();
+  else markSaved();
 }
 
 export async function saveOpenChapter() {

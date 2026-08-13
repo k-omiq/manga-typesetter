@@ -18,26 +18,39 @@ let pageLoadSeq = 5000; // page ids for imported projects that carry none
 // Object URLs (raw/cleaned) are passed through as-is — the caller regenerates
 // them from the source.
 //
-// Box ids are persisted in chapter.json and are addressed by the undo history
-// across sessions, so a load keeps the id it was given. A fresh one is minted
-// only when there is none, or when the file names one box twice — two boxes
-// answering to one id would confuse selection, deletion and undo alike. The
-// pre-pass walks every page first so the sequence starts past the highest id
-// in the whole document, and a box minted on page one cannot take an id a
-// kept box on page nine already owns.
+// Page and box ids are persisted in chapter.json and are addressed by the undo
+// history across sessions, so a load keeps the id it was given. A fresh one is
+// minted only when there is none, or when the file names two of them the same —
+// two boxes answering to one id would confuse selection, deletion and undo
+// alike, and so would two pages. The pre-pass walks the whole document first so
+// both sequences start past the highest id in it, and something minted on page
+// one cannot take an id that page nine already owns.
+//
+// Returns how many ids it had to mint. Anything above zero means what is now in
+// memory disagrees with the file, and the caller has to get that written back:
+// the minted ids come off module-global counters, so leaving the repair unsaved
+// means the same box is called something different every session — the drift the
+// history cannot see.
 const idNum = (id) => (typeof id === 'string' && /^b\d+$/.test(id) ? Number(id.slice(1)) : 0);
 
 export function loadProjectPages(rawPages) {
-  const taken = new Set();
+  const takenBoxes = new Set();
+  const takenPages = new Set();
+  let minted = 0;
   for (const p of rawPages) {
+    if (typeof p.id === 'number' && p.id >= pageLoadSeq) pageLoadSeq = p.id + 1;
     for (const b of p.boxes ?? []) {
       const n = idNum(b.id);
       if (n >= boxSeq) boxSeq = n + 1;
     }
   }
   app.pages = rawPages.map((p) => {
+    const keepPage = p.id != null && !takenPages.has(p.id);
+    const pageId = keepPage ? p.id : pageLoadSeq++;
+    takenPages.add(pageId);
+    if (!keepPage) minted++;
     const cp = {
-      id: p.id ?? pageLoadSeq++,
+      id: pageId,
       raw: p.raw ?? null,
       cleaned: p.cleaned ?? null,
       // The page's own durable filenames inside the chapter's raws/ and
@@ -53,9 +66,10 @@ export function loadProjectPages(rawPages) {
         ? { panels: (p.detect.panels ?? []).slice(), boxes: p.detect.boxes.map((b) => ({ ...b })) }
         : null,
       boxes: (p.boxes ?? []).map((b) => {
-        const keep = typeof b.id === 'string' && b.id !== '' && !taken.has(b.id);
+        const keep = typeof b.id === 'string' && b.id !== '' && !takenBoxes.has(b.id);
         const id = keep ? b.id : 'b' + boxSeq++;
-        taken.add(id);
+        takenBoxes.add(id);
+        if (!keep) minted++;
         return {
           id,
           lineN: b.lineN,
@@ -77,6 +91,7 @@ export function loadProjectPages(rawPages) {
   app.editingId = null;
   app.loaded = true;
   markUnsaved();
+  return minted;
 }
 
 export function firstUnplaced(p) {

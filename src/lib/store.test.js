@@ -10,6 +10,19 @@ const pageWith = (boxes) => ({
 });
 const box = (id, extra = {}) => ({ id, lineN: null, text: 'x', x: 0, y: 0, w: 10, h: 10, ...extra });
 
+// Both id counters are module globals that only ever climb and are never reset,
+// so a case that needs to know what the next minted id will be has to ask at
+// call time. Hard-coding a base passes only while the file happens to run in
+// written order, and vitest is free to shuffle it.
+const nextBoxSeq = () => {
+  loadProjectPages([pageWith([])]);
+  return Number(addEmptyBox(0, 0).slice(1)) + 1;
+};
+const nextPageSeq = () => {
+  loadProjectPages([{ ...pageWith([]), id: null }]);
+  return app.pages[0].id + 1;
+};
+
 describe('loadProjectPages box identity', () => {
   beforeEach(() => {
     app.chapterRef = null;
@@ -37,17 +50,70 @@ describe('loadProjectPages box identity', () => {
   });
 
   it('never mints an id a kept box already owns, across pages', () => {
+    const base = nextBoxSeq() + 40;
     loadProjectPages([
-      { ...pageWith([box('b40')]), id: 1 },
-      { ...pageWith([box(undefined)]), id: 2 },
+      { ...pageWith([box(undefined)]), id: 1 },
+      { ...pageWith([box(`b${base}`)]), id: 2 },
     ]);
-    const minted = app.pages[1].boxes[0].id;
-    expect(minted).toBe('b41');
+    expect(app.pages[0].boxes[0].id).toBe(`b${base + 1}`);
+    expect(app.pages[1].boxes[0].id).toBe(`b${base}`);
   });
 
   it('seeds the counter so a box added after the load cannot collide', () => {
-    loadProjectPages([pageWith([box('b120')])]);
-    const id = addEmptyBox(100, 100);
-    expect(id).toBe('b121');
+    const base = nextBoxSeq() + 100;
+    loadProjectPages([pageWith([box(`b${base}`)])]);
+    expect(addEmptyBox(100, 100)).toBe(`b${base + 1}`);
+  });
+});
+
+describe('loadProjectPages page identity', () => {
+  beforeEach(() => {
+    app.chapterRef = null;
+  });
+
+  it('keeps page ids that came off disk', () => {
+    loadProjectPages([
+      { ...pageWith([]), id: 3 },
+      { ...pageWith([]), id: 8 },
+    ]);
+    expect(app.pages.map((p) => p.id)).toEqual([3, 8]);
+  });
+
+  it('remints a duplicate page id rather than loading two pages that answer to it', () => {
+    loadProjectPages([
+      { ...pageWith([]), id: 3 },
+      { ...pageWith([]), id: 3 },
+    ]);
+    const ids = app.pages.map((p) => p.id);
+    expect(ids[0]).toBe(3);
+    expect(ids[1]).not.toBe(3);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('never mints a page id a kept page already owns', () => {
+    const base = nextPageSeq() + 40;
+    loadProjectPages([
+      { ...pageWith([]), id: null },
+      { ...pageWith([]), id: base },
+    ]);
+    expect(app.pages.map((p) => p.id)).toEqual([base + 1, base]);
+  });
+});
+
+describe('loadProjectPages repair count', () => {
+  beforeEach(() => {
+    app.chapterRef = null;
+  });
+
+  it('reports nothing to repair when every id on disk is usable', () => {
+    expect(loadProjectPages([pageWith([box('b7'), box('b9')])])).toBe(0);
+  });
+
+  it('counts every id it had to mint, boxes and pages alike', () => {
+    const repaired = loadProjectPages([
+      { ...pageWith([box('b7'), box('b7')]), id: 3 },
+      { ...pageWith([box(undefined)]), id: 3 },
+    ]);
+    expect(repaired).toBe(3);
   });
 });

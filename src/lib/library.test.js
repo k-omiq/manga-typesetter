@@ -530,6 +530,31 @@ describe('openChapter', () => {
     closeChapter();
   });
 
+  it('writes back the ids it had to repair instead of reminting them every session', async () => {
+    const { p, c } = await seedOpenChapter();
+    closeChapter();
+    // What the PSD importer wrote before it numbered ids across the document:
+    // page two answers to the same ids as page one. The loader repairs that on
+    // the way in, but the repair is only worth anything if it reaches the file —
+    // otherwise which id a box gets depends on how many chapters were opened
+    // first, and it changes every session.
+    const record = chapterJson(c);
+    const dupe = (id) => ({ id, lineN: null, text: 'x', x: 0, y: 0, w: 10, h: 10, style: {} });
+    record.pages[0].boxes = [dupe('b1'), dupe('b2')];
+    record.pages[1].boxes = [dupe('b1')];
+    fsx._tree.files.set(`${c.dir}/chapter.json`, JSON.stringify(record));
+
+    await openChapter(p.id, c.id);
+    const ids = app.pages.flatMap((pg) => pg.boxes.map((b) => b.id));
+    expect(new Set(ids).size).toBe(3);
+    // A repair is unsaved work. An open that changed nothing still comes up
+    // saved — that case is covered above.
+    expect(app.saved).toBe(false);
+    await saveOpenChapter();
+    expect(chapterJson(c).pages.flatMap((pg) => pg.boxes.map((b) => b.id))).toEqual(ids);
+    closeChapter();
+  });
+
   it('refuses to open an unreadable chapter rather than loading a blank one', async () => {
     closeChapter();
     seedProject('z', PROJECT('p1', 'Z'));

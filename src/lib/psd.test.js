@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { numberBoxIds } from './psd.js';
 
+// KNOWN GAP: these call numberBoxIds directly, so they prove the numbering and
+// nothing about the call site. Deleting the numberBoxIds(pages) line from
+// chapterPagesFromPsdFiles restores the duplicate-id bug with this file still
+// green. The import path around it cannot run here — it reads PSD bytes through
+// blob URLs and needs ag-psd's canvas backend, neither of which exists in the
+// node test environment — so the wiring is checked by reading it, not by a test.
+
 // The shape toChapterPage hands the library: bytes and geometry elided, since
 // only the boxes matter here.
 const psdPage = (n, boxCount) => ({
