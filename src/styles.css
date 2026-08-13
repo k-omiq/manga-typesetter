@@ -24,6 +24,12 @@
      value — declared twice all the same, so a theme that ever needs its own is a
      one-line change rather than a restructure. */
   --panel-col:352px;
+  /* The height of the top-left pill band: `.pill-row` at top:12px, 32px tall,
+     with 8px of air under it. The reference sidebar starts here rather than at
+     the window's top edge, so the Home and project pills never sit on top of
+     the raw page — the rail does not, because its tool strip is already offset
+     by the same amount. Geometry, so both blocks carry the same value. */
+  --chrome-top:52px;
   --radius:6px;
 }
 :root[data-theme="dark"]{
@@ -40,6 +46,7 @@
   --scrim:rgba(0,0,0,.6);
   /* Geometry, so identical to light: see the note above. */
   --panel-col:352px;
+  --chrome-top:52px;
 }
 
 *{ box-sizing:border-box; }
@@ -670,9 +677,14 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
    panel (40) and the floating panels (50+). Neither is laid out by a parent:
    the sidebar pins itself to the left edge at the width the rail last dragged
    it to, and the rail pins itself to the sidebar's right edge — or to the
-   window's, once the sidebar is hidden. */
+   window's, once the sidebar is hidden.
+   The sidebar starts at the chrome band, not the window's top edge: the pill
+   row is fixed at top:12px and up to 520px wide, so a sidebar running to 0
+   would put the Home and project pills on top of the raw page. The rail keeps
+   top:0 — it has nothing to cover, and its tool strip is already offset by the
+   same amount. */
 .ed-side{
-  position:absolute; left:0; top:0; bottom:0; z-index:20;
+  position:absolute; left:0; top:var(--chrome-top); bottom:0; z-index:20;
   display:flex; flex-direction:column; background:var(--panel);
 }
 /* The bottom padding clears the zoom pill floating at bottom:16px, so the last
@@ -710,10 +722,13 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 .ed-rail-edge{ position:absolute; left:0; top:0; bottom:0; width:9px; cursor:col-resize; }
 .ed-rail-edge:focus{ outline:none; }
 .ed-rail.hidden .ed-rail-edge{ cursor:default; }
-/* The seam between sidebar and canvas. With the sidebar hidden there is no seam
-   to draw and nothing to drag, so it goes away with it. */
+/* The seam between sidebar and canvas. It draws the sidebar's own right edge,
+   so it starts where the sidebar does — the band above it is the chrome row,
+   with art on both sides and no edge to mark. The drag band itself stays
+   full-height: the grab is bigger than the line it advertises. With the sidebar
+   hidden there is no seam to draw and nothing to drag, so it goes away with it. */
 .ed-rail-edge::before{
-  content:""; position:absolute; left:0; top:0; bottom:0; width:1px;
+  content:""; position:absolute; left:0; top:var(--chrome-top); bottom:0; width:1px;
   background:var(--line2); transition:background .12s;
 }
 .ed-rail.hidden .ed-rail-edge::before{ display:none; }
@@ -721,15 +736,16 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 /* Keyboard focus lands on the band itself, so the seam is where it shows — the
    same highlight the hover gives, thickened so it reads without a pointer. */
 .ed-rail-edge:focus-visible::before{ background:var(--accent); width:2px; }
-/* top clears the Home/project pill band (top:12px + 32px tall, .pill-row) with
-   room to spare. With the sidebar hidden the rail sits at left:0, directly
-   under that row, and the pill row outranks the rail (z-index 30 vs 21) — so
-   without this offset the caret, the only way back to a hidden sidebar,
-   would be covered and unclickable rather than merely hidden behind it. Kept
-   the same in the visible state too, on purpose: one offset for both states
-   is one fewer thing to keep in sync as either geometry moves. */
+/* top clears the Home/project pill band — the same --chrome-top the sidebar
+   starts at, which is what that token measures. With the sidebar hidden the
+   rail sits at left:0, directly under that row, and the pill row outranks the
+   rail (z-index 30 vs 21) — so without this offset the caret, the only way back
+   to a hidden sidebar, would be covered and unclickable rather than merely
+   hidden behind it. Kept the same in the visible state too, on purpose: one
+   offset for both states is one fewer thing to keep in sync as either geometry
+   moves. */
 .ed-rail-tools{
-  position:absolute; left:2px; top:52px; display:flex; flex-direction:column; gap:3px;
+  position:absolute; left:2px; top:var(--chrome-top); display:flex; flex-direction:column; gap:3px;
   background:color-mix(in srgb, var(--panel) 92%, transparent); border:1px solid var(--line);
   border-radius:9px; padding:4px; box-shadow:var(--edge); backdrop-filter:blur(6px);
   cursor:default;
