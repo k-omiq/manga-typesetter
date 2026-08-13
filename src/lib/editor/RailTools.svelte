@@ -47,8 +47,9 @@
     const startW = app.leftWidth;
     let dragging = false;
     const move = (ev) => {
-      // A second finger, or the other mouse button, would otherwise drive this
-      // same closure from a start point it never measured against.
+      // A second pointer — another touch, or a pen alongside the mouse — would
+      // otherwise drive this same closure from a start point it never measured
+      // against.
       if (ev.pointerId !== pid) return;
       if (!dragging && Math.abs(ev.clientX - startX) < 4) return;
       dragging = true;

@@ -11,7 +11,6 @@
   // `offsetParent`, so the panel stays over the page rather than the window.)
   let pos = $state({ x: 0, y: 16 });
   let panelEl;
-  let drag = null; // { startX, startY, baseX, baseY } while dragging
 
   function clamp(v, a, b) {
     return Math.max(a, Math.min(b, v));
@@ -26,34 +25,53 @@
     }
   });
 
+  // Every gesture in flight, so an unmount can end them all — see the same set
+  // in FloatingPanel. The listeners live on `window`, and nothing guarantees a
+  // further pointer event once this panel is gone.
+  const live = new Set();
+  $effect(() => () => {
+    for (const ac of live) ac.abort();
+    live.clear();
+  });
+
   function onHeadPointerDown(e) {
     // Don't start a drag from the close button (or anything inside it).
     if (e.target.closest('.x')) return;
     e.preventDefault();
-    drag = { startX: e.clientX, startY: e.clientY, baseX: pos.x, baseY: pos.y };
-    window.addEventListener('pointermove', onPointerMove);
-    window.addEventListener('pointerup', onPointerUp);
-  }
-
-  function onPointerMove(e) {
-    if (!drag) return;
-    const parent = panelEl?.offsetParent || panelEl?.parentElement;
-    const pw = parent ? parent.clientWidth : window.innerWidth;
-    const ph = parent ? parent.clientHeight : window.innerHeight;
-    const w = panelEl?.offsetWidth || 0;
-    const h = panelEl?.offsetHeight || 0;
-    let nx = drag.baseX + (e.clientX - drag.startX);
-    let ny = drag.baseY + (e.clientY - drag.startY);
-    // Clamp so the header stays visible (keep at least ~40px on screen).
-    nx = clamp(nx, 40 - w, pw - 40);
-    ny = clamp(ny, 0, Math.max(0, ph - 40));
-    pos = { x: nx, y: ny };
-  }
-
-  function onPointerUp() {
-    drag = null;
-    window.removeEventListener('pointermove', onPointerMove);
-    window.removeEventListener('pointerup', onPointerUp);
+    const pid = e.pointerId;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const baseX = pos.x;
+    const baseY = pos.y;
+    const move = (ev) => {
+      // A second pointer — another touch, or a pen alongside the mouse — would
+      // otherwise drive this same closure from a start point it never measured
+      // against.
+      if (ev.pointerId !== pid) return;
+      const parent = panelEl?.offsetParent || panelEl?.parentElement;
+      const pw = parent ? parent.clientWidth : window.innerWidth;
+      const ph = parent ? parent.clientHeight : window.innerHeight;
+      const w = panelEl?.offsetWidth || 0;
+      const h = panelEl?.offsetHeight || 0;
+      let nx = baseX + (ev.clientX - startX);
+      let ny = baseY + (ev.clientY - startY);
+      // Clamp so the header stays visible (keep at least ~40px on screen).
+      nx = clamp(nx, 40 - w, pw - 40);
+      ny = clamp(ny, 0, Math.max(0, ph - 40));
+      pos = { x: nx, y: ny };
+    };
+    // One controller for both endings. It only moves panel position — there is
+    // no history record to settle — so the end handler just tears down.
+    const ac = new AbortController();
+    const end = (ev) => {
+      if (ev.pointerId !== pid) return;
+      live.delete(ac);
+      ac.abort();
+    };
+    live.add(ac);
+    window.addEventListener('pointermove', move, { signal: ac.signal });
+    window.addEventListener('pointerup', end, { signal: ac.signal });
+    window.addEventListener('pointercancel', end, { signal: ac.signal });
   }
   function setHex(key, v) {
     if (/^#?[0-9a-f]{3,8}$/i.test(v)) s[key] = v.startsWith('#') ? v : '#' + v;

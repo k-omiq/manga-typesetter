@@ -136,8 +136,9 @@
     const pageId = dims.id;
     const before = { x: ox, y: oy };
     const move = (ev) => {
-      // A second finger, or the other mouse button, would otherwise drive this
-      // same closure from a start point it never measured against.
+      // A second pointer — another touch, or a pen alongside the mouse — would
+      // otherwise drive this same closure from a start point it never measured
+      // against.
       if (ev.pointerId !== pid) return;
       box.x = clamp(ox + (ev.clientX - sx) / zz, -box.w + 20, dims.w - 20);
       box.y = clamp(oy + (ev.clientY - sy) / zz, -box.h + 20, dims.h - 20);

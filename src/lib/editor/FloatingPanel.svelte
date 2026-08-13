@@ -41,8 +41,9 @@
     const o = { x: g.x, y: g.y, w: g.w, h: g.h };
     e.currentTarget.setPointerCapture?.(pid);
     const move = (ev) => {
-      // A second finger, or the other mouse button, would otherwise arm its own
-      // drag and the two closures would fight over the same panel.
+      // A second pointer — another touch, or a pen alongside the mouse — would
+      // otherwise arm its own drag and the two closures would fight over the
+      // same panel.
       if (ev.pointerId !== pid) return;
       const dx = ev.clientX - sx;
       const dy = ev.clientY - sy;

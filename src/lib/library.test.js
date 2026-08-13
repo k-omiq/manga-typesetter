@@ -670,6 +670,31 @@ describe('saveOpenChapter', () => {
     closeChapter();
   });
 
+  // The serialisation queue makes the writes land in order; it does not by
+  // itself stop the older one from telling the pill "saved" after a newer
+  // snapshot has already been queued behind it. `saveSeq` is what closes that:
+  // it is stamped at call time, before either write starts, so the first
+  // save's own finish can see that a second one exists.
+  it('does not mark saved while a newer save is already queued behind it', async () => {
+    const { c } = await seedOpenChapter();
+    const line = (en) => ({ n: 1, type: 'dialogue', jp: 'あ', en });
+    app.pages[0].lines = [line('first')];
+    markUnsaved();
+    const a = saveOpenChapter();
+    app.pages[0].lines = [line('second')];
+    markUnsaved();
+    const b = saveOpenChapter(); // queued behind `a` before `a` has written anything
+    await a;
+    // `a`'s snapshot reached disk, but `b`'s — the newer one — has not yet;
+    // the indicator must not claim everything is saved while a save is still
+    // outstanding.
+    expect(app.saved).toBe(false);
+    await b;
+    expect(app.saved).toBe(true);
+    expect(chapterJson(c).pages[0].lines[0].en).toBe('second');
+    closeChapter();
+  });
+
   it('does nothing when no chapter is open', async () => {
     const { c } = await seedOpenChapter();
     const before = fsx._tree.files.get(`${c.dir}/chapter.json`);

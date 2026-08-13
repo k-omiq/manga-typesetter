@@ -976,8 +976,15 @@ export async function openChapter(projectId, chapterId) {
 // edit the one that survives.
 let saving = Promise.resolve();
 
+// A tag for "which save is this", so a save that lands can tell whether it is
+// still the newest one queued. Incremented once per call, before the queue
+// even runs it — the ordering the indicator has to trust is call order, not
+// finish order.
+let saveSeq = 0;
+
 export function saveOpenChapter() {
-  const done = saving.then(writeOpenChapter);
+  const seq = ++saveSeq;
+  const done = saving.then(() => writeOpenChapter(seq));
   // The queue must outlive a save that fails, or one bad write would strand
   // every later one — but the rejection still reaches this caller, because a
   // rejected autosave is the user's only signal that their work is off-disk.
@@ -985,7 +992,7 @@ export function saveOpenChapter() {
   return done;
 }
 
-async function writeOpenChapter() {
+async function writeOpenChapter(seq) {
   // Captured once. Every await below is a window in which the user can close
   // this chapter or open another, and `app.pages` stops being what `ref`
   // describes the moment they do — so the identity of the ref is re-checked
@@ -1030,8 +1037,13 @@ async function writeOpenChapter() {
   c.updatedAt = record.updatedAt;
   c.pageCount = record.pages.length;
   c.typeset = isTypeset(record.pages);
-  // Only the chapter still on screen can be declared saved.
-  if (app.chapterRef === ref) markSaved();
+  // Only the chapter still on screen can be declared saved — and only when no
+  // later save is already queued behind this one. A newer call bumped saveSeq
+  // the moment it was made, before it ever reached the write; if that has
+  // happened, a newer snapshot exists that this write did not carry, and the
+  // indicator has no business claiming everything is saved yet. The next save
+  // in the chain will make that claim once it is truly the last one.
+  if (app.chapterRef === ref && seq === saveSeq) markSaved();
 }
 
 export function closeChapter() {
