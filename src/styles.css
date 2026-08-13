@@ -177,7 +177,6 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
 .dropzone .ico{ width:54px; height:54px; margin:0 auto 16px; color:var(--t2); }
 .dropzone h2{ margin:0 0 6px; font-size:17px; font-weight:600; }
 .dropzone p{ margin:0 0 20px; color:var(--t2); font-size:13px; }
-.dropzone .row{ display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
 
 /* floating zoom + undo controls. Like the pager below it, this positions
    nothing: `.ed-dockrow` places the pair, and a self-centring pill would fight
