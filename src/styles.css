@@ -817,8 +817,8 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
    without it the browser may claim the pointer for a pan and cancel the drag
    halfway. */
 .ed-rail{ position:absolute; top:0; bottom:0; width:var(--rail-w); z-index:21; touch-action:none; }
-.ed-rail:focus{ outline:none; }
 .ed-rail-edge{ position:absolute; left:0; top:0; bottom:0; width:9px; cursor:col-resize; }
+.ed-rail-edge:focus{ outline:none; }
 .ed-rail.hidden .ed-rail-edge{ cursor:default; }
 /* The seam between sidebar and canvas. With the sidebar hidden there is no seam
    to draw and nothing to drag, so it goes away with it. */
@@ -828,9 +828,9 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 }
 .ed-rail.hidden .ed-rail-edge::before{ display:none; }
 .ed-rail-edge:hover::before{ background:var(--accent); }
-/* Keyboard focus lands on the rail, so the seam is where it has to show — the
+/* Keyboard focus lands on the band itself, so the seam is where it shows — the
    same highlight the hover gives, thickened so it reads without a pointer. */
-.ed-rail:focus-visible .ed-rail-edge::before{ background:var(--accent); width:2px; }
+.ed-rail-edge:focus-visible::before{ background:var(--accent); width:2px; }
 .ed-rail-tools{
   position:absolute; left:2px; top:16px; display:flex; flex-direction:column; gap:3px;
   background:color-mix(in srgb, var(--panel) 92%, transparent); border:1px solid var(--line);

@@ -87,29 +87,37 @@
   const keepClick = (e) => e.stopPropagation();
 </script>
 
-<!-- A focusable separator is the ARIA window-splitter widget — a control, not a
-     decoration — which is exactly what a rail you can drag and arrow is. The
-     a11y lint classifies every `separator` as non-interactive and has no case
-     for that, so the two warnings it raises here are the false ones. -->
-<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+<!-- The whole strip carries the drag, but it is not the widget: a focusable
+     separator is the ARIA window splitter, a range control in the same family
+     as slider and scrollbar, and assistive technology is free to prune or
+     flatten a range control's children. Four tool buttons inside that subtree
+     could go unreachable in browse mode, so the role, the value and the
+     keyboard live on the edge band below and the tool strip stays outside it. -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="ed-rail"
   class:hidden={app.sidebarHidden}
   style="left:{app.sidebarHidden ? 0 : app.leftWidth}px"
-  role="separator"
-  aria-orientation="vertical"
-  aria-label="Raw reference width"
-  aria-valuenow={app.leftWidth}
-  aria-valuemin={SIDEBAR_MIN}
-  aria-valuemax={SIDEBAR_MAX}
-  tabindex={app.sidebarHidden ? -1 : 0}
   onpointerdown={onRailPointerDown}
-  onkeydown={onRailKeyDown}
 >
-  <!-- The band that advertises the resize: the seam is on its left edge, which
-       is the edge the drag actually moves. The rest of the strip stays a plain
-       pointer so it does not claim to be an edge it is not. -->
-  <div class="ed-rail-edge"></div>
+  <!-- The band that advertises the resize — and, being the widget, the thing
+       that takes focus and the arrow keys. The seam is on its left edge, which
+       is the edge the drag actually moves; the rest of the strip stays a plain
+       pointer so it does not claim to be an edge it is not.
+       The a11y lint classifies every `separator` as non-interactive and has no
+       case for the focusable one, so the two warnings here are the false ones. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+  <div
+    class="ed-rail-edge"
+    role="separator"
+    aria-orientation="vertical"
+    aria-label="Raw reference width"
+    aria-valuenow={app.leftWidth}
+    aria-valuemin={SIDEBAR_MIN}
+    aria-valuemax={SIDEBAR_MAX}
+    tabindex={app.sidebarHidden ? -1 : 0}
+    onkeydown={onRailKeyDown}
+  ></div>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="ed-rail-tools" onpointerdown={keepClick}>
     <button
