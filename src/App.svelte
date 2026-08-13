@@ -114,13 +114,44 @@
       // sends `terminate:` straight to NSApp. Swapping it for an ordinary item
       // carrying the same ⌘Q accelerator turns the quit into a menu event this
       // code can await in — flush first, then destroy the window, which exits.
-      await interceptQuitMenuItem(safeToQuit, w);
+      //
+      // The same pass also strips the Edit submenu's Undo/Redo — see the
+      // function for why. Both edits ride one Menu.default()/setAsAppMenu()
+      // because two passes would each rebuild from the platform default and the
+      // second would discard the first.
+      await patchDefaultMenu(safeToQuit, w);
     } catch {
       // No quit hook is better than a boot that fails over one.
     }
   }
 
-  async function interceptQuitMenuItem(safeToQuit, w) {
+  // One pass over Menu.default(), two edits, one install:
+  //
+  //  1. Quit becomes an ordinary item this code can await in (see armQuitFlush).
+  //  2. The Edit submenu's predefined Undo and Redo are removed outright.
+  //
+  // (2) is what it cost us to learn that a *predefined* Undo item in the default
+  // menu silently outranks the web view's keyboard handling. Its ⌘Z / ⇧⌘Z key
+  // equivalents are offered the key event at the macOS responder level, ahead of
+  // the web view, so no `keydown` for ⌘Z ever reaches the DOM while that item
+  // validates as enabled — and a predefined `undo:` item auto-validates as
+  // enabled exactly while WebKit's editor has typing to undo. The symptom was
+  // ⌘Z straight after the Text tool's click/type/Escape clearing the box's text
+  // (WebKit's own text undo, fired by the menu) instead of running onKeydown's
+  // undo(); it worked again once focus moved on and the item greyed out, and the
+  // dock's undo button — which never routes through a key equivalent — always
+  // worked. Nothing in JS can see this happen; it is invisible from the web view.
+  //
+  // Removing the items rather than replacing them is the whole fix. An ordinary
+  // MenuItem carrying ⌘Z would consume the key *unconditionally*, including
+  // inside a real text field, leaving that field's own undo to a speculative
+  // document.execCommand('undo') delegation. With no item claiming the key
+  // equivalent, ⌘Z falls through to the web view and both undos work on their
+  // own terms: WebKit's inside a focused editable, onKeydown's everywhere else.
+  //
+  // Cut/Copy/Paste/Select All stay predefined and untouched — they are audited
+  // working, and they are not in the way of anything.
+  async function patchDefaultMenu(safeToQuit, w) {
     // macOS only, deliberately. It is the one platform where Tauri installs a
     // default application menu at startup, where that menu's Quit is the
     // dominant way out, and where ⌘Q is the idiom. On Windows there is no menu
@@ -130,14 +161,24 @@
     if (!/Mac/i.test(navigator.userAgent)) return;
     const { Menu, MenuItem } = await import('@tauri-apps/api/menu');
     const menu = await Menu.default();
+    let changed = false;
+    let quitDone = false;
     for (const sub of await menu.items()) {
       if (sub.kind !== 'Submenu') continue;
       const items = await sub.items();
-      for (let i = 0; i < items.length; i++) {
+      // Descending, so a removal cannot shift an index still to be visited.
+      for (let i = items.length - 1; i >= 0; i--) {
         if (items[i].kind !== 'Predefined') continue;
-        // muda names it '&Quit'; macOS drops the mnemonic marker.
+        // muda names them '&Quit'/'&Undo'; macOS drops the mnemonic marker.
         const text = (await items[i].text()) ?? '';
-        if (!/^&?quit\b/i.test(text)) continue;
+        if (/^&?(un|re)do\b/i.test(text)) {
+          await sub.removeAt(i);
+          changed = true;
+          continue;
+        }
+        // The first Quit only: a second replacement would install a duplicate
+        // item id, and one intercepted route out is all this needs.
+        if (quitDone || !/^&?quit\b/i.test(text)) continue;
         const replacement = await MenuItem.new({
           id: 'mt-quit',
           text, // whatever the platform already called it
@@ -148,12 +189,13 @@
         });
         await sub.removeAt(i);
         await sub.insert(replacement, i);
-        await menu.setAsAppMenu();
-        return;
+        quitDone = true;
+        changed = true;
       }
     }
     // Nothing matched — leave the platform's own menu in place rather than
     // installing a half-built one. The close-request route still holds.
+    if (changed) await menu.setAsAppMenu();
   }
 
   // Hydrate the editor whenever the route lands on a chapter. The guard read is
