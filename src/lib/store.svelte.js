@@ -231,6 +231,21 @@ export function flushSave() {
   return saver && app.chapterRef ? saver() : Promise.resolve();
 }
 
+// ---------- edit recorder (undo/redo) ----------
+// The store stays unaware of the history the same way it stays unaware of the
+// filesystem: the history module registers itself, and a build with no history
+// records nothing and behaves exactly as before.
+let recorder = null;
+export function setRecorder(fn) {
+  recorder = fn;
+}
+export function recordEdit(entry) {
+  if (recorder) recorder(entry);
+}
+// The history addresses pages by id, not by index: an entry may outlive the
+// page being the one on screen.
+export const pageById = (id) => app.pages.find((p) => p.id === id) ?? null;
+
 // ---------- toast ----------
 let toastT;
 export function toast(msg) {
@@ -268,7 +283,11 @@ export function beginEdit(id) {
   selectBox(id);
   app.editingId = id;
 }
-export function endEdit(commitText) {
+// `beforeText` is what the box read when the edit began — only the caller knows
+// that, since the box has already been typed into by the time we get here. It
+// is optional: left off, the edit is applied but not recorded, so a caller that
+// has not been taught to pass it still works.
+export function endEdit(commitText, beforeText) {
   const id = app.editingId;
   app.editingId = null;
   if (id == null) return;
@@ -277,6 +296,15 @@ export function endEdit(commitText) {
   if (commitText != null) {
     b.text = commitText;
     markUnsaved();
+  }
+  if (beforeText !== undefined && commitText != null && commitText !== beforeText) {
+    recordEdit({
+      t: 'text',
+      pageId: page().id,
+      boxId: id,
+      before: beforeText ?? null,
+      after: commitText,
+    });
   }
   // drop an empty placeholder box the user never typed into
   if (b.text != null && b.text.trim() === '' && b.lineN == null) {
@@ -343,6 +371,7 @@ export function placeActiveAt(imgX, imgY) {
     style: cloneStyle(app.lastStyle),
   };
   p.boxes.push(b);
+  recordEdit({ t: 'place', pageId: p.id, index: p.boxes.length - 1, box: $state.snapshot(b) });
   p.activeLineN = firstUnplaced(p);
   markUnsaved();
   selectBox(b.id);
@@ -368,6 +397,7 @@ export function addEmptyBox(imgX, imgY) {
     style: cloneStyle(app.lastStyle),
   };
   p.boxes.push(b);
+  recordEdit({ t: 'place', pageId: p.id, index: p.boxes.length - 1, box: $state.snapshot(b) });
   markUnsaved();
   beginEdit(b.id);
   return b.id;
@@ -378,7 +408,12 @@ export function deleteBox(id) {
   const p = page();
   const b = byId(id);
   if (!b) return;
+  // Both taken before the removal: the undo has to put the box back where it
+  // was in the stacking order, not on the end.
+  const index = p.boxes.findIndex((x) => x.id === id);
+  const snap = $state.snapshot(b);
   p.boxes = p.boxes.filter((x) => x.id !== id);
+  recordEdit({ t: 'delete', pageId: p.id, index, box: snap });
   // only queued (line-backed) boxes return to the queue; free-typed boxes (lineN=null) don't
   if (b.lineN != null && !isPlaced(p, b.lineN)) p.activeLineN = b.lineN;
   app.selectedId = null;
@@ -412,13 +447,18 @@ export function applyBulk() {
   if (!app.bulk.active || !app.bulk.style) return;
   const p = page();
   let n = 0;
+  // One record for the whole apply, so undoing it is one press rather than one
+  // per box.
+  const items = [];
   for (const id of app.bulk.targets) {
     const b = p.boxes.find((x) => x.id === id);
     if (b) {
+      items.push({ boxId: id, before: cloneStyle(b.style), after: cloneStyle(app.bulk.style) });
       b.style = cloneStyle(app.bulk.style);
       n++;
     }
   }
+  if (items.length) recordEdit({ t: 'bulk', pageId: p.id, items });
   app.lastStyle = cloneStyle(app.bulk.style);
   markUnsaved();
   const count = n;
