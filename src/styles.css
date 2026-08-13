@@ -727,6 +727,13 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
   border-radius:9px; padding:4px; box-shadow:var(--edge); backdrop-filter:blur(6px);
   cursor:default;
 }
+/* With the sidebar hidden the rail sits at the window's left edge (left:0),
+   directly under the Home pill (top:12, height 32 -> bottom edge at 44px) —
+   and the pill row outranks the rail (z-index 30 vs 21), so the caret at
+   top:16 would be covered and unclickable rather than merely hidden behind
+   it. Dropping the strip below the pill band is what keeps the caret — the
+   only way back to a hidden sidebar — reachable. */
+.ed-rail.hidden .ed-rail-tools{ top:52px; }
 /* A vertical strip has no room for a tooltip centred underneath it — the rail
    sits at the window's left edge with the sidebar hidden, and a centred tip
    runs straight off it. These read to the side instead. */
