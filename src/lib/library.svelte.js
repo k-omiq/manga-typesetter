@@ -272,6 +272,15 @@ export const projectById = (id) => library.projects.find((p) => p.id === id);
 export const chapterById = (projectId, chapterId) =>
   projectById(projectId)?.chapters.find((c) => c.id === chapterId);
 
+// Where the open chapter's own files live — what the undo history writes beside.
+// Derived from the catalogue on every call rather than remembered, so a rescan
+// that rebuilds the records cannot leave anyone holding a stale directory.
+export function openChapterDir() {
+  const ref = app.chapterRef;
+  if (!ref) return null;
+  return chapterById(ref.projectId, ref.chapterId)?.dir ?? null;
+}
+
 // ---------- mutations ----------
 
 // Pick a directory name that is free ON DISK, not merely free in the catalogue.
