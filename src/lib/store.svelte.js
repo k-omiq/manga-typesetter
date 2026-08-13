@@ -247,16 +247,35 @@ export function recordEdit(entry) {
 // page being the one on screen.
 export const pageById = (id) => app.pages.find((p) => p.id === id) ?? null;
 
-// A free-typed box is not history until the user has typed into it. Creating it
-// and dropping it again are halves of one gesture, so `addEmptyBox` only leaves
-// it pending and `endEdit` decides: one `place` record carrying the committed
-// text, or — when the box is dropped empty — nothing at all. Recorded
-// separately they would cost two undo presses, the first of which brings back
-// an empty box the user never wanted.
+// A free-typed box is not history until the gesture that made it is over.
+// Creating it and dropping it again empty are halves of one gesture, and
+// recording them separately would cost two undo presses, the first of which
+// brings back an empty box the user never wanted. So `addEmptyBox` only leaves
+// the box pending, and whoever ends the edit settles it: one `place` record if
+// the box survived, nothing at all if it did not.
 let pendingPlace = null;
 const clearPending = () => {
   pendingPlace = null;
 };
+// Every path that ends an edit calls this — not just `endEdit`. `deselect` and
+// `selectBox` null `editingId` on pointerdown, before the browser fires blur on
+// the contenteditable, so the blur's `endEdit` finds nothing to end and returns
+// early. Settling only there would leave the box pending for good, and the next
+// `deleteBox` would mistake a real box full of real text for a gesture that
+// never happened and record nothing — undo silently losing the user's work.
+function settlePending() {
+  const pend = pendingPlace;
+  if (!pend) return;
+  pendingPlace = null;
+  const p = pageById(pend.pageId);
+  // The index is read now rather than remembered from creation time: boxes may
+  // have come and gone while the user was typing.
+  const index = p ? p.boxes.findIndex((x) => x.id === pend.id) : -1;
+  if (index === -1) return; // already gone — the gesture left nothing to undo
+  // No queue fields: a free-typed box never touched `activeLineN`, and claiming
+  // it did would make this undo rewind a queue move belonging to another edit.
+  recordEdit({ t: 'place', pageId: p.id, index, box: $state.snapshot(p.boxes[index]) });
+}
 
 // ---------- toast ----------
 let toastT;
@@ -284,11 +303,13 @@ export const prevPage = () => gotoPage(app.pageIndex - 1);
 
 // ---------- selection ----------
 export function selectBox(id) {
+  if (app.editingId && app.editingId !== id) settlePending();
   app.selectedId = id;
   if (app.editingId && app.editingId !== id) app.editingId = null;
   app.collapsed.inspector = false;
 }
 export function deselect() {
+  if (app.editingId) settlePending();
   app.selectedId = null;
   app.editingId = null;
 }
@@ -321,16 +342,7 @@ export function endEdit(commitText, beforeText) {
   // with the text the user actually typed, not the empty string it was born
   // with. Its own `text` record would be the same gesture counted twice.
   if (pendingPlace?.id === id) {
-    const { pageId, index, activeBefore } = pendingPlace;
-    clearPending();
-    recordEdit({
-      t: 'place',
-      pageId,
-      index,
-      box: $state.snapshot(b),
-      activeBefore,
-      activeAfter: page().activeLineN,
-    });
+    settlePending();
     return;
   }
   if (beforeText !== undefined && commitText != null && commitText !== beforeText) {
@@ -440,14 +452,11 @@ export function addEmptyBox(imgX, imgY) {
     style: cloneStyle(app.lastStyle),
   };
   p.boxes.push(b);
-  pendingPlace = {
-    id: b.id,
-    pageId: p.id,
-    index: p.boxes.length - 1,
-    activeBefore: p.activeLineN,
-  };
   markUnsaved();
+  // `beginEdit` selects, which settles whatever gesture was in progress before
+  // this one. Only then is this box the pending one.
   beginEdit(b.id);
+  pendingPlace = { id: b.id, pageId: p.id };
   return b.id;
 }
 

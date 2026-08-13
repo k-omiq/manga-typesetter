@@ -7,6 +7,8 @@ import {
   addEmptyBox,
   beginEdit,
   endEdit,
+  selectBox,
+  deselect,
   page,
 } from '../store.svelte.js';
 import {
@@ -18,6 +20,7 @@ import {
   initHistory,
   MAX_STEPS,
   takeStack,
+  peekStack,
   loadStack,
 } from './history.svelte.js';
 
@@ -154,6 +157,34 @@ describe('one gesture, one step', () => {
     expect(history.canUndo).toBe(false);
   });
 
+  // The ordinary way to leave a box: click another one, or the canvas. Both
+  // null `editingId` on pointerdown, so the blur that follows reaches `endEdit`
+  // with nothing to end — the gesture has to be settled from those paths too,
+  // or the box stays pending forever and its eventual delete goes unrecorded.
+  it('records a new box left by clicking another one', () => {
+    const id = addEmptyBox(300, 300);
+    page().boxes[2].text = 'real';
+    selectBox('b1'); // pointerdown elsewhere
+    endEdit('real', ''); // the late blur, with editingId already null
+    expect(history.canUndo).toBe(true);
+    resetHistory();
+    deleteBox(id);
+    expect(history.canUndo).toBe(true);
+    undo();
+    const back = page().boxes.find((b) => b.id === id);
+    expect(back?.text).toBe('real');
+  });
+
+  it('records a new box left by clicking the canvas', () => {
+    const id = addEmptyBox(300, 300);
+    page().boxes[2].text = 'real';
+    deselect();
+    resetHistory();
+    deleteBox(id);
+    undo();
+    expect(page().boxes.map((b) => b.id)).toContain(id);
+  });
+
   it('still records the removal of an existing box emptied out', () => {
     const id = addEmptyBox(300, 300);
     endEdit('hi', '');
@@ -164,6 +195,25 @@ describe('one gesture, one step', () => {
     expect(history.canUndo).toBe(true);
     undo();
     expect(page().boxes.map((b) => b.id)).toContain(id);
+  });
+});
+
+describe('selection follows the step', () => {
+  it('drops the selection with the box, and takes it back on redo', () => {
+    placeActiveAt(400, 400);
+    const id = page().boxes[2].id;
+    expect(app.selectedId).toBe(id);
+    undo();
+    expect(app.selectedId).toBe(null);
+    redo();
+    expect(app.selectedId).toBe(id);
+  });
+
+  it('selects the box an undone delete brings back', () => {
+    deleteBox('b1');
+    expect(app.selectedId).toBe(null);
+    undo();
+    expect(app.selectedId).toBe('b1');
   });
 });
 
@@ -233,7 +283,19 @@ describe('plain data', () => {
     record({ t: 'text', pageId: 1, boxId: 'b2', before: 'two', after: 'three' });
     const out = takeStack();
     expect(out.undo.length).toBe(3);
-    expect(JSON.parse(JSON.stringify(out))).toEqual(out);
+    // Strict: `toEqual` would call a property whose value is `undefined` equal
+    // to no property at all, which is the one shape that does not survive.
+    expect(JSON.parse(JSON.stringify(out))).toStrictEqual(out);
+  });
+
+  it('detaches a store-produced record from the box it describes', () => {
+    placeActiveAt(400, 400);
+    const b = page().boxes[2];
+    b.x = 777;
+    b.style.size = 99;
+    const rec = peekStack().undo[0];
+    expect(rec.box.x).toBe(400 - 110); // where it was placed, not where it now is
+    expect(rec.box.style.size).not.toBe(99);
   });
 
   it('copies what it is handed, so a later mutation cannot rewrite history', () => {

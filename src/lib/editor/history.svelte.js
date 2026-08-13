@@ -4,7 +4,7 @@
 // bytes and serialises to JSON without ceremony. Only the page on screen keeps
 // its stack in memory; every other page's lives in the chapter's history file.
 import {
-  page,
+  app,
   pageById,
   markUnsaved,
   toast,
@@ -186,9 +186,14 @@ function step(from, to, dir) {
     applying = false;
   }
   to.push(entry);
-  // Show the user what just changed, but only when it is still there to show.
-  if (entry.boxId && pageById(entry.pageId)?.boxes.some((b) => b.id === entry.boxId)) {
-    selectBox(entry.boxId);
+  // Show the user what just changed. `place` and `delete` name their box inside
+  // the box itself, which is why this is not just `entry.boxId`. When the step
+  // was the one that took the box away, the selection has to go with it — left
+  // pointing at nothing, the inspector blanks and Delete becomes a no-op.
+  const id = entry.boxId ?? entry.box?.id;
+  if (id) {
+    if (pageById(entry.pageId)?.boxes.some((b) => b.id === id)) selectBox(id);
+    else if (app.selectedId === id) app.selectedId = null;
   }
   markUnsaved();
   sync();
