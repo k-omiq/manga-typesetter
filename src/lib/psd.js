@@ -526,16 +526,29 @@ async function toChapterPage(page, index) {
       w: page.w ?? PAGE_W,
       h: page.h ?? PAGE_H,
       lines: (page.lines ?? []).map((l) => ({ ...l })),
-      // Numbered per page, so pages past the first repeat ids the earlier ones
-      // already used. The loader keeps the first box to claim an id and mints a
-      // fresh one for the rest, so the record still opens with every box
-      // uniquely addressable.
-      boxes: (page.boxes ?? []).map((b, i) => ({ ...b, id: `b${i + 1}`, style: { ...b.style } })),
+      // Ids are numbered by numberBoxIds once the whole document is in hand.
+      boxes: (page.boxes ?? []).map((b) => ({ ...b, style: { ...b.style } })),
       detect: page.detect ?? null,
     };
   } finally {
     revokeAll(page.raw, page.cleaned);
   }
+}
+
+// Box ids are what the undo history addresses across sessions, and a chapter
+// load keeps whatever ids the record carries, so they have to be unique across
+// the whole document and not merely within a page. Numbering per page would
+// hand page two ids page one already owns; the loader would remint the repeats,
+// and which ones it minted would depend on what else had been opened that
+// session — an id that moves between sessions is exactly what the history
+// cannot survive. Assigned in one sweep, after every page has been built, so a
+// PSD that failed to yield an image does not leave a gap.
+export function numberBoxIds(pages) {
+  let seq = 1;
+  for (const pg of pages) {
+    for (const b of pg.boxes ?? []) b.id = `b${seq++}`;
+  }
+  return pages;
 }
 
 export async function chapterPagesFromPsdFiles(files) {
@@ -559,6 +572,7 @@ export async function chapterPagesFromPsdFiles(files) {
       problems.push(`${file.name} — ${e?.message || e}`);
     }
   }
+  numberBoxIds(pages);
   return {
     pages,
     lossless,
