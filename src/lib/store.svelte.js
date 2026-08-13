@@ -127,6 +127,7 @@ export const app = $state({
   exporting: false,
   collapsed: { queue: false, inspector: false },
   leftWidth: 280,
+  sidebarHidden: false, // raw reference sidebar collapsed to the rail's caret
   rightWidth: 312,
   cursor: { x: '—', y: '—' },
   toast: { msg: '', seq: 0 },
@@ -199,6 +200,35 @@ export function saveExportPrefs(dir, name) {
   if (name != null) app.exportName = name;
   try {
     localStorage.setItem('mt.export', JSON.stringify({ dir: app.exportDir, name: app.exportName }));
+  } catch {
+    /* ignore */
+  }
+}
+
+// ---------- reference sidebar persistence ----------
+// The rail drags the sidebar between these two widths; a value off disk gets
+// the same clamp, so a hand-edited or stale entry can never wedge the sidebar
+// at a width the rail itself would refuse to produce.
+export const SIDEBAR_MIN = 200;
+export const SIDEBAR_MAX = 460;
+export const clampSidebarWidth = (w) => clamp(w, SIDEBAR_MIN, SIDEBAR_MAX);
+// Same defensive shape as the export prefs above: read once at module load,
+// written back through one function, every failure swallowed. Storage is
+// absent entirely in the node test environment, and a corrupt entry must cost
+// the user their sidebar width, not the editor.
+try {
+  const saved = JSON.parse(localStorage.getItem('mt.sidebar') || '{}');
+  if (Number.isFinite(saved.width)) app.leftWidth = clampSidebarWidth(saved.width);
+  if (typeof saved.hidden === 'boolean') app.sidebarHidden = saved.hidden;
+} catch {
+  /* ignore */
+}
+export function saveSidebar() {
+  try {
+    localStorage.setItem(
+      'mt.sidebar',
+      JSON.stringify({ width: app.leftWidth, hidden: app.sidebarHidden }),
+    );
   } catch {
     /* ignore */
   }

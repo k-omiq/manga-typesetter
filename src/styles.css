@@ -20,6 +20,8 @@
   --scrim:rgba(42,38,32,.28);
   --topbar-h:46px;
   --status-h:26px;
+  /* Mirrored by RAIL_W in src/lib/editor/RailTools.svelte — see the note there. */
+  --rail-w:44px;
   --radius:6px;
 }
 :root[data-theme="dark"]{
@@ -751,3 +753,64 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 .panel-stub svg{ width:14px; height:14px; }
 @keyframes stub-in{ from{ transform:scale(.9); opacity:0 } to{ transform:scale(1); opacity:1 } }
 @media (prefers-reduced-motion: reduce){ .panel-stub{ animation:none } }
+
+/* ---------- editor: reference sidebar + tool rail ---------- */
+/* Two layers of the editor root, both above the canvas and below the bulk
+   panel (40) and the floating panels (50+). Neither is laid out by a parent:
+   the sidebar pins itself to the left edge at the width the rail last dragged
+   it to, and the rail pins itself to the sidebar's right edge — or to the
+   window's, once the sidebar is hidden. */
+.ed-side{
+  position:absolute; left:0; top:0; bottom:0; z-index:20;
+  display:flex; flex-direction:column; background:var(--panel);
+}
+.ed-side-scroll{ flex:1 1 auto; overflow:auto; padding:14px; display:flex; justify-content:center; }
+/* flex:0 0 auto so a reference zoomed past 100% overflows into the scroll
+   rather than being shrunk back to the column's width. */
+.ed-side-scroll img{ flex:0 0 auto; height:auto; box-shadow:var(--edge); align-self:flex-start; }
+.ed-side-scroll.empty{ align-items:center; }
+.ed-side-empty{ margin:auto; text-align:center; color:var(--t3); font-size:12px; line-height:1.6; }
+/* Floats over the reference, same pill chrome as the canvas dock and the pager
+   so every zoom control in the editor reads as one family. */
+.ed-side-zoom{
+  position:absolute; left:50%; bottom:16px; transform:translateX(-50%);
+  display:flex; align-items:center; gap:2px; background:color-mix(in srgb, var(--panel) 92%, transparent);
+  border:1px solid var(--line); border-radius:9px; padding:4px;
+  box-shadow:var(--edge); backdrop-filter:blur(6px);
+}
+.ed-side-zoom button{ height:28px; min-width:28px; padding:0 8px; border:none; background:transparent; color:var(--text); border-radius:6px; cursor:pointer; font-size:12.5px; display:grid; place-items:center; }
+.ed-side-zoom button:hover{ background:var(--panel2); }
+.ed-side-zoom .zval{ min-width:44px; text-align:center; color:var(--t2); font-size:11.5px; }
+
+/* The whole strip is the drag handle, so it takes the resize cursor and
+   touch-action:none — without the latter the browser may claim the pointer for
+   a pan and cancel the drag halfway. */
+.ed-rail{
+  position:absolute; top:0; bottom:0; width:var(--rail-w); z-index:21;
+  cursor:col-resize; touch-action:none;
+}
+.ed-rail.hidden{ cursor:default; }
+/* The seam between sidebar and canvas: drawn on the rail's left edge, which is
+   also the edge the drag moves, so the affordance is where the hand goes. With
+   the sidebar hidden there is no seam to draw. */
+.ed-rail::before{
+  content:""; position:absolute; left:0; top:0; bottom:0; width:1px;
+  background:var(--line2); transition:background .12s;
+}
+.ed-rail.hidden::before{ display:none; }
+.ed-rail:hover::before{ background:var(--accent); }
+.ed-rail-tools{
+  position:absolute; left:2px; top:16px; display:flex; flex-direction:column; gap:3px;
+  background:color-mix(in srgb, var(--panel) 92%, transparent); border:1px solid var(--line);
+  border-radius:9px; padding:4px; box-shadow:var(--edge); backdrop-filter:blur(6px);
+}
+.ed-rail-tools button{
+  width:30px; height:30px; border:none; background:transparent; color:var(--text);
+  border-radius:6px; cursor:pointer; display:grid; place-items:center;
+}
+.ed-rail-tools button:hover:not(.on){ background:var(--panel2); }
+.ed-rail-tools button.on{ background:var(--accent); color:var(--accent-fg); }
+.ed-rail-tools button svg{ width:17px; height:17px; }
+.ed-rail-tools .caret{ color:var(--t2); }
+.ed-rail-tools .caret:hover{ color:var(--text); }
+.ed-rail-tools .sep{ height:1px; background:var(--line); margin:1px 3px; }

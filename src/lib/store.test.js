@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { app, loadProjectPages, addEmptyBox } from './store.svelte.js';
+import {
+  app,
+  loadProjectPages,
+  addEmptyBox,
+  clampSidebarWidth,
+  saveSidebar,
+  SIDEBAR_MIN,
+  SIDEBAR_MAX,
+} from './store.svelte.js';
 
 const pageWith = (boxes) => ({
   id: 1,
@@ -115,5 +123,26 @@ describe('loadProjectPages repair count', () => {
       { ...pageWith([box(undefined)]), id: 3 },
     ]);
     expect(repaired).toBe(3);
+  });
+});
+
+// The read side of `mt.sidebar` runs once at module load and cannot be re-run
+// from here, so what is testable without a DOM is the clamp it feeds the stored
+// width through, and that the whole mechanism survives the environment this
+// suite runs in — node has no `localStorage` at all.
+describe('sidebar geometry persistence', () => {
+  it('clamps a width to the range the rail can drag to', () => {
+    expect(clampSidebarWidth(SIDEBAR_MIN - 500)).toBe(SIDEBAR_MIN);
+    expect(clampSidebarWidth(SIDEBAR_MAX + 500)).toBe(SIDEBAR_MAX);
+    expect(clampSidebarWidth(320)).toBe(320);
+  });
+
+  it('saves without a storage to save to', () => {
+    expect(() => saveSidebar()).not.toThrow();
+  });
+
+  it('leaves the defaults alone when nothing could be read', () => {
+    expect(app.sidebarHidden).toBe(false);
+    expect(clampSidebarWidth(app.leftWidth)).toBe(app.leftWidth);
   });
 });
