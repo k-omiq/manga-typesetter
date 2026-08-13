@@ -8,6 +8,8 @@ import {
   saveSidebar,
   SIDEBAR_MIN,
   SIDEBAR_MAX,
+  setPageSwitchHook,
+  gotoPage,
 } from './store.svelte.js';
 
 const pageWith = (boxes) => ({
@@ -124,6 +126,29 @@ describe('loadProjectPages repair count', () => {
       { ...pageWith([box(undefined)]), id: 3 },
     ]);
     expect(repaired).toBe(3);
+  });
+});
+
+// The seam the history file hangs off: only the page on screen keeps its undo
+// stack in memory, so a page turn has to say which page it left and which it
+// arrived at. The store itself knows nothing about either.
+describe('the page switch hook', () => {
+  it('names both pages, and says nothing when the page did not change', () => {
+    loadProjectPages([{ ...pageWith([]), id: 1 }, { ...pageWith([]), id: 2 }]);
+    const seen = [];
+    setPageSwitchHook((from, to) => seen.push([from, to]));
+    try {
+      gotoPage(1);
+      gotoPage(1); // already there — nothing to hand over
+      gotoPage(9); // out of range — refused before anything moves
+      gotoPage(0);
+      expect(seen).toEqual([
+        [1, 2],
+        [2, 1],
+      ]);
+    } finally {
+      setPageSwitchHook(null);
+    }
   });
 });
 

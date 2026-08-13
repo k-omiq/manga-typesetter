@@ -1287,3 +1287,60 @@ describe('autosave debounce', () => {
     closeChapter();
   });
 });
+
+// The two ends of the wiring, against the same fake disk the chapter uses: the
+// chapter's own directory is where its undo history lives, and putting the
+// chapter away is what gets the live page's stack into it.
+const { record, history, resetHistory } = await import('./editor/history.svelte.js');
+
+describe('the undo history follows the chapter', () => {
+  const historyJson = (c) => JSON.parse(fsx._tree.files.get(`${c.dir}/logs/history.json`));
+  const aMove = (pageId) => ({
+    t: 'move',
+    pageId,
+    boxId: 'b1',
+    before: { x: 0, y: 0 },
+    after: { x: 9, y: 9 },
+  });
+  // `openChapter` starts the history deliberately without awaiting it, so a
+  // test has to let the microtasks it queued run before asking what it did.
+  const settled = () => new Promise((r) => setTimeout(r, 0));
+
+  it('writes the live page stack into the chapter it belongs to, on close', async () => {
+    const { c } = await seedOpenChapter();
+    await settled();
+    const pid = app.pages[0].id;
+    record(aMove(pid));
+    closeChapter();
+    await settled();
+    expect(historyJson(c).pages[String(pid)].undo).toHaveLength(1);
+    expect(history.canUndo).toBe(false); // and the live stack went with it
+  });
+
+  it('brings that stack back when the chapter is opened again', async () => {
+    const { p, c } = await seedOpenChapter();
+    await settled();
+    record(aMove(app.pages[0].id));
+    closeChapter();
+    await settled();
+    resetHistory();
+    await openChapter(p.id, c.id);
+    await settled();
+    expect(history.canUndo).toBe(true);
+    closeChapter();
+    await settled();
+  });
+
+  it('flushes the records on the way out of the app, alongside the document', async () => {
+    const { c } = await seedOpenChapter();
+    await settled();
+    const pid = app.pages[0].id;
+    record(aMove(pid));
+    // The quit path: the window is destroyed the moment this resolves, so
+    // anything still on the history's debounce has to have landed by then.
+    expect(await flushBeforeLeaving('quit')).toBe(true);
+    expect(historyJson(c).pages[String(pid)].undo).toHaveLength(1);
+    closeChapter();
+    await settled();
+  });
+});

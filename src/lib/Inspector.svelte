@@ -1,5 +1,17 @@
 <script>
-  import { app, byId, boxText, deleteBox, markUnsaved, beginEdit, rememberStyle } from './store.svelte.js';
+  import {
+    app,
+    byId,
+    boxText,
+    deleteBox,
+    markUnsaved,
+    beginEdit,
+    rememberStyle,
+    cloneStyle,
+    page,
+    pageById,
+  } from './store.svelte.js';
+  import { record } from './editor/history.svelte.js';
 
   const box = $derived(app.selectedId ? byId(app.selectedId) : null);
 
@@ -8,9 +20,65 @@
   function clamp(v, a, b) {
     return Math.max(a, Math.min(b, v));
   }
+
+  // ---------- one history entry per adjustment ----------
+  // `touch()` runs after every change this panel makes: every keystroke in a
+  // number field and every pixel of a slider drag. Recording there would spend
+  // the whole five-step history on one drag of the opacity slider, so the box is
+  // captured the first time a control is touched and the entry is written once
+  // the changes stop.
+  const SETTLE_MS = 400;
+  let pending = null;
+  let settleT;
+
+  // The three kinds of edit this panel makes, in one snapshot: the style, the
+  // geometry the Transform group writes straight onto the box, and the content
+  // box's text. Each is compared on its own and recorded as its own kind. An
+  // edit left unrecorded is worse than one with no undo at all — the next press
+  // then rewinds something the user did not just do.
+  const snapOf = (b) => ({
+    style: cloneStyle(b.style),
+    text: b.text,
+    x: b.x,
+    y: b.y,
+    w: b.w,
+    h: b.h,
+  });
+  const geomOf = (snap) => ({ x: snap.x, y: snap.y, w: snap.w, h: snap.h });
+
   function touch() {
+    // A different box than the one still pending settles that one first, rather
+    // than letting its entry stand in for an edit to this one.
+    if (pending && pending.boxId !== box?.id) settle();
+    if (box && !pending) pending = { pageId: page().id, boxId: box.id, before: snapOf(box) };
     markUnsaved();
     rememberStyle(box); // next placed box inherits the latest style tweaks
+    clearTimeout(settleT);
+    settleT = setTimeout(settle, SETTLE_MS);
+  }
+
+  function settle() {
+    clearTimeout(settleT);
+    const pend = pending;
+    pending = null;
+    if (!pend) return;
+    // Resolved by id rather than read off `box`: the settle can land after the
+    // user has selected something else or turned the page, and the entry
+    // belongs to the box that was edited either way.
+    const b = pageById(pend.pageId)?.boxes.find((x) => x.id === pend.boxId);
+    if (!b) return; // deleted while the timer ran — its own record covers that
+    const before = pend.before;
+    const after = snapOf(b);
+    const key = { pageId: pend.pageId, boxId: b.id };
+    if (JSON.stringify(before.style) !== JSON.stringify(after.style)) {
+      record({ t: 'style', ...key, before: before.style, after: after.style });
+    }
+    if (['x', 'y', 'w', 'h'].some((k) => before[k] !== after[k])) {
+      record({ t: 'resize', ...key, before: geomOf(before), after: geomOf(after) });
+    }
+    if (before.text !== after.text) {
+      record({ t: 'text', ...key, before: before.text ?? null, after: after.text });
+    }
   }
   function setSize(v) {
     box.style.size = clamp(+v || 6, 6, 200);

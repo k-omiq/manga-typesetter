@@ -11,7 +11,9 @@
     lineByN,
     toggleBulkTarget,
     isBulkTarget,
+    cloneStyle,
   } from './store.svelte.js';
+  import { record } from './editor/history.svelte.js';
   import { arcLayout } from './measure.js';
 
   let { box, pageFrameEl } = $props();
@@ -108,6 +110,11 @@
     const zz = app.zoom;
     const dims = page();
     const sx = e.clientX, sy = e.clientY, ox = box.x, oy = box.y;
+    // One drag is one entry, so the before-state is taken here and the record
+    // written on pointer-up — never in `move`, which fires per pixel and would
+    // spend the whole five-step history on a single gesture.
+    const pageId = dims.id;
+    const before = { x: ox, y: oy };
     const move = (ev) => {
       box.x = clamp(ox + (ev.clientX - sx) / zz, -box.w + 20, dims.w - 20);
       box.y = clamp(oy + (ev.clientY - sy) / zz, -box.h + 20, dims.h - 20);
@@ -116,6 +123,10 @@
     const up = () => {
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerup', up);
+      // A click that never moved is not an edit.
+      if (box.x !== before.x || box.y !== before.y) {
+        record({ t: 'move', pageId, boxId: box.id, before, after: { x: box.x, y: box.y } });
+      }
     };
     document.addEventListener('pointermove', move);
     document.addEventListener('pointerup', up);
@@ -127,8 +138,17 @@
     if (!selected) selectBox(box.id);
     const zz = app.zoom;
     const sx = e.clientX, sy = e.clientY;
+    // `o` is both the origin the drag measures against and the before-state the
+    // record is written from — the same five fields either way.
     const o = { x: box.x, y: box.y, w: box.w, h: box.h, size: s.size };
     const isRot = dir === 'rot';
+    const pageId = page().id;
+    // The rotate handle writes `style.rotation`, which is not one of those five
+    // and does not belong to a geometry record at all — `resize` would try to
+    // set it on the box itself. So the rotation gesture records the style it
+    // actually changed. Unrecorded, it would leave the next undo rewinding some
+    // earlier edit instead, which is worse than having no undo for it.
+    const styleBefore = isRot ? cloneStyle(box.style) : null;
     const cx = () => box.x + box.w / 2;
     const cy = () => box.y + box.h / 2;
 
@@ -156,6 +176,17 @@
     const up = () => {
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerup', up);
+      if (isRot) {
+        const after = cloneStyle(box.style);
+        if (after.rotation !== styleBefore.rotation) {
+          record({ t: 'style', pageId, boxId: box.id, before: styleBefore, after });
+        }
+        return;
+      }
+      const after = { x: box.x, y: box.y, w: box.w, h: box.h, size: box.style.size };
+      if (Object.keys(after).some((k) => after[k] !== o[k])) {
+        record({ t: 'resize', pageId, boxId: box.id, before: o, after });
+      }
     };
     document.addEventListener('pointermove', move);
     document.addEventListener('pointerup', up);

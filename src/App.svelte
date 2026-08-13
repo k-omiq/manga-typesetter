@@ -15,7 +15,9 @@
   import NewChapterDialog from './lib/home/NewChapterDialog.svelte';
   import ChapterSourcesSheet from './lib/home/ChapterSourcesSheet.svelte';
   import { onMount, untrack } from 'svelte';
-  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast } from './lib/store.svelte.js';
+  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast, setPageSwitchHook } from './lib/store.svelte.js';
+  import { initHistory, undo, redo } from './lib/editor/history.svelte.js';
+  import { switchHistoryPage } from './lib/editor/history-file.svelte.js';
   import { restoreFonts } from './lib/fonts.js';
   import { isTauri } from './lib/importer.js';
   import { checkSidecar } from './lib/sidecar.js';
@@ -39,6 +41,11 @@
 
   onMount(async () => {
     initTheme();
+    // Both are registrations, not work: the store hands its edits to the
+    // history and its page turns to the file that keeps every other page's
+    // stack. Done here, once, so nothing in the editor has to import either.
+    initHistory();
+    setPageSwitchHook(switchHistoryPage);
     try {
       await initRoot();
     } catch (e) {
@@ -207,10 +214,29 @@
       return deselect();
     }
     if (route.name !== 'editor') return;
+    // Before the single-letter tool shortcuts, and the reason they are guarded
+    // at all: without this, ⌘Z would read as a bare 'z' on its way past and
+    // ⌘Y would switch tools. The early returns above already leave the
+    // browser's own undo alone inside a field or an inline box edit.
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && (e.key === 'z' || e.key === 'Z')) {
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+      return;
+    }
+    if (mod && (e.key === 'y' || e.key === 'Y')) {
+      e.preventDefault();
+      redo();
+      return;
+    }
     if ((e.key === 'Delete' || e.key === 'Backspace') && app.selectedId) {
       e.preventDefault();
       deleteBox(app.selectedId);
     }
+    // The tool shortcuts are bare letters, and ⌘V/⌘T are not requests to
+    // switch tool.
+    if (mod) return;
     if (e.key === 'v' || e.key === 'V') setTool('place');
     if (e.key === 't' || e.key === 'T') setTool('text');
     if (e.key === 'ArrowRight' && !e.shiftKey) nextPage();

@@ -198,6 +198,49 @@ describe('one gesture, one step', () => {
   });
 });
 
+// The editable writes `box.text` on every keystroke, so what the history needs
+// from an inline edit is not the text — the document already has it — but one
+// entry per session, written by whatever ends the session.
+describe('one inline edit, one step', () => {
+  it('records an edit ended by clicking another box, where the blur is too late', () => {
+    beginEdit('b1');
+    page().boxes[0].text = 'changed';
+    selectBox('b2'); // pointerdown elsewhere nulls editingId…
+    endEdit('changed'); // …so the blur that follows has nothing left to end
+    expect(history.canUndo).toBe(true);
+    undo();
+    expect(page().boxes[0].text).toBe('one');
+    redo();
+    expect(page().boxes[0].text).toBe('changed');
+  });
+
+  it('records it once for the session, not once per keystroke', () => {
+    beginEdit('b1');
+    for (const t of ['o', 'on', 'once']) page().boxes[0].text = t;
+    deselect();
+    undo();
+    expect(page().boxes[0].text).toBe('one');
+    expect(history.canUndo).toBe(false);
+  });
+
+  it('leaves the history alone when the box was opened and nothing typed', () => {
+    beginEdit('b1');
+    deselect();
+    expect(history.canUndo).toBe(false);
+  });
+
+  // The other half of the same gesture: a box created and typed into is one
+  // press, and the text must not be counted a second time beside the placement.
+  it('does not count a new box and its first text as two steps', () => {
+    const id = addEmptyBox(300, 300);
+    page().boxes[2].text = 'real';
+    deselect();
+    undo();
+    expect(page().boxes.map((b) => b.id)).not.toContain(id);
+    expect(history.canUndo).toBe(false);
+  });
+});
+
 describe('selection follows the step', () => {
   // The step selects, selecting ends an inline edit, and ending one settles a
   // placement — which records. If that record reached the stack mid-step it

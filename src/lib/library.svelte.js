@@ -21,6 +21,7 @@ import {
   clearPending,
   toast,
 } from './store.svelte.js';
+import { openHistory, closeHistory, flushHistory } from './editor/history-file.svelte.js';
 import { setLeaveEditorHook } from './route.svelte.js';
 
 const ROOT_KEY = 'mt.libraryRoot';
@@ -955,6 +956,14 @@ export async function openChapter(projectId, chapterId) {
   // Mark it dirty instead and let the debounce write the repair now.
   if (minted) markUnsaved();
   else markSaved();
+
+  // Started, never awaited. `openHistory` drains its own write queue before it
+  // reads, so awaiting it here would put a slow — or wedged — filesystem call
+  // between the user and a chapter that is otherwise ready to draw. History is
+  // a convenience and may never hold up the document; the stack for page one
+  // simply arrives a moment after the page does. Nothing inside it rejects, and
+  // the catch is there so that stays true even if that ever changes.
+  openHistory(c.dir, app.pages[0]?.id ?? null).catch(() => {});
 }
 
 export async function saveOpenChapter() {
@@ -1007,6 +1016,15 @@ export async function saveOpenChapter() {
 }
 
 export function closeChapter() {
+  // Before the pages go, because the live page's stack is only in memory until
+  // this runs — without it the last 800ms of records never reach disk. The id
+  // comes off the page itself rather than `page()`, whose empty-document
+  // stand-in answers to 0 and would file the stack under a page that does not
+  // exist; a null hands the module back to its own record of which page is
+  // live. Not awaited: this function is synchronous and the document's teardown
+  // does not wait on the history's, which reports its own failures and swallows
+  // them.
+  closeHistory(app.pages[app.pageIndex]?.id ?? null);
   revokeOpenUrls();
   // Cleared before the pages are: a debounce that lands after this point finds
   // no chapterRef and is a no-op, rather than a write of stale state.
@@ -1066,6 +1084,15 @@ export function resetSaveFailures() {
 // must stay put.
 export async function flushBeforeLeaving(where) {
   const copy = LEAVING[where] ?? LEAVING.editor;
+  // The history's own flush belongs on this path — it is the only thing that
+  // gets the last records out on the way to a quit, which destroys the window
+  // the moment this resolves. Started alongside the document's save rather than
+  // before it, and its result never consulted: whether the user may leave is
+  // decided by the chapter reaching disk and by nothing else. It cannot reject
+  // (every failure inside is reported once and swallowed) and is caught anyway,
+  // so no future change to that can turn a failed history write into a window
+  // that will not close.
+  const history = flushHistory().catch(() => {});
   try {
     await flushSave();
     saveFailures = 0;
@@ -1081,6 +1108,11 @@ export async function flushBeforeLeaving(where) {
     saveFailures = 0;
     toast(copy.force);
     return true;
+  } finally {
+    // Awaited on the way out whichever answer was reached, so the records are
+    // on disk before the caller destroys the window. It cannot change that
+    // answer — a `finally` does not overwrite a return.
+    await history;
   }
 }
 

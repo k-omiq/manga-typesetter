@@ -304,6 +304,14 @@ export function setRecorder(fn) {
 export function recordEdit(entry) {
   if (recorder) recorder(entry);
 }
+// Registered the same way, for the same reason: only the page on screen keeps
+// its undo stack in memory, so something has to hear about a page turn and swap
+// it for the one on disk. The store must not be the module that knows that,
+// hence a hook rather than an import.
+let pageSwitchHook = null;
+export function setPageSwitchHook(fn) {
+  pageSwitchHook = fn;
+}
 // The history addresses pages by id, not by index: an entry may outlive the
 // page being the one on screen.
 export const pageById = (id) => app.pages.find((p) => p.id === id) ?? null;
@@ -315,10 +323,16 @@ export const pageById = (id) => app.pages.find((p) => p.id === id) ?? null;
 // the box pending, and whoever ends the edit settles it: one `place` record if
 // the box survived, nothing at all if it did not.
 let pendingPlace = null;
+// What the box being edited read when the edit began. Held here rather than in
+// the component that opened the edit, because that component is frequently not
+// the one that ends it — see `settleText` — and one entry per edit session is
+// only possible while somebody still remembers the text it started from.
+let editBefore = undefined;
 // Exported for the paths that put the whole document away: there is nothing
 // left to record against, so the gesture is dropped rather than settled.
 export const clearPending = () => {
   pendingPlace = null;
+  editBefore = undefined;
 };
 // Every path that ends an edit calls this — not just `endEdit`. `deselect` and
 // `selectBox` null `editingId` on pointerdown, before the browser fires blur on
@@ -340,6 +354,30 @@ function settlePending() {
   recordEdit({ t: 'place', pageId: p.id, index, box: $state.snapshot(p.boxes[index]) });
 }
 
+// The text half of ending an edit, and it has to live beside `settlePending`
+// for exactly the same reason: the contenteditable writes `box.text` on every
+// keystroke, so by the time anything ends the edit the document is already
+// current — what is missing is the one record that stands for the whole
+// session. And the blur that would carry it arrives after `deselect` or
+// `selectBox` has already nulled `editingId`, so `endEdit` finds nothing to end
+// and returns early. Left to the blur alone, every edit finished by clicking
+// somewhere else would be applied and never recorded, and the next undo would
+// rewind an edit the user did not just make.
+//
+// A box whose placement is still pending is left alone: `settlePending` records
+// that gesture as one `place` carrying the typed text, and a `text` record
+// beside it would be the same edit counted twice.
+function settleText() {
+  const before = editBefore;
+  editBefore = undefined;
+  const id = app.editingId;
+  if (id == null || before === undefined) return;
+  if (pendingPlace?.id === id) return;
+  const b = byId(id);
+  if (!b || b.text === before) return;
+  recordEdit({ t: 'text', pageId: page().id, boxId: id, before: before ?? null, after: b.text });
+}
+
 // ---------- toast ----------
 let toastT;
 export function toast(msg) {
@@ -353,6 +391,7 @@ export function toast(msg) {
 // ---------- page nav ----------
 export function gotoPage(i) {
   if (i < 0 || i > app.pages.length - 1) return;
+  const from = page().id;
   app.pageIndex = i;
   app.selectedId = null;
   // A box left mid-edit on the page behind us is no longer a gesture in
@@ -360,19 +399,30 @@ export function gotoPage(i) {
   clearPending();
   const p = page();
   if (p.activeLineN == null) p.activeLineN = firstUnplaced(p);
+  // Only when the page actually changed. A re-entry onto the page already on
+  // screen would otherwise hand the live stack over and take it straight back,
+  // scheduling a write of a document nothing has changed.
+  if (pageSwitchHook && from !== p.id) pageSwitchHook(from, p.id);
 }
 export const nextPage = () => gotoPage(app.pageIndex + 1);
 export const prevPage = () => gotoPage(app.pageIndex - 1);
 
 // ---------- selection ----------
 export function selectBox(id) {
-  if (app.editingId && app.editingId !== id) settlePending();
+  // Text first: it is the half that has to see `pendingPlace` still standing.
+  if (app.editingId && app.editingId !== id) {
+    settleText();
+    settlePending();
+  }
   app.selectedId = id;
   if (app.editingId && app.editingId !== id) app.editingId = null;
   app.collapsed.inspector = false;
 }
 export function deselect() {
-  if (app.editingId) settlePending();
+  if (app.editingId) {
+    settleText();
+    settlePending();
+  }
   app.selectedId = null;
   app.editingId = null;
 }
@@ -381,15 +431,22 @@ export function deselect() {
 export function beginEdit(id) {
   selectBox(id);
   app.editingId = id;
+  // Remembered here, at the one moment it is still true, so whoever ends the
+  // edit records one entry for the session rather than one per keystroke.
+  editBefore = byId(id)?.text ?? null;
 }
-// `beforeText` is what the box read when the edit began — only the caller knows
-// that, since the box has already been typed into by the time we get here. It
-// is optional: left off, the edit is applied but not recorded, so a caller that
-// has not been taught to pass it still works.
+// `beforeText` is what the box read when the edit began. It is optional — left
+// off, what `beginEdit` remembered is used, which is what every caller in the
+// app relies on; an explicit one is for a caller that knows better.
 export function endEdit(commitText, beforeText) {
   const id = app.editingId;
+  const before = beforeText !== undefined ? beforeText : editBefore;
   app.editingId = null;
   if (id == null) return;
+  // Below the early return on purpose: a blur that arrives after something else
+  // has already ended the edit must not clear the before-text of an edit that
+  // has since begun. Whoever ended it took this with them.
+  editBefore = undefined;
   const b = byId(id);
   if (!b) return;
   if (commitText != null) {
@@ -408,12 +465,12 @@ export function endEdit(commitText, beforeText) {
     settlePending();
     return;
   }
-  if (beforeText !== undefined && commitText != null && commitText !== beforeText) {
+  if (before !== undefined && commitText != null && commitText !== before) {
     recordEdit({
       t: 'text',
       pageId: page().id,
       boxId: id,
-      before: beforeText ?? null,
+      before: before ?? null,
       after: commitText,
     });
   }
@@ -561,7 +618,10 @@ export function deleteBox(id) {
 export function openBulk() {
   // Bulk mode ends any inline edit, and the box being typed into stays on the
   // page — so the gesture that created it is settled and recorded, not dropped.
-  if (app.editingId) settlePending();
+  if (app.editingId) {
+    settleText();
+    settlePending();
+  }
   const seed = app.selectedId ? byId(app.selectedId)?.style : null;
   app.bulk = {
     active: true,
