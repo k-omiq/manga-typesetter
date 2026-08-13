@@ -11,6 +11,7 @@ import {
   selectBox,
   setRecorder,
   cloneStyle,
+  settleEdits,
 } from '../store.svelte.js';
 
 export const MAX_STEPS = 5;
@@ -206,8 +207,21 @@ function step(from, to, dir) {
   }
 }
 
-export const undo = () => step(undoStack, redoStack, 'undo');
-export const redo = () => step(redoStack, undoStack, 'redo');
+// An edit still inside a settle window has been applied to the document and not
+// yet recorded, and it is the one the user means: dragging a slider and pressing
+// undo is how anyone rejects a change. Stepping over it would rewind the entry
+// beneath it instead, leave the unwanted change standing, and then let the
+// settle land on top and clear the redo this step had just pushed — no way
+// forward and no way back. So the window is closed first, from here rather than
+// from the keyboard handler, so every way of asking for a step gets it.
+export const undo = () => {
+  settleEdits();
+  return step(undoStack, redoStack, 'undo');
+};
+export const redo = () => {
+  settleEdits();
+  return step(redoStack, undoStack, 'redo');
+};
 
 // A copy of the live stack, for a write that must not disturb it.
 export function peekStack() {

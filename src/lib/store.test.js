@@ -11,7 +11,9 @@ import {
   SIDEBAR_MIN,
   SIDEBAR_MAX,
   setPageSwitchHook,
+  setEditSettleHook,
   gotoPage,
+  page,
 } from './store.svelte.js';
 
 const pageWith = (boxes) => ({
@@ -150,6 +152,23 @@ describe('the page switch hook', () => {
       ]);
     } finally {
       setPageSwitchHook(null);
+    }
+  });
+
+  // An entry still inside a settle window belongs to the page being left, and
+  // the live stack is the only place it can be pushed — `recordEdit` has no
+  // page awareness of its own. A settle that ran a step later would land on the
+  // page being arrived at, and the next write would file that page's entries
+  // under this one's key.
+  it('settles a pending edit while the page being left is still the live one', () => {
+    loadProjectPages([{ ...pageWith([]), id: 1 }, { ...pageWith([]), id: 2 }]);
+    const seen = [];
+    setEditSettleHook(() => seen.push(page().id));
+    try {
+      gotoPage(1);
+      expect(seen).toEqual([1]);
+    } finally {
+      setEditSettleHook(null);
     }
   });
 });

@@ -10,6 +10,7 @@ import {
   selectBox,
   deselect,
   page,
+  setEditSettleHook,
 } from '../store.svelte.js';
 import {
   history,
@@ -223,6 +224,19 @@ describe('one inline edit, one step', () => {
     expect(history.canUndo).toBe(false);
   });
 
+  // The box carries the double-click that opens the edit and the editable
+  // inside it has no handler of its own, so double-clicking a word to select it
+  // re-enters `beginEdit` on the box already being edited.
+  it('keeps the text the session began with when the box is double-clicked again', () => {
+    beginEdit('b1');
+    page().boxes[0].text = 'half';
+    beginEdit('b1');
+    page().boxes[0].text = 'whole';
+    deselect();
+    undo();
+    expect(page().boxes[0].text).toBe('one');
+  });
+
   it('leaves the history alone when the box was opened and nothing typed', () => {
     beginEdit('b1');
     deselect();
@@ -361,5 +375,48 @@ describe('plain data', () => {
     before.x = 999;
     undo();
     expect(page().boxes[0].x).toBe(1);
+  });
+});
+
+// Dragging a slider and pressing undo is how anyone rejects a change, and it
+// lands inside the window in which the change has been applied and not yet
+// recorded. Stepping over it would rewind the entry beneath it, leave the
+// unwanted change standing, and then let the settle clear the redo the step had
+// just pushed — no way forward and no way back.
+describe('a step closes an open settle window first', () => {
+  const settlesTo99 = () =>
+    record({ t: 'move', pageId: 1, boxId: 'b1', before: { x: 10, y: 10 }, after: { x: 99, y: 99 } });
+
+  it('records what is still settling, then steps that very entry', () => {
+    setEditSettleHook(settlesTo99);
+    try {
+      page().boxes[0].x = 99; // applied to the document, not yet recorded
+      undo();
+      expect(page().boxes[0].x).toBe(10);
+      expect(history.canRedo).toBe(true);
+    } finally {
+      setEditSettleHook(null);
+    }
+  });
+
+  it('settles before a redo too, so a change made since cannot be stepped past', () => {
+    page().boxes[1].x = 60;
+    record({ t: 'move', pageId: 1, boxId: 'b2', before: { x: 50, y: 50 }, after: { x: 60, y: 60 } });
+    undo();
+    expect(page().boxes[1].x).toBe(50);
+    expect(history.canRedo).toBe(true);
+    setEditSettleHook(settlesTo99);
+    try {
+      page().boxes[0].x = 99; // a new edit, still settling
+      redo();
+      // Recording that edit is what clears the redo stack; settling first is
+      // what makes it happen before the redo rather than on top of one already
+      // taken, where it would have left the user with neither direction.
+      expect(page().boxes[1].x).toBe(50);
+      expect(history.canRedo).toBe(false);
+      expect(history.canUndo).toBe(true);
+    } finally {
+      setEditSettleHook(null);
+    }
   });
 });

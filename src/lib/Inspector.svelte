@@ -10,8 +10,10 @@
     cloneStyle,
     page,
     pageById,
+    setEditSettleHook,
   } from './store.svelte.js';
   import { record } from './editor/history.svelte.js';
+  import { onDestroy } from 'svelte';
 
   const box = $derived(app.selectedId ? byId(app.selectedId) : null);
 
@@ -57,14 +59,36 @@
     settleT = setTimeout(settle, SETTLE_MS);
   }
 
+  // Everything that would make a pending entry land somewhere it does not
+  // belong closes the window through this seam first: the page turn, the undo,
+  // the start of a drag. Registered rather than exported, so nothing else has to
+  // know this panel is on screen.
+  setEditSettleHook(settle);
+  onDestroy(() => {
+    setEditSettleHook(null);
+    // A settle that fires after this panel is gone would be reading whatever
+    // document is open by then. Page and box ids come off per-document
+    // counters and collide freely across chapters, so a stale entry could find
+    // a live box of the same name and record an edit nobody made.
+    clearTimeout(settleT);
+    pending = null;
+  });
+
   function settle() {
     clearTimeout(settleT);
     const pend = pending;
     pending = null;
     if (!pend) return;
+    // Belt and braces beside that seam: `record` pushes onto whichever page's
+    // stack is live and has no page awareness of its own, so an entry for a
+    // page that has since been left would land on the page now on screen — and
+    // the next write would then file that page's whole stack under this one's
+    // key. The hook is what stops that happening; this is what keeps it from
+    // mattering should a path ever be added that does not call the hook.
+    if (pend.pageId !== page().id) return;
     // Resolved by id rather than read off `box`: the settle can land after the
-    // user has selected something else or turned the page, and the entry
-    // belongs to the box that was edited either way.
+    // user has selected something else, and the entry belongs to the box that
+    // was edited either way.
     const b = pageById(pend.pageId)?.boxes.find((x) => x.id === pend.boxId);
     if (!b) return; // deleted while the timer ran — its own record covers that
     const before = pend.before;

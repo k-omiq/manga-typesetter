@@ -325,6 +325,21 @@ let pageSwitchHook = null;
 export function setPageSwitchHook(fn) {
   pageSwitchHook = fn;
 }
+// And a third, for the edit that is still being made when something else
+// happens. A panel that coalesces a run of changes into one entry — the
+// Inspector's settle timer — always leaves a window in which an edit has been
+// applied to the document and not yet recorded. `recordEdit` has no page
+// awareness of its own: it pushes onto whichever stack is live at the moment it
+// is called. So everything that would make a late entry land somewhere it does
+// not belong — a page turn, an undo, the start of a drag — closes that window
+// through here first.
+let editSettleHook = null;
+export function setEditSettleHook(fn) {
+  editSettleHook = fn;
+}
+export function settleEdits() {
+  editSettleHook?.();
+}
 // The history addresses pages by id, not by index: an entry may outlive the
 // page being the one on screen.
 export const pageById = (id) => app.pages.find((p) => p.id === id) ?? null;
@@ -404,6 +419,12 @@ export function toast(msg) {
 // ---------- page nav ----------
 export function gotoPage(i) {
   if (i < 0 || i > app.pages.length - 1) return;
+  // Before the index moves, and it has to be: an entry still inside its settle
+  // window belongs to the page being left, and the stack that is live is the
+  // only place it can be pushed. A step later and it would land on the page
+  // being arrived at, where the next write would file that page's entries under
+  // this one's key.
+  settleEdits();
   const from = page().id;
   app.pageIndex = i;
   app.selectedId = null;
@@ -442,11 +463,17 @@ export function deselect() {
 
 // ---------- inline editing ----------
 export function beginEdit(id) {
+  // Re-entrant: the box carries the double-click that opens the edit, and the
+  // contenteditable inside it has no handler of its own, so double-clicking a
+  // word to select it lands here again on the box already being edited. Taking
+  // the before-text again would move it forward to whatever has been typed
+  // since, and the undo would then only rewind as far as the last double-click.
+  const already = app.editingId === id;
   selectBox(id);
   app.editingId = id;
   // Remembered here, at the one moment it is still true, so whoever ends the
   // edit records one entry for the session rather than one per keystroke.
-  editBefore = byId(id)?.text ?? null;
+  if (!already) editBefore = byId(id)?.text ?? null;
 }
 // `beforeText` is what the box read when the edit began. It is optional — left
 // off, what `beginEdit` remembered is used, which is what every caller in the

@@ -1343,4 +1343,38 @@ describe('the undo history follows the chapter', () => {
     closeChapter();
     await settled();
   });
+
+  // The history module reports and swallows every failure, so the one thing
+  // left that can go wrong in it is a call that never comes back — a volume
+  // that has gone away, a wedged mount. The close-request path is single-flight,
+  // so a window held open by that could not even be retried.
+  it('does not let a history write that never returns pin the window open', async () => {
+    await seedOpenChapter();
+    await settled();
+    record(aMove(app.pages[0].id));
+    let release;
+    const wedged = new Promise((r) => (release = r));
+    const orig = fsx.writeTextFileAtomic;
+    fsx.writeTextFileAtomic = function (path, body) {
+      return path.endsWith('/logs/history.json')
+        ? wedged.then(() => orig.call(this, path, body))
+        : orig.call(this, path, body);
+    };
+    vi.useFakeTimers();
+    try {
+      const leaving = flushBeforeLeaving('quit');
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(await leaving).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      // Let the wedged write through on the way out: the queue it sits in is
+      // module-global, and a case that left it stuck would take the next one
+      // with it.
+      release();
+      await settled();
+      fsx.writeTextFileAtomic = orig;
+    }
+    closeChapter();
+    await settled();
+  });
 });

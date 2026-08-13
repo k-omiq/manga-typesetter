@@ -12,6 +12,7 @@
     toggleBulkTarget,
     isBulkTarget,
     cloneStyle,
+    settleEdits,
   } from './store.svelte.js';
   import { record } from './editor/history.svelte.js';
   import { arcLayout } from './measure.js';
@@ -107,6 +108,11 @@
 
   function startMove(e) {
     e.preventDefault();
+    // Whatever the Inspector is still holding is written now, from the geometry
+    // this drag is about to change. Left to its own timer it would fire
+    // mid-drag, record a resize from the pre-tweak geometry, and cost the user
+    // two of their five steps for one gesture.
+    settleEdits();
     const zz = app.zoom;
     const dims = page();
     const sx = e.clientX, sy = e.clientY, ox = box.x, oy = box.y;
@@ -136,6 +142,7 @@
     e.preventDefault();
     e.stopPropagation();
     if (!selected) selectBox(box.id);
+    settleEdits(); // same as startMove: one gesture must not cost two steps
     const zz = app.zoom;
     const sx = e.clientX, sy = e.clientY;
     // `o` is both the origin the drag measures against and the before-state the

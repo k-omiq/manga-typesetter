@@ -1084,6 +1084,27 @@ export function resetSaveFailures() {
   saveFailures = 0;
 }
 
+// Wait for a promise, but not forever. Every failure inside the history's write
+// is reported and swallowed, so the one thing left that can go wrong there is a
+// call that never comes back — a network volume that has gone away, a wedged
+// mount. Awaited unbounded, that would hang the quit for good: the close-request
+// path is single-flight, so a second press of the red button would not even
+// retry, and the window could never be closed again.
+const HISTORY_WAIT_MS = 1500;
+async function atMost(ms, p) {
+  let t;
+  try {
+    await Promise.race([
+      p,
+      new Promise((r) => {
+        t = setTimeout(r, ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // Flush whatever the debounce is holding, on the way out of the chapter.
 // `where` picks the wording — 'editor' for closing the chapter, 'quit' for
 // closing the window. Resolves true when it is safe to go, false when the caller
@@ -1115,10 +1136,12 @@ export async function flushBeforeLeaving(where) {
     toast(copy.force);
     return true;
   } finally {
-    // Awaited on the way out whichever answer was reached, so the records are
-    // on disk before the caller destroys the window. It cannot change that
-    // answer — a `finally` does not overwrite a return.
-    await history;
+    // Only the quit path waits, and only for a bounded moment. Quitting
+    // destroys the window as soon as this resolves, so the records have to have
+    // landed by then; leaving the editor destroys nothing, and `closeChapter`
+    // flushes again a moment later anyway. Neither can change the answer — a
+    // `finally` does not overwrite a return.
+    if (where === 'quit') await atMost(HISTORY_WAIT_MS, history);
   }
 }
 

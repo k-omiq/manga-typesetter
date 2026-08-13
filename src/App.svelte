@@ -235,10 +235,11 @@
       deleteBox(app.selectedId);
     }
     // The tool shortcuts are bare letters, and ⌘V/⌘T are not requests to
-    // switch tool.
-    if (mod) return;
-    if (e.key === 'v' || e.key === 'V') setTool('place');
-    if (e.key === 't' || e.key === 'T') setTool('text');
+    // switch tool. Only these two are guarded: the page turns below have always
+    // answered to a held modifier, and this is not the task that takes that
+    // away.
+    if (!mod && (e.key === 'v' || e.key === 'V')) setTool('place');
+    if (!mod && (e.key === 't' || e.key === 'T')) setTool('text');
     if (e.key === 'ArrowRight' && !e.shiftKey) nextPage();
     if (e.key === 'ArrowLeft' && !e.shiftKey) prevPage();
   }
