@@ -1,3 +1,12 @@
+<script module>
+  // Which instance's `settle` currently holds the store's single settle slot.
+  // Shared across instances on purpose: a panel on its way out must only take
+  // the slot back if it is still its own. With two of these mounted — a second
+  // inspector, a detached one — an unconditional release would silently disable
+  // the seam for the one that is staying.
+  let owner = null;
+</script>
+
 <script>
   import {
     app,
@@ -64,8 +73,13 @@
   // the start of a drag. Registered rather than exported, so nothing else has to
   // know this panel is on screen.
   setEditSettleHook(settle);
+  owner = settle;
   onDestroy(() => {
-    setEditSettleHook(null);
+    // Only ours to release — see `owner` above.
+    if (owner === settle) {
+      setEditSettleHook(null);
+      owner = null;
+    }
     // A settle that fires after this panel is gone would be reading whatever
     // document is open by then. Page and box ids come off per-document
     // counters and collide freely across chapters, so a stale entry could find

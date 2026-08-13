@@ -19,6 +19,7 @@ import {
   setSaver,
   flushSave,
   clearPending,
+  settleEdits,
   toast,
 } from './store.svelte.js';
 import { openHistory, closeHistory, flushHistory } from './editor/history-file.svelte.js';
@@ -1111,6 +1112,16 @@ async function atMost(ms, p) {
 // must stay put.
 export async function flushBeforeLeaving(where) {
   const copy = LEAVING[where] ?? LEAVING.editor;
+  // First of all, and synchronously: an edit still inside its settle window has
+  // been applied to the document and will be written by the save below, while
+  // the panel holding its record is about to be unmounted and throw it away.
+  // The stack would then come back off disk a step short of the document, and
+  // the next undo would rewind the edit before it while the last one stood —
+  // the same shape as a settle landing on the wrong page, through a narrower
+  // door. Here rather than after the flushes because the record has to exist
+  // before the history's flush takes its snapshot, and while `app.pages` is
+  // still the document the entry names.
+  settleEdits();
   // The history's own flush belongs on this path — it is the only thing that
   // gets the last records out on the way to a quit, which destroys the window
   // the moment this resolves. Started alongside the document's save rather than

@@ -1292,6 +1292,7 @@ describe('autosave debounce', () => {
 // chapter's own directory is where its undo history lives, and putting the
 // chapter away is what gets the live page's stack into it.
 const { record, history, resetHistory } = await import('./editor/history.svelte.js');
+const { setEditSettleHook } = await import('./store.svelte.js');
 
 describe('the undo history follows the chapter', () => {
   const historyJson = (c) => JSON.parse(fsx._tree.files.get(`${c.dir}/logs/history.json`));
@@ -1342,6 +1343,34 @@ describe('the undo history follows the chapter', () => {
     expect(historyJson(c).pages[String(pid)].undo).toHaveLength(1);
     closeChapter();
     await settled();
+  });
+
+  // A panel that coalesces a run of changes into one entry always leaves a
+  // window in which the edit has been applied to the document and not yet
+  // recorded. Leaving the editor unmounts that panel, so without a settle on
+  // the way out the tweak reaches disk while its history entry never exists:
+  // the stack comes back a step short of the document, and the next undo
+  // rewinds the edit before it while the last one still stands.
+  it('records an edit still inside its settle window before the editor is left', async () => {
+    const { c } = await seedOpenChapter();
+    await settled();
+    const pid = app.pages[0].id;
+    // Standing in for the Inspector's settle timer: an entry that exists only
+    // for as long as someone asks for it, and dies with the panel otherwise.
+    let pending = aMove(pid);
+    setEditSettleHook(() => {
+      if (pending) record(pending);
+      pending = null;
+    });
+    try {
+      expect(await flushBeforeLeaving('editor')).toBe(true);
+    } finally {
+      setEditSettleHook(null);
+    }
+    expect(history.canUndo).toBe(true);
+    closeChapter();
+    await settled();
+    expect(historyJson(c).pages[String(pid)].undo).toHaveLength(1);
   });
 
   // The history module reports and swallows every failure, so the one thing
