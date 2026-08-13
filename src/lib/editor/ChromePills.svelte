@@ -1,0 +1,105 @@
+<script>
+  // The editor's chrome, floating over a full-bleed canvas rather than sitting
+  // in a bar above it: identity and the way out at top-left, the two verbs the
+  // canvas answers to at its top-right, the app-level drawers at the far right.
+  // Nothing here is laid out by a parent — every row pins itself to the window,
+  // so the canvas underneath is never inset by chrome it does not know about.
+  import { app } from '../store.svelte.js';
+  import { goProject, goLibrary } from '../route.svelte.js';
+  import { projectById, chapterById } from '../library.svelte.js';
+  import DetectMenu from './DetectMenu.svelte';
+
+  let { onFontLib, onSettings } = $props();
+
+  const label = $derived.by(() => {
+    const ref = app.chapterRef;
+    if (!ref) return 'Untitled';
+    const p = projectById(ref.projectId);
+    const c = chapterById(ref.projectId, ref.chapterId);
+    if (!p || !c) return 'Untitled';
+    return `${p.name} · ${c.title || 'Chapter ' + c.number}`;
+  });
+
+  // The save indicator rides on the project pill because it is a fact about the
+  // open chapter. There is no manual save in this app, so a rejected autosave is
+  // the user's only signal that their work is not reaching the disk — hence the
+  // third state, and hence its staying up until a write lands.
+  const saveTitle = $derived(
+    app.saveFailed
+      ? 'Could not save — your last edits are only in memory'
+      : app.saved
+        ? 'All changes saved'
+        : 'Unsaved changes — saving shortly',
+  );
+
+  // Leaving the editor awaits a save before the route moves. A second click in
+  // that window would run the leave hook twice and push a duplicate history
+  // entry, so the control is inert until the first navigation settles.
+  let leaving = $state(false);
+
+  async function goHome() {
+    if (leaving) return;
+    leaving = true;
+    try {
+      const pid = app.chapterRef?.projectId;
+      // A refused leave has already told the user why and left them here; there
+      // is nothing more to do.
+      await (pid ? goProject(pid) : goLibrary());
+    } finally {
+      leaving = false;
+    }
+  }
+
+  // Handed to the menu so its outside-pointerdown check can spare the button
+  // that opened it — see the note there.
+  let detectBtn = $state(null);
+  let detectOpen = $state(false);
+</script>
+
+<div class="pill-row left">
+  <button class="pill pill-icon" onclick={goHome} disabled={leaving} data-tip="Back to the project" aria-label="Back to the project">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 7.4 8 3l5.4 4.4" /><path d="M4.3 6.9v6.3h7.4V6.9" /></svg>
+  </button>
+  <div class="pill pill-proj">
+    <span class="pill-label">{label}</span>
+    <span class="save-dot" class:saved={app.saved} class:failed={app.saveFailed} title={saveTitle}></span>
+  </div>
+</div>
+
+<div class="pill-row canvas-right">
+  <div class="pill-anchor">
+    <button
+      class="pill pill-icon"
+      class:on={detectOpen}
+      class:busy={!!app.detectBatch}
+      bind:this={detectBtn}
+      onclick={() => (detectOpen = !detectOpen)}
+      aria-haspopup="menu"
+      aria-expanded={detectOpen}
+      aria-label="Detect text"
+      data-tip="Detect text + OCR"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" /><path d="M7 12h10" /></svg>
+      <!-- The only thing the glyph cannot say on its own: how far through a
+           whole-chapter run we are. Present only while one is in flight. -->
+      {#if app.detectBatch}
+        <span class="pill-count">{app.detectBatch.done}/{app.detectBatch.total}</span>
+      {/if}
+    </button>
+    {#if detectOpen}
+      <DetectMenu anchor={detectBtn} onClose={() => (detectOpen = false)} />
+    {/if}
+  </div>
+  <button class="pill pill-accent" onclick={() => (app.exportOpen = true)} disabled={app.exporting}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" /></svg>Export
+  </button>
+</div>
+
+<div class="pill-row far-right">
+  <button class="pill pill-icon" onclick={onFontLib} data-tip="Font library" aria-label="Font library">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" /><path d="M12 4v16" /><path d="M9 20h6" /></svg>
+  </button>
+  <button class="pill pill-icon" onclick={onSettings} data-tip="Settings" aria-label="Settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+  </button>
+</div>

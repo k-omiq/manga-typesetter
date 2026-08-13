@@ -22,6 +22,13 @@
   --status-h:26px;
   /* Mirrored by RAIL_W in src/lib/editor/RailTools.svelte — see the note there. */
   --rail-w:44px;
+  /* The right panel column, and the vertical room the floating chrome claims at
+     the top of the canvas (12px inset + a 32px pill + 8px of air). Geometry, not
+     colour, so both blocks carry the same values — declared twice all the same,
+     so a theme that ever needs its own is a one-line change rather than a
+     restructure. */
+  --panel-col:352px;
+  --chrome-top:52px;
   --radius:6px;
 }
 :root[data-theme="dark"]{
@@ -36,6 +43,9 @@
   --edge:0 0 0 1px rgba(255,255,255,.05), 0 6px 20px rgba(0,0,0,.42);
   --edge-soft:0 0 0 1px rgba(255,255,255,.05);
   --scrim:rgba(0,0,0,.6);
+  /* Geometry, so identical to light: see the note above. */
+  --panel-col:352px;
+  --chrome-top:52px;
 }
 
 *{ box-sizing:border-box; }
@@ -530,7 +540,7 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 .export-modal .modal-body{ display:flex; flex-direction:column; gap:16px; }
 .export-modal .grp{ display:flex; flex-direction:column; gap:6px; }
 .export-modal label.lbl, .export-modal .lbl{ font-size:11px; color:var(--t2); text-transform:uppercase; letter-spacing:.4px; }
-.export-modal input[type=text]{ height:34px; }
+.export-modal input[type=text], .export-modal select{ height:34px; }
 .exp-sub{ font-size:11px; color:var(--t2); }
 .exp-sub code, .exp-dir code{ background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:11px; }
 .exp-dir{ font-size:12px; color:var(--text); background:var(--panel2); border:1px solid var(--line); border-radius:7px; padding:9px 11px; word-break:break-all; }
@@ -825,3 +835,73 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 .ed-rail-tools .caret{ color:var(--t2); }
 .ed-rail-tools .caret:hover{ color:var(--text); }
 .ed-rail-tools .sep{ height:1px; background:var(--line); margin:1px 3px; }
+
+/* ---------- floating chrome ---------- */
+/* Three rows of pills over the full-bleed canvas, where a top bar used to be.
+   None of them is laid out by a parent: each pins itself to the window, so the
+   canvas is never inset by chrome it does not know about. Above the reference
+   sidebar and the rail (20/21) and below the bulk panel (40) and the floating
+   panels (50+) — the chrome is always reachable, but a panel the user dragged
+   somewhere is never cut in half by it. */
+.pill-row{
+  position:fixed; top:12px; z-index:30;
+  display:flex; align-items:center; gap:8px;
+}
+/* Capped, because a long project · chapter name would otherwise run under the
+   canvas row opposite it. */
+.pill-row.left{ left:16px; max-width:min(46vw,520px); }
+/* The canvas's top-right, not the window's: everything past --panel-col belongs
+   to the right panel column, and these two verbs act on the canvas. */
+.pill-row.canvas-right{ right:calc(var(--panel-col) + 24px); }
+.pill-row.far-right{ right:16px; }
+
+.pill{
+  height:32px; flex:0 1 auto; min-width:0;
+  display:flex; align-items:center; gap:7px; padding:0 12px;
+  background:var(--panel); border:1px solid var(--line2); border-radius:16px;
+  box-shadow:var(--edge); color:var(--text); font-size:12px;
+  cursor:pointer; white-space:nowrap;
+}
+.pill:hover{ border-color:var(--t3); }
+.pill:disabled{ color:var(--t3); border-color:var(--line2); cursor:default; }
+.pill svg{ width:16px; height:16px; flex:none; }
+.pill-icon{ width:32px; flex:none; padding:0; justify-content:center; }
+/* Only while a whole-chapter detect is in flight: the glyph cannot say how far
+   through it is, so the pill grows a counter for exactly as long as that matters. */
+.pill-icon.busy{ width:auto; padding:0 11px; }
+.pill-icon.on{ background:var(--panel2); border-color:var(--t3); }
+.pill-count{ font-size:11px; color:var(--t2); }
+.pill-accent{ background:var(--accent); border-color:var(--accent); color:var(--accent-fg); font-weight:600; }
+.pill-accent:hover{ border-color:var(--accent); }
+.pill-accent:disabled{ color:var(--accent-fg); opacity:.55; }
+
+/* The project pill is a label, not a control: clicking it would do nothing the
+   Home pill beside it does not already do. */
+.pill-proj{ cursor:default; font-weight:600; letter-spacing:.2px; overflow:hidden; }
+.pill-proj:hover{ border-color:var(--line2); }
+.pill-proj .pill-label{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* The save indicator. There is no manual save in this app, so a rejected
+   autosave is the user's only signal that their work is not reaching the disk —
+   which is why the failed state is the one and only --warn in the editor, and
+   why it stands until a write lands instead of fading with its toast. */
+.save-dot{ width:7px; height:7px; flex:none; border-radius:50%; background:var(--t3); }
+.save-dot.saved{ background:var(--text); }
+.save-dot.failed{ background:var(--warn); }
+
+/* The detect popover. Same panel chrome as the pills but squarer, so it reads
+   as something a pill opened rather than as another pill. */
+.pill-anchor{ position:relative; display:flex; }
+.chrome-menu{
+  position:absolute; top:calc(100% + 6px); right:0; z-index:31;
+  min-width:196px; display:flex; flex-direction:column; padding:4px;
+  background:var(--panel); border:1px solid var(--line2); border-radius:9px;
+  box-shadow:var(--edge);
+}
+.chrome-menu button{
+  height:30px; padding:0 10px; border:none; background:transparent; color:var(--text);
+  border-radius:6px; cursor:pointer; text-align:left; font-size:12.5px; white-space:nowrap;
+}
+.chrome-menu button:hover:not(:disabled){ background:var(--panel2); }
+.chrome-menu button:disabled{ color:var(--t3); cursor:default; }
+.chrome-menu-sep{ height:1px; background:var(--line); margin:4px 6px; }

@@ -39,6 +39,17 @@
       </button>
     </div>
     <div class="modal-body">
+      <!-- The format used to live in the top bar, beside the Export button. The
+           bar is gone and the floating chrome has no room for a combo box, so it
+           comes here — where it is read anyway, right above the name and blurb
+           that change with it. -->
+      <div class="grp">
+        <label class="lbl" for="exp-fmt">Format</label>
+        <select id="exp-fmt" bind:value={app.fmt}>
+          <option>PNG</option><option>JPG</option><option>WebP</option><option>PSD</option><option>JSON</option>
+        </select>
+      </div>
+
       <div class="grp">
         <label class="lbl">File name (base)</label>
         <input type="text" value={app.exportName} oninput={onName} placeholder="page" />

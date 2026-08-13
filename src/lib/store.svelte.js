@@ -124,6 +124,11 @@ export const app = $state({
   fonts: { builtin: BUILTIN_FONTS.slice(), user: USER_FONTS.slice() },
   rawZoom: 0, // 0 = Fit, else scale
   saved: false,
+  // The last autosave was rejected by the disk. There is no manual save in this
+  // app, so this is the user's only signal that their work is not reaching the
+  // filesystem — it stays raised until a write lands, not just until the next
+  // toast fades.
+  saveFailed: false,
   exporting: false,
   collapsed: { queue: false, inspector: false },
   leftWidth: 280,
@@ -251,7 +256,13 @@ export function markUnsaved() {
   saveT = setTimeout(() => {
     Promise.resolve()
       .then(saver)
-      .catch((e) => toast(`Could not save — ${e?.message ?? e}`));
+      .catch((e) => {
+        // A toast lasts two seconds; the work being off-disk lasts until a write
+        // lands. The indicator carries the second half of that, so the user can
+        // still find out why an hour later.
+        app.saveFailed = true;
+        toast(`Could not save — ${e?.message ?? e}`);
+      });
   }, 800);
 }
 export function markSaved() {

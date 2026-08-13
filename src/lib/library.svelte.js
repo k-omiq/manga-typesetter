@@ -994,6 +994,10 @@ export async function saveOpenChapter() {
   // debounced autosave included. The escape below is for a disk that keeps
   // failing, not for one that failed once an hour ago.
   saveFailures = 0;
+  // …and lowers the save indicator's failed state for the same reason. This is
+  // the only place it comes down: the chrome promises the user that the warning
+  // stands until bytes actually reach the disk, and this is where they have.
+  app.saveFailed = false;
   // The in-memory catalogue follows the disk, never leads it.
   c.updatedAt = record.updatedAt;
   c.pageCount = record.pages.length;

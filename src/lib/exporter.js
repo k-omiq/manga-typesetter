@@ -494,6 +494,32 @@ async function saveNative(items, scope, fmt) {
   return dir;
 }
 
+// The detected/typeset text for a scope: one document, not one file per page,
+// and the same document the export dialog's JSON format produces. Lifted out of
+// exportImages so the detect menu and the dialog run identical code — two
+// serialisers for one file format would drift the moment either was touched.
+// Does NOT set app.exporting: exportImages already holds it across this call,
+// and every other caller wraps it the same way.
+export async function exportTextJson(scope) {
+  const pages = scope === 'all' ? app.pages : [page()];
+  const suffix = scope === 'all' ? 'text' : `${pages[0].id}-text`;
+  const items = [
+    {
+      name: `${app.exportName}-${suffix}.json`,
+      blob: new Blob([buildTextJson(pages)], { type: MIME.JSON }),
+      page: pages[0],
+    },
+  ];
+  if (isTauri()) {
+    // Always the single-file save dialog — 'all' is still one document.
+    await saveNative(items, 'current', 'JSON');
+  } else {
+    downloadBlob(items[0].blob, items[0].name);
+    toast(`Exported text for ${pages.length} page(s) as JSON (browser download)`);
+  }
+  return true;
+}
+
 // Public entry: scope = 'current' | 'all', fmt = PNG|JPG|WebP|PSD|JSON.
 export async function exportImages(fmt, scope) {
   app.exporting = true;
@@ -504,24 +530,7 @@ export async function exportImages(fmt, scope) {
 
     // JSON is one document for the whole scope (not one file per page), so it
     // round-trips through the JSON importer in a single pick.
-    if (fmt === 'JSON') {
-      const suffix = scope === 'all' ? 'text' : `${pages[0].id}-text`;
-      const items = [
-        {
-          name: `${app.exportName}-${suffix}.${ext}`,
-          blob: new Blob([buildTextJson(pages)], { type: MIME.JSON }),
-          page: pages[0],
-        },
-      ];
-      if (isTauri()) {
-        // Always the single-file save dialog — 'all' is still one document.
-        await saveNative(items, 'current', fmt);
-      } else {
-        downloadBlob(items[0].blob, items[0].name);
-        toast(`Exported text for ${pages.length} page(s) as JSON (browser download)`);
-      }
-      return true;
-    }
+    if (fmt === 'JSON') return await exportTextJson(scope);
 
     const items = [];
     for (const p of pages) {
