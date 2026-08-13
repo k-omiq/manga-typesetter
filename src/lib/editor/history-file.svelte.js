@@ -88,12 +88,16 @@ function complainOnce(e) {
 }
 
 export async function openHistory(chapterDir, pageId) {
-  // The chapter being left has a document nobody else will write. Flushed
-  // before anything is reset, so a chapter switched away from inside the
+  // Whatever chapter is open has a document nobody else will write, and
+  // everything below resets it. Flushed first, so a chapter left inside the
   // debounce window does not lose its records — a page turn is not the only
   // thing that can end a chapter, and this module cannot rely on the caller
   // having closed the old one first.
-  if (dir && dir !== chapterDir) await flushHistory();
+  //
+  // Not conditional on the chapter changing: a route re-entry into the chapter
+  // already open lands here too, and it would drop the last 800ms of records
+  // along with any page merged into `doc` but not yet written.
+  if (dir) await flushHistory();
   clearTimeout(saveT);
   dir = chapterDir;
   doc = emptyDoc();
@@ -171,14 +175,19 @@ export async function flushHistory() {
   await done;
 }
 
+// Both halves of the write are arguments, so nothing here can be overtaken by a
+// chapter opened underneath it: the path names the chapter this write was
+// started for and the body is the document that chapter had at that moment.
+// That is why there is no re-check of `dir` between the awaits — abandoning
+// would not protect any state, it would only throw away a correct write. What
+// the checks would have enforced is enforced at the source instead: every path
+// that moves `dir` — openHistory and closeHistory — flushes first.
 async function write(mine, body) {
   try {
     const { logs, file } = await pathsFor(mine);
-    if (dir !== mine) return;
     // Created on the way to the first write, never up front: a chapter nobody
     // has edited has no logs directory to explain.
     await fsx.mkdir(logs);
-    if (dir !== mine) return;
     await fsx.writeTextFileAtomic(file, body);
   } catch (e) {
     // Every failure ends here. This promise is the queue, so it must resolve

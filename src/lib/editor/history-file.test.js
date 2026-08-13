@@ -143,7 +143,26 @@ describe('the file on disk', () => {
     record(anEntry(2));
     expect(files.has(PATH)).toBe(false); // still inside the debounce window
     await openHistory(CH2, 1);
+    expect(files.has(PATH)).toBe(true);
     expect(undoCount(files, PATH, '1')).toBe(1);
+  });
+
+  // A route re-entry lands on the chapter already open. It resets the document
+  // just as hard as a switch does, so it has to write first.
+  it('flushes before a reopen of the chapter already open', async () => {
+    const { __setDir, openHistory, switchHistoryPage } = await mod();
+    const { record, history } = await hist();
+    const { files } = await disk();
+    __setDir(CH1);
+    record(anEntry(9));
+    expect(files.has(PATH)).toBe(false);
+    await openHistory(CH1, 2);
+    expect(files.has(PATH)).toBe(true);
+    expect(undoCount(files, PATH, '1')).toBe(1);
+    // And the records came back with the reopened chapter, not merely survived
+    // on disk.
+    await switchHistoryPage(2, 1);
+    expect(history.canUndo).toBe(true);
   });
 
   // A write bound to the chapter it was started for. Read live under the awaits,
@@ -157,6 +176,7 @@ describe('the file on disk', () => {
     const pending = flushHistory(); // in flight, deliberately not awaited yet
     await openHistory(CH2, 1);
     await pending;
+    expect(files.has(PATH)).toBe(true);
     expect(undoCount(files, PATH, '1')).toBe(1); // not the empty document
     expect(files.has(PATH2)).toBe(false); // and nothing of ch2's in ch1's file
   });
@@ -170,6 +190,7 @@ describe('the file on disk', () => {
     __setDir(CH1);
     record(anEntry(4));
     await closeHistory();
+    expect(files.has(PATH)).toBe(true);
     expect(undoCount(files, PATH, '1')).toBe(1);
     expect(history.canUndo).toBe(false);
     // No chapter is open any more, so a late debounce writes nothing at all.
