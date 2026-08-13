@@ -55,20 +55,27 @@ Remaining step, which must run in the parent checkout because `main` is checked 
 ## 2. Slice 2a — chapter sources — BUILT, NOT YET VERIFIED IN THE APP
 
 **Specified and implemented.** `docs/superpowers/specs/2026-08-13-slice2a-chapter-sources-design.md`.
-`npm test` is 108 passing and `npm run build` and the release `cargo` build are clean, but **the
-manual acceptance pass in the spec's "Testing" section has not been run**: the agent that built it
-could not be granted control of the app window, so nothing in this slice has been exercised against
-real files on disk. Everything below is proven by unit tests against the `fsx` mock only.
+`npm test` is 120 passing and `npm run build` and the release `cargo` build are clean.
 
-What still needs a human at the keyboard, from the spec:
+**The disk half of the acceptance pass has been run — against a real filesystem, not the mock.**
+`src/lib/library.realfs.test.js` swaps the `fsx` seam for `node:fs` and drives the real catalogue
+over real PNGs in a temp directory, including a 16-bit greyscale one. It proves, on actual files:
+six raws and four cleaned pair as specified; every copy is byte-identical to its source and page 1
+comes out of `raws/` still 16-bit greyscale; a chapter reopens with pages 1–4 on their cleaned
+image and 5–6 on their raw; a per-page swap replaces the file, deletes the one it replaced and
+survives a reopen; a same-named file lands beside rather than over the one already there; a bulk
+subset leaves the later pages alone; a missing cleaned file is flagged and its name is not dropped
+by the next save; a shorter translations file never shortens the chapter; and a slice 1
+`chapter.json` opens unchanged and gains its `cleaned` key on save.
 
-- create a chapter with 6 raws and 4 cleaned; confirm the summary states the mismatch before
-  creating; confirm pages 1–4 typeset on the cleaned image and 5–6 on the raw
-- `cmp` a file in `cleaned/` against its source — byte-identical (a 16-bit greyscale PNG is the
-  case worth using)
-- swap one page's cleaned image from the sources sheet; reopen; the swap survived
-- import a chapter from a PSD; confirm the warning about re-encoded rasters appeared
+**The visual half has NOT been run, and cannot be claimed.** App-control access was refused, so no
+agent has seen this app's window. Still needing a human at the keyboard:
+
+- the pairing summary's wording, and that it appears **before** the user commits
+- import a chapter from a PSD end to end; confirm the warning about re-encoded rasters appeared
+  (the PSD path needs a canvas and cannot be exercised outside the app at all)
 - both themes on the sources sheet and the extended new-chapter dialog
+- that the sources sheet's per-page rows render their thumbnails through the asset protocol
 
 Two adversarial review passes ran, the second independent of the first; every finding either fixed
 or answered. The second pass found four things worth remembering because they are the shapes this
