@@ -25,6 +25,15 @@
   // reasonable number of presses, fine enough to land where you meant to.
   const KEY_STEP = 16;
 
+  // Every gesture in flight, so an unmount can end them all — see the same set
+  // in FloatingPanel. The listeners live on `document`, and nothing guarantees
+  // a further pointer event once this component is gone.
+  const live = new Set();
+  $effect(() => () => {
+    for (const ac of live) ac.abort();
+    live.clear();
+  });
+
   // A press on the rail stays ambiguous until it travels: under 4px it is still
   // a click on whatever it landed on, and only past that does it become a
   // resize. The tool strip stops its own pointerdown from reaching here, so
@@ -33,26 +42,33 @@
   function onRailPointerDown(e) {
     if (app.sidebarHidden) return; // nothing on screen to resize
     e.preventDefault();
+    const pid = e.pointerId;
     const startX = e.clientX;
     const startW = app.leftWidth;
     let dragging = false;
     const move = (ev) => {
+      // A second finger, or the other mouse button, would otherwise drive this
+      // same closure from a start point it never measured against.
+      if (ev.pointerId !== pid) return;
       if (!dragging && Math.abs(ev.clientX - startX) < 4) return;
       dragging = true;
       app.leftWidth = clampSidebarWidth(startW + (ev.clientX - startX));
     };
+    // One controller for all three listeners, the same net FloatingPanel keeps.
     // pointercancel as well as pointerup: a gesture the browser takes away from
     // us (a pan it decided to claim, a lost capture) never fires pointerup, and
     // the listeners would outlive the drag.
-    const up = () => {
-      document.removeEventListener('pointermove', move);
-      document.removeEventListener('pointerup', up);
-      document.removeEventListener('pointercancel', up);
+    const ac = new AbortController();
+    const end = (ev) => {
+      if (ev.pointerId !== pid) return;
+      live.delete(ac);
+      ac.abort();
       if (dragging) saveSidebar(); // only a real resize is worth persisting
     };
-    document.addEventListener('pointermove', move);
-    document.addEventListener('pointerup', up);
-    document.addEventListener('pointercancel', up);
+    live.add(ac);
+    document.addEventListener('pointermove', move, { signal: ac.signal });
+    document.addEventListener('pointerup', end, { signal: ac.signal });
+    document.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
   // The window-splitter keyboard contract that goes with role="separator":

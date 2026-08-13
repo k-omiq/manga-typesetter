@@ -43,6 +43,15 @@
     if (z > 0 && isFinite(z)) applyFit(z);
   }
 
+  // Every gesture in flight, so an unmount can end them all — see the same set
+  // in FloatingPanel. The listeners live on `document` and nothing guarantees a
+  // further pointer event once this component is gone.
+  const live = new Set();
+  $effect(() => () => {
+    for (const ac of live) ac.abort();
+    live.clear();
+  });
+
   function frameCoords(e) {
     const r = pageFrameEl.getBoundingClientRect();
     return { x: (e.clientX - r.left) / app.zoom, y: (e.clientY - r.top) / app.zoom };
@@ -63,12 +72,16 @@
   }
 
   function startTextPointer(e) {
+    const pid = e.pointerId;
     const startX = e.clientX,
       startY = e.clientY;
     const sl = scrollEl.scrollLeft,
       st = scrollEl.scrollTop;
     let panning = false;
     const move = (ev) => {
+      // A second finger, or the other mouse button, would otherwise drive this
+      // same closure from a start point it never measured against.
+      if (ev.pointerId !== pid) return;
       const dx = ev.clientX - startX,
         dy = ev.clientY - startY;
       if (!panning && Math.hypot(dx, dy) > 4) panning = true;
@@ -77,16 +90,26 @@
         scrollEl.scrollTop = st - dy;
       }
     };
-    const up = (ev) => {
-      document.removeEventListener('pointermove', move);
-      document.removeEventListener('pointerup', up);
-      if (!panning) {
+    // One controller for both endings, the same net FloatingPanel and TextBox
+    // keep: a gesture the browser takes away from us — an OS gesture claiming
+    // the pointer, a lost capture — fires pointercancel and never a pointerup,
+    // and a pan handler that survived it would follow the cursor with nothing
+    // held and nothing left to stop it. A cancelled press adds no box: the
+    // gesture was taken away, not finished.
+    const ac = new AbortController();
+    const end = (ev) => {
+      if (ev.pointerId !== pid) return;
+      live.delete(ac);
+      ac.abort();
+      if (!panning && ev.type === 'pointerup') {
         const { x, y } = frameCoords(ev);
         addEmptyBox(x, y);
       }
     };
-    document.addEventListener('pointermove', move);
-    document.addEventListener('pointerup', up);
+    live.add(ac);
+    document.addEventListener('pointermove', move, { signal: ac.signal });
+    document.addEventListener('pointerup', end, { signal: ac.signal });
+    document.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
   function onCleanedLoad(e) {

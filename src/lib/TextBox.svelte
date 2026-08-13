@@ -87,6 +87,19 @@
     return Math.max(a, Math.min(b, v));
   }
 
+  // Every gesture in flight, so an unmount can end them all — the same net
+  // FloatingPanel keeps, for the same reason: the listeners live on `document`
+  // and nothing guarantees a further pointer event once this box is gone (an
+  // undo that deletes it, a page turn), so they would go on writing geometry
+  // onto a box nobody can see. A set rather than one slot because a move and a
+  // handle drag can both be down at once, and a lone slot would let the second
+  // overwrite the first one's net.
+  const live = new Set();
+  $effect(() => () => {
+    for (const ac of live) ac.abort();
+    live.clear();
+  });
+
   function onBoxPointerDown(e) {
     if (editing) return; // let caret work
     // in bulk mode, clicking a box toggles it as an apply-target
@@ -115,27 +128,41 @@
     settleEdits();
     const zz = app.zoom;
     const dims = page();
+    const pid = e.pointerId;
     const sx = e.clientX, sy = e.clientY, ox = box.x, oy = box.y;
     // One drag is one entry, so the before-state is taken here and the record
-    // written on pointer-up — never in `move`, which fires per pixel and would
-    // spend the whole five-step history on a single gesture.
+    // written on the end handler — never in `move`, which fires per pixel and
+    // would spend the whole five-step history on a single gesture.
     const pageId = dims.id;
     const before = { x: ox, y: oy };
     const move = (ev) => {
+      // A second finger, or the other mouse button, would otherwise drive this
+      // same closure from a start point it never measured against.
+      if (ev.pointerId !== pid) return;
       box.x = clamp(ox + (ev.clientX - sx) / zz, -box.w + 20, dims.w - 20);
       box.y = clamp(oy + (ev.clientY - sy) / zz, -box.h + 20, dims.h - 20);
       markUnsaved();
     };
-    const up = () => {
-      document.removeEventListener('pointermove', move);
-      document.removeEventListener('pointerup', up);
+    // One controller for both endings, and the record written from the one
+    // handler both reach. A gesture does not always end in a pointerup: an OS
+    // gesture claiming the pointer, or a lost capture, fires pointercancel
+    // instead — and a drag that ended there left the geometry moved and
+    // markUnsaved already fired with no entry to rewind it, so the next undo
+    // would step over it onto the edit before.
+    const ac = new AbortController();
+    const end = (ev) => {
+      if (ev.pointerId !== pid) return;
+      live.delete(ac);
+      ac.abort();
       // A click that never moved is not an edit.
       if (box.x !== before.x || box.y !== before.y) {
         record({ t: 'move', pageId, boxId: box.id, before, after: { x: box.x, y: box.y } });
       }
     };
-    document.addEventListener('pointermove', move);
-    document.addEventListener('pointerup', up);
+    live.add(ac);
+    document.addEventListener('pointermove', move, { signal: ac.signal });
+    document.addEventListener('pointerup', end, { signal: ac.signal });
+    document.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
   function startTransform(e, dir) {
@@ -144,6 +171,7 @@
     if (!selected) selectBox(box.id);
     settleEdits(); // same as startMove: one gesture must not cost two steps
     const zz = app.zoom;
+    const pid = e.pointerId;
     const sx = e.clientX, sy = e.clientY;
     // `o` is both the origin the drag measures against and the before-state the
     // record is written from — the same five fields either way.
@@ -160,6 +188,7 @@
     const cy = () => box.y + box.h / 2;
 
     const move = (ev) => {
+      if (ev.pointerId !== pid) return; // see startMove
       if (isRot) {
         const r = pageFrameEl.getBoundingClientRect();
         const mx = (ev.clientX - r.left) / zz, my = (ev.clientY - r.top) / zz;
@@ -180,9 +209,13 @@
       }
       markUnsaved();
     };
-    const up = () => {
-      document.removeEventListener('pointermove', move);
-      document.removeEventListener('pointerup', up);
+    // Same net as startMove: one controller, both endings, the record written
+    // from the handler a cancelled gesture reaches too.
+    const ac = new AbortController();
+    const end = (ev) => {
+      if (ev.pointerId !== pid) return;
+      live.delete(ac);
+      ac.abort();
       if (isRot) {
         const after = cloneStyle(box.style);
         if (after.rotation !== styleBefore.rotation) {
@@ -195,8 +228,10 @@
         record({ t: 'resize', pageId, boxId: box.id, before: o, after });
       }
     };
-    document.addEventListener('pointermove', move);
-    document.addEventListener('pointerup', up);
+    live.add(ac);
+    document.addEventListener('pointermove', move, { signal: ac.signal });
+    document.addEventListener('pointerup', end, { signal: ac.signal });
+    document.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
   function focusSelect(node) {
