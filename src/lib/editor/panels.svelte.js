@@ -11,6 +11,14 @@ export const MIN_W = 220;
 export const MIN_H = 160;
 const DEF_W = 320;
 const GAP = 16;
+// The band along the top of the canvas that the floating chrome owns, tooltips
+// included: a 12px inset, a 32px pill, the 7px the tooltip drops by, and a ~23px
+// tooltip, plus air. A panel opening inside this covers the tooltips of the pills
+// at the right end of the row, and it cannot be fixed with a z-index — the
+// tooltip is an ::after inside `.pill-row`, whose own stacking context at 30
+// caps it below any panel at 50. So the panels open below the band instead.
+const CHROME_BAND = 84;
+const DEF_OPTIONS_H = 420;
 // However far a panel is dragged, this much of it stays inside the window. It
 // is the difference between a layout the user can undo by hand and one that
 // needs the reset button.
@@ -25,8 +33,10 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 export function defaultGeometry(vw) {
   const x = Math.max(GAP, vw - DEF_W - GAP);
   return {
-    options: { x, y: 52, w: DEF_W, h: 420, hidden: false, z: 1 },
-    queue: { x, y: 488, w: DEF_W, h: 360, hidden: false, z: 2 },
+    options: { x, y: CHROME_BAND, w: DEF_W, h: DEF_OPTIONS_H, hidden: false, z: 1 },
+    // Stacked directly under the options panel, computed rather than written
+    // out, so moving the band cannot leave the two overlapping.
+    queue: { x, y: CHROME_BAND + DEF_OPTIONS_H + GAP, w: DEF_W, h: 360, hidden: false, z: 2 },
   };
 }
 
@@ -151,9 +161,16 @@ export function raisePanel(id) {
   save();
 }
 
-export function clampAll(vw, vh) {
+// `persist` is the difference between a clamp the user asked for and one the
+// window did to them. Clamping only ever shrinks, so writing the result of a
+// resize would make a moment of small window permanent: drag the corner in, the
+// geometry is squeezed and saved, drag it back out and the panels stay small
+// with nothing short of the reset to recover them. A drag that ends persists
+// (the user placed it); a resize does not. Nothing is lost by that — `loadPanels`
+// re-clamps to whatever the window is on the next mount anyway.
+export function clampAll(vw, vh, persist = true) {
   for (const id of PANEL_IDS) Object.assign(panels[id], clampPanel(panels[id], vw, vh));
-  save();
+  if (persist) save();
 }
 
 export function resetPanels(vw, vh) {

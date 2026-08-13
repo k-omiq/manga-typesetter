@@ -46,23 +46,40 @@
     );
   });
 
-  const onResize = () => clampAll(window.innerWidth, window.innerHeight);
+  // Clamp without writing: see `clampAll`. A window the user shrank must not be
+  // able to make the layout they chose smaller for good.
+  const onResize = () => clampAll(window.innerWidth, window.innerHeight, false);
 </script>
 
 <svelte:window onresize={onResize} />
 
 <div class="ed-root" style="--canvas-left:{canvasLeft}px">
-  <div class="ed-canvas"><Canvas onReady={(api) => (canvas = api)} /></div>
+  <div class="ed-canvas">
+    <Canvas onReady={(api) => (canvas = api)} />
+    <!-- Inside the canvas layer, not the root: this panel centres itself and
+         clamps its drag against `offsetParent`, so the element it sits in is
+         the frame it is confined to. Under `.ed-root` — fixed to the viewport —
+         it opened over the reference sidebar and, at z-index 40, on top of the
+         chrome pills. `.ed-canvas` is positioned, so it takes the role, and it
+         carries no z-index of its own, so 40 still orders against the root's
+         context exactly as before. -->
+    <BulkStylePanel />
+  </div>
 
   {#if !app.sidebarHidden}<RefSidebar />{/if}
   <RailTools />
 
   <ChromePills {onFontLib} {onSettings} />
 
-  <div class="ed-dockrow">
-    <ZoomDock onFit={() => canvas?.fit()} />
-    <Pager />
-  </div>
+  <!-- Nothing to zoom and no pages to step through until a chapter is open:
+       ungated, the "Nothing open" empty state sits behind a live zoom pill and
+       a `0 / 0` pager. -->
+  {#if app.loaded}
+    <div class="ed-dockrow">
+      <ZoomDock onFit={() => canvas?.fit()} />
+      <Pager />
+    </div>
+  {/if}
 
   <FloatingPanel id="options" title="Text box options">
     <Inspector />
@@ -70,6 +87,4 @@
   <FloatingPanel id="queue" title="Text queue" count="{placed} / {total} placed">
     <Queue />
   </FloatingPanel>
-
-  <BulkStylePanel />
 </div>

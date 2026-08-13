@@ -133,6 +133,29 @@ describe('the live state', () => {
     expect(panels.options.y).toBeLessThanOrEqual(400 - 32);
   });
 
+  // Clamping only ever shrinks, so a resize that wrote its result would make a
+  // moment of small window permanent: the geometry the user chose is squeezed,
+  // saved, and does not come back when the window does. The live layout still
+  // clamps — only the store is left alone.
+  it('does not let a window resize overwrite the stored layout', () => {
+    const s = fakeStorage(null);
+    loadPanels(s, 1400, 900);
+    movePanel('options', 1000, 700);
+    vi.advanceTimersByTime(300);
+    const before = s.dump();
+
+    clampAll(600, 400, false);
+    vi.advanceTimersByTime(300);
+    expect(panels.options.x).toBeLessThanOrEqual(600 - 120);
+    expect(s.dump()).toBe(before);
+
+    // And the window coming back is enough to restore it: the clamp never
+    // reached disk, so the next mount reads the geometry the user placed.
+    loadPanels(s, 1400, 900);
+    expect(panels.options.x).toBe(1000);
+    expect(panels.options.y).toBe(700);
+  });
+
   it('never lands a fresh layout below a short window', () => {
     loadPanels(fakeStorage(null), 1000, 400);
     expect(panels.queue.y).toBeLessThanOrEqual(400 - 32);

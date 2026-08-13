@@ -5,7 +5,10 @@
   const s = $derived(app.bulk.style);
   const count = $derived(app.bulk.targets.length);
 
-  // Draggable panel position (inline left/top in px, relative to .editor-wrap).
+  // Draggable panel position (inline left/top in px, relative to whichever
+  // positioned ancestor it is rendered inside — `.ed-canvas`, the canvas
+  // viewport. Both the opening centre below and the drag clamp read that same
+  // `offsetParent`, so the panel stays over the page rather than the window.)
   let pos = $state({ x: 0, y: 16 });
   let panelEl;
   let drag = null; // { startX, startY, baseX, baseY } while dragging

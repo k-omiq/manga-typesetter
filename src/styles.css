@@ -20,13 +20,10 @@
   --scrim:rgba(42,38,32,.28);
   /* Mirrored by RAIL_W in src/lib/editor/RailTools.svelte — see the note there. */
   --rail-w:44px;
-  /* The right panel column, and the vertical room the floating chrome claims at
-     the top of the canvas (12px inset + a 32px pill + 8px of air). Geometry, not
-     colour, so both blocks carry the same values — declared twice all the same,
-     so a theme that ever needs its own is a one-line change rather than a
-     restructure. */
+  /* The right panel column. Geometry, not colour, so both blocks carry the same
+     value — declared twice all the same, so a theme that ever needs its own is a
+     one-line change rather than a restructure. */
   --panel-col:352px;
-  --chrome-top:52px;
   --radius:6px;
 }
 :root[data-theme="dark"]{
@@ -43,7 +40,6 @@
   --scrim:rgba(0,0,0,.6);
   /* Geometry, so identical to light: see the note above. */
   --panel-col:352px;
-  --chrome-top:52px;
 }
 
 *{ box-sizing:border-box; }
@@ -81,11 +77,17 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
 .btn-accent:hover{ background:var(--accent); border-color:var(--accent); }
 
 /* ---------- editor shell ---------- */
-/* One layer for the page and a stack of chrome floating over it. The root takes
-   no z-index of its own, deliberately: a stacking context here would trap the
-   floating panels (50+) underneath the modal layer's 100 no matter what they
-   ask for. Every child inside it orders itself against the same root context —
-   sidebar 20, rail 21, chrome 30, bulk panel 40, panels 50+. */
+/* One layer for the page and a stack of chrome floating over it. Every child
+   orders itself against this one context — sidebar 20, rail 21, chrome 30,
+   bulk panel 40, panels 50+.
+   `position:fixed` makes this element a stacking context, so those numbers do
+   not compete with the modal overlay's 100 or the toast's 300. That is fine
+   only because both of those are siblings of the root in App.svelte, outside it
+   entirely. What must not happen here is a `transform`, `filter`, `backdrop-
+   filter`, `perspective`, `contain` or `will-change`: any of them additionally
+   makes the root the containing block for every `position:fixed` descendant,
+   which would tear `.pill-row`, `.fpanel` and `.panel-stub` off the viewport
+   they are positioned against and reparent them to this box. */
 .ed-root{ position:fixed; inset:0; background:var(--art); }
 /* Inset from the left by the sidebar plus the rail, and by nothing else. That
    inset is what makes fit-to-window measure the canvas viewport rather than the
