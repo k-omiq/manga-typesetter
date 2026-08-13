@@ -40,7 +40,6 @@
           rows="2"
           placeholder="English…"
           value={line.en ?? ''}
-          onclick={(e) => e.stopPropagation()}
           oninput={(e) => { line.en = e.currentTarget.value; markUnsaved(); }}
         ></textarea>
       </div>
