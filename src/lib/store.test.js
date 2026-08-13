@@ -1,11 +1,13 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   app,
   loadProjectPages,
   addEmptyBox,
   clampSidebarWidth,
+  flushSave,
   sidebarFromJSON,
   saveSidebar,
+  setSaver,
   SIDEBAR_MIN,
   SIDEBAR_MAX,
   setPageSwitchHook,
@@ -189,5 +191,51 @@ describe('sidebar geometry persistence', () => {
 
   it('saves without a storage to save to', () => {
     expect(() => saveSidebar()).not.toThrow();
+  });
+});
+
+// There is no manual save in this app, so the indicator is the user's only
+// standing signal that their work is not reaching the disk. The debounce is not
+// the risky path: `flushSave` is, because it runs on the way out — leaving the
+// editor, quitting, opening another chapter — and it cancels the debounce as it
+// goes, so a rejection here leaves nothing scheduled to raise the flag later.
+describe('the save indicator on the flush path', () => {
+  beforeEach(() => {
+    app.chapterRef = { projectId: 'p1', chapterId: 'c1' };
+    app.saveFailed = false;
+  });
+  afterEach(() => {
+    setSaver(null);
+    app.chapterRef = null;
+    app.saveFailed = false;
+  });
+
+  it('raises the failed state when the flush is rejected', async () => {
+    setSaver(() => Promise.reject(new Error('disk full')));
+    await expect(flushSave()).rejects.toThrow('disk full');
+    expect(app.saveFailed).toBe(true);
+  });
+
+  // Load-bearing: flushBeforeLeaving reads the rejection to decide whether the
+  // user may leave and what to tell them. Swallowing it here to set a flag
+  // would let them walk out of a chapter that was never written.
+  it('still hands the rejection to its caller', async () => {
+    const err = new Error('read-only volume');
+    setSaver(() => Promise.reject(err));
+    await expect(flushSave()).rejects.toBe(err);
+  });
+
+  it('leaves the failed state alone when the flush lands', async () => {
+    setSaver(() => Promise.resolve());
+    await flushSave();
+    expect(app.saveFailed).toBe(false);
+  });
+
+  // No chapter open is not a failed save — there was nothing to write.
+  it('does not raise the failed state when there is nothing to flush', async () => {
+    setSaver(() => Promise.reject(new Error('never called')));
+    app.chapterRef = null;
+    await flushSave();
+    expect(app.saveFailed).toBe(false);
   });
 });

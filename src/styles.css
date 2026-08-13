@@ -905,7 +905,10 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
    why it stands until a write lands instead of fading with its toast. */
 .save-dot{ width:7px; height:7px; flex:none; border-radius:50%; background:var(--t3); }
 .save-dot.saved{ background:var(--text); }
-.save-dot.failed{ background:var(--warn); }
+/* Failed outranks saved on specificity, not on source order: the two classes
+   can be on the dot at the same moment, and which colour wins must not depend
+   on which rule happens to be written second. */
+.save-dot.failed, .save-dot.saved.failed{ background:var(--warn); }
 
 /* The detect popover. Same panel chrome as the pills but squarer, so it reads
    as something a pill opened rather than as another pill. */

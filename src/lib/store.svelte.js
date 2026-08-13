@@ -290,7 +290,20 @@ export function markSaved() {
 }
 export function flushSave() {
   clearTimeout(saveT);
-  return saver && app.chapterRef ? saver() : Promise.resolve();
+  // Every non-debounce save comes through here — leaving the editor, quitting,
+  // opening another chapter — and this is the path most likely to be the one
+  // that fails, because it is the one that runs when the user is on their way
+  // out. It also cancels the debounce, so a rejection here leaves nothing
+  // scheduled to raise the indicator later: without this catch the pill would
+  // sit on its neutral dot promising a save that no longer exists. The error is
+  // rethrown untouched — flushBeforeLeaving still decides whether the user may
+  // go, and says why.
+  return saver && app.chapterRef
+    ? saver().catch((e) => {
+        app.saveFailed = true;
+        throw e;
+      })
+    : Promise.resolve();
 }
 
 // ---------- edit recorder (undo/redo) ----------

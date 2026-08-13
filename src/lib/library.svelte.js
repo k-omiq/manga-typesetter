@@ -1042,6 +1042,12 @@ export function closeChapter() {
   // The failure streak belongs to the chapter that was open. Nothing is pending
   // any more, so the next chapter starts its own two-step from scratch.
   saveFailures = 0;
+  // So does the save indicator's failed state: the pill presents it inside
+  // `{project} · {chapter}`, as a fact about the open chapter. Carrying chapter
+  // A's failure onto chapter B would blame the wrong document. With this, the
+  // policy is whole: raised on any rejected save, lowered on any landed write,
+  // lowered on close.
+  app.saveFailed = false;
 }
 
 // ---------- putting the chapter away when the disk says no ----------

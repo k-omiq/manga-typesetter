@@ -55,8 +55,13 @@
         <input type="text" value={app.exportName} oninput={onName} placeholder="page" />
         <div class="exp-sub">
           {#if isJson}
-            Saved as <code>{app.exportName}-text.json</code> — the detected text (JP + your
-            translation), reading order and box geometry for every page in scope.
+            <!-- One file either way, but not the same name: only the whole-chapter
+                 document is unqualified, and a single page carries its id. The
+                 blurb is read before the scope is chosen below, so it has to
+                 name both rather than promise one. -->
+            One file — <code>{app.exportName}-text.json</code> for the whole chapter, or
+            <code>{app.exportName}-&lt;page&gt;-text.json</code> for a single page — carrying
+            the detected text (JP + your translation), reading order and box geometry.
           {:else}
             Saved as <code>{app.exportName}-&lt;page&gt;.{app.fmt.toLowerCase()}</code>
           {/if}
