@@ -721,19 +721,19 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 /* Keyboard focus lands on the band itself, so the seam is where it shows — the
    same highlight the hover gives, thickened so it reads without a pointer. */
 .ed-rail-edge:focus-visible::before{ background:var(--accent); width:2px; }
+/* top clears the Home/project pill band (top:12px + 32px tall, .pill-row) with
+   room to spare. With the sidebar hidden the rail sits at left:0, directly
+   under that row, and the pill row outranks the rail (z-index 30 vs 21) — so
+   without this offset the caret, the only way back to a hidden sidebar,
+   would be covered and unclickable rather than merely hidden behind it. Kept
+   the same in the visible state too, on purpose: one offset for both states
+   is one fewer thing to keep in sync as either geometry moves. */
 .ed-rail-tools{
-  position:absolute; left:2px; top:16px; display:flex; flex-direction:column; gap:3px;
+  position:absolute; left:2px; top:52px; display:flex; flex-direction:column; gap:3px;
   background:color-mix(in srgb, var(--panel) 92%, transparent); border:1px solid var(--line);
   border-radius:9px; padding:4px; box-shadow:var(--edge); backdrop-filter:blur(6px);
   cursor:default;
 }
-/* With the sidebar hidden the rail sits at the window's left edge (left:0),
-   directly under the Home pill (top:12, height 32 -> bottom edge at 44px) —
-   and the pill row outranks the rail (z-index 30 vs 21), so the caret at
-   top:16 would be covered and unclickable rather than merely hidden behind
-   it. Dropping the strip below the pill band is what keeps the caret — the
-   only way back to a hidden sidebar — reachable. */
-.ed-rail.hidden .ed-rail-tools{ top:52px; }
 /* A vertical strip has no room for a tooltip centred underneath it — the rail
    sits at the window's left edge with the sidebar hidden, and a centred tip
    runs straight off it. These read to the side instead. */
