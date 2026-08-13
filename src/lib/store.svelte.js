@@ -217,14 +217,34 @@ export function saveExportPrefs(dir, name) {
 export const SIDEBAR_MIN = 200;
 export const SIDEBAR_MAX = 460;
 export const clampSidebarWidth = (w) => clamp(w, SIDEBAR_MIN, SIDEBAR_MAX);
+// What comes back out of storage is parsed and vetted here rather than inline
+// below, because the read itself runs once at module load in an environment the
+// tests do not have — split out, the part that can actually be wrong is the
+// part that can be tested. Anything the rail could not have written is dropped
+// rather than coerced: a width that is not a number, a `hidden` that is not a
+// boolean, a blob that is not an object at all. Absent keys stay absent so the
+// caller can tell "not stored" from "stored as the default".
+export function sidebarFromJSON(raw) {
+  let saved;
+  try {
+    saved = JSON.parse(raw || '{}');
+  } catch {
+    return {};
+  }
+  if (!saved || typeof saved !== 'object') return {};
+  const out = {};
+  if (Number.isFinite(saved.width)) out.width = clampSidebarWidth(saved.width);
+  if (typeof saved.hidden === 'boolean') out.hidden = saved.hidden;
+  return out;
+}
 // Same defensive shape as the export prefs above: read once at module load,
 // written back through one function, every failure swallowed. Storage is
 // absent entirely in the node test environment, and a corrupt entry must cost
 // the user their sidebar width, not the editor.
 try {
-  const saved = JSON.parse(localStorage.getItem('mt.sidebar') || '{}');
-  if (Number.isFinite(saved.width)) app.leftWidth = clampSidebarWidth(saved.width);
-  if (typeof saved.hidden === 'boolean') app.sidebarHidden = saved.hidden;
+  const { width, hidden } = sidebarFromJSON(localStorage.getItem('mt.sidebar'));
+  if (width != null) app.leftWidth = width;
+  if (hidden != null) app.sidebarHidden = hidden;
 } catch {
   /* ignore */
 }

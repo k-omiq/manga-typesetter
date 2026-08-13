@@ -4,6 +4,7 @@ import {
   loadProjectPages,
   addEmptyBox,
   clampSidebarWidth,
+  sidebarFromJSON,
   saveSidebar,
   SIDEBAR_MIN,
   SIDEBAR_MAX,
@@ -126,10 +127,9 @@ describe('loadProjectPages repair count', () => {
   });
 });
 
-// The read side of `mt.sidebar` runs once at module load and cannot be re-run
-// from here, so what is testable without a DOM is the clamp it feeds the stored
-// width through, and that the whole mechanism survives the environment this
-// suite runs in — node has no `localStorage` at all.
+// The read itself runs once at module load, in an environment with no
+// `localStorage` at all — so the tests take the vetting the read delegates to,
+// which is where anything can actually be wrong.
 describe('sidebar geometry persistence', () => {
   it('clamps a width to the range the rail can drag to', () => {
     expect(clampSidebarWidth(SIDEBAR_MIN - 500)).toBe(SIDEBAR_MIN);
@@ -137,12 +137,32 @@ describe('sidebar geometry persistence', () => {
     expect(clampSidebarWidth(320)).toBe(320);
   });
 
-  it('saves without a storage to save to', () => {
-    expect(() => saveSidebar()).not.toThrow();
+  it('clamps a stored width the same way a dragged one is clamped', () => {
+    expect(sidebarFromJSON('{"width":9999}')).toEqual({ width: SIDEBAR_MAX });
+    expect(sidebarFromJSON('{"width":10}')).toEqual({ width: SIDEBAR_MIN });
+    expect(sidebarFromJSON('{"width":300}')).toEqual({ width: 300 });
   });
 
-  it('leaves the defaults alone when nothing could be read', () => {
-    expect(app.sidebarHidden).toBe(false);
-    expect(clampSidebarWidth(app.leftWidth)).toBe(app.leftWidth);
+  it('drops a width that is not a number rather than coercing it', () => {
+    expect(sidebarFromJSON('{"width":"300"}')).toEqual({});
+    expect(sidebarFromJSON('{"width":null}')).toEqual({});
+  });
+
+  it('drops a hidden flag that is not a boolean', () => {
+    expect(sidebarFromJSON('{"hidden":"yes"}')).toEqual({});
+    expect(sidebarFromJSON('{"hidden":true}')).toEqual({ hidden: true });
+    expect(sidebarFromJSON('{"hidden":false}')).toEqual({ hidden: false });
+  });
+
+  it('reads nothing out of a blob that is not an object', () => {
+    expect(sidebarFromJSON('not json')).toEqual({});
+    expect(sidebarFromJSON('null')).toEqual({});
+    expect(sidebarFromJSON('[1,2]')).toEqual({});
+    expect(sidebarFromJSON('')).toEqual({});
+    expect(sidebarFromJSON(null)).toEqual({});
+  });
+
+  it('saves without a storage to save to', () => {
+    expect(() => saveSidebar()).not.toThrow();
   });
 });

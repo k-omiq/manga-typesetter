@@ -10,13 +10,26 @@
   // The strip between the reference sidebar and the canvas. It carries the tool
   // switcher and doubles as the sidebar's resize handle — the wireframe has no
   // separate resizer, the seam itself is the grab.
-  import { app, setTool, openBulk, saveSidebar, clampSidebarWidth } from '../store.svelte.js';
+  import {
+    app,
+    setTool,
+    openBulk,
+    closeBulk,
+    saveSidebar,
+    clampSidebarWidth,
+    SIDEBAR_MIN,
+    SIDEBAR_MAX,
+  } from '../store.svelte.js';
+
+  // How far one arrow key moves the edge. Coarse enough to cross the range in a
+  // reasonable number of presses, fine enough to land where you meant to.
+  const KEY_STEP = 16;
 
   // A press on the rail stays ambiguous until it travels: under 4px it is still
   // a click on whatever it landed on, and only past that does it become a
-  // resize. The buttons stop their own pointerdown from reaching the rail, so
-  // this never starts from one of them — the threshold is for the strip itself,
-  // where a twitchy click would otherwise nudge the sidebar a pixel or two.
+  // resize. The tool strip stops its own pointerdown from reaching here, so
+  // this never starts from a button — or from the padding between them, which
+  // is why the guard sits on the strip rather than on each button.
   function onRailPointerDown(e) {
     if (app.sidebarHidden) return; // nothing on screen to resize
     e.preventDefault();
@@ -42,27 +55,65 @@
     document.addEventListener('pointercancel', up);
   }
 
+  // The window-splitter keyboard contract that goes with role="separator":
+  // arrows nudge, Home/End go to the stops. Each press persists, the same as
+  // each drag does — the writes are one short string and only happen on a key
+  // that actually moved the edge.
+  function onRailKeyDown(e) {
+    if (app.sidebarHidden) return;
+    const w = app.leftWidth;
+    if (e.key === 'ArrowLeft') app.leftWidth = clampSidebarWidth(w - KEY_STEP);
+    else if (e.key === 'ArrowRight') app.leftWidth = clampSidebarWidth(w + KEY_STEP);
+    else if (e.key === 'Home') app.leftWidth = SIDEBAR_MIN;
+    else if (e.key === 'End') app.leftWidth = SIDEBAR_MAX;
+    else return;
+    e.preventDefault();
+    if (app.leftWidth !== w) saveSidebar();
+  }
+
   function toggleSidebar() {
     app.sidebarHidden = !app.sidebarHidden;
     saveSidebar();
   }
 
-  // Every button sits inside the rail's own drag surface, so each one has to
-  // claim its press before the rail sees it.
+  // The bulk button is lit while bulk mode is on, so its second press has to be
+  // the way out of it. `openBulk` on an already-open mode would silently empty
+  // the targets the user had picked and reseed the style; `closeBulk` is what
+  // Escape and the panel's own Cancel already do.
+  const toggleBulk = () => (app.bulk.active ? closeBulk() : openBulk());
+
+  // The tool strip is not part of the drag surface: a press anywhere inside it,
+  // button or padding, belongs to the buttons.
   const keepClick = (e) => e.stopPropagation();
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- A focusable separator is the ARIA window-splitter widget — a control, not a
+     decoration — which is exactly what a rail you can drag and arrow is. The
+     a11y lint classifies every `separator` as non-interactive and has no case
+     for that, so the two warnings it raises here are the false ones. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 <div
   class="ed-rail"
   class:hidden={app.sidebarHidden}
   style="left:{app.sidebarHidden ? 0 : app.leftWidth}px"
+  role="separator"
+  aria-orientation="vertical"
+  aria-label="Raw reference width"
+  aria-valuenow={app.leftWidth}
+  aria-valuemin={SIDEBAR_MIN}
+  aria-valuemax={SIDEBAR_MAX}
+  tabindex={app.sidebarHidden ? -1 : 0}
   onpointerdown={onRailPointerDown}
+  onkeydown={onRailKeyDown}
 >
-  <div class="ed-rail-tools">
+  <!-- The band that advertises the resize: the seam is on its left edge, which
+       is the edge the drag actually moves. The rest of the strip stays a plain
+       pointer so it does not claim to be an edge it is not. -->
+  <div class="ed-rail-edge"></div>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="ed-rail-tools" onpointerdown={keepClick}>
     <button
       class="caret"
-      onpointerdown={keepClick}
       onclick={toggleSidebar}
       aria-label={app.sidebarHidden ? 'Show raw reference' : 'Hide raw reference'}
       data-tip={app.sidebarHidden ? 'Show raw reference' : 'Hide raw reference'}
@@ -74,7 +125,6 @@
     <span class="sep"></span>
     <button
       class:on={app.tool === 'place'}
-      onpointerdown={keepClick}
       onclick={() => setTool('place')}
       aria-label="Place tool"
       data-tip="Place tool — drop queued lines"
@@ -83,7 +133,6 @@
     </button>
     <button
       class:on={app.tool === 'text'}
-      onpointerdown={keepClick}
       onclick={() => setTool('text')}
       ondblclick={openBulk}
       aria-label="Text tool"
@@ -93,8 +142,7 @@
     </button>
     <button
       class:on={app.bulk.active}
-      onpointerdown={keepClick}
-      onclick={openBulk}
+      onclick={toggleBulk}
       aria-label="Bulk style"
       data-tip="Bulk style — one style, many boxes"
     >

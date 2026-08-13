@@ -785,10 +785,18 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
   position:absolute; left:0; top:0; bottom:0; z-index:20;
   display:flex; flex-direction:column; background:var(--panel);
 }
-.ed-side-scroll{ flex:1 1 auto; overflow:auto; padding:14px; display:flex; justify-content:center; }
+/* The bottom padding clears the zoom pill floating at bottom:16px, so the last
+   inch of a long page is not stuck underneath it. */
+.ed-side-scroll{
+  flex:1 1 auto; overflow:auto; padding:14px 14px 64px; background:var(--art);
+  display:flex; justify-content:flex-start;
+}
 /* flex:0 0 auto so a reference zoomed past 100% overflows into the scroll
-   rather than being shrunk back to the column's width. */
-.ed-side-scroll img{ flex:0 0 auto; height:auto; box-shadow:var(--edge); align-self:flex-start; }
+   rather than being shrunk back to the column's width; `margin:0 auto` rather
+   than `justify-content:center` to place it, because auto margins resolve to
+   zero once the free space goes negative — a centred overflow would push half
+   the page out to the left, where scrollLeft cannot follow it. */
+.ed-side-scroll img{ flex:0 0 auto; margin:0 auto; height:auto; box-shadow:var(--edge); align-self:flex-start; }
 .ed-side-scroll.empty{ align-items:center; }
 .ed-side-empty{ margin:auto; text-align:center; color:var(--t3); font-size:12px; line-height:1.6; }
 /* Floats over the reference, same pill chrome as the canvas dock and the pager
@@ -803,27 +811,37 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 .ed-side-zoom button:hover{ background:var(--panel2); }
 .ed-side-zoom .zval{ min-width:44px; text-align:center; color:var(--t2); font-size:11.5px; }
 
-/* The whole strip is the drag handle, so it takes the resize cursor and
-   touch-action:none — without the latter the browser may claim the pointer for
-   a pan and cancel the drag halfway. */
-.ed-rail{
-  position:absolute; top:0; bottom:0; width:var(--rail-w); z-index:21;
-  cursor:col-resize; touch-action:none;
-}
-.ed-rail.hidden{ cursor:default; }
-/* The seam between sidebar and canvas: drawn on the rail's left edge, which is
-   also the edge the drag moves, so the affordance is where the hand goes. With
-   the sidebar hidden there is no seam to draw. */
-.ed-rail::before{
+/* The whole strip carries the drag, but only its left band says so: the cursor
+   and the seam highlight belong to the edge that actually moves, and claiming
+   all 44px would misreport where that edge is. touch-action:none on the strip —
+   without it the browser may claim the pointer for a pan and cancel the drag
+   halfway. */
+.ed-rail{ position:absolute; top:0; bottom:0; width:var(--rail-w); z-index:21; touch-action:none; }
+.ed-rail:focus{ outline:none; }
+.ed-rail-edge{ position:absolute; left:0; top:0; bottom:0; width:9px; cursor:col-resize; }
+.ed-rail.hidden .ed-rail-edge{ cursor:default; }
+/* The seam between sidebar and canvas. With the sidebar hidden there is no seam
+   to draw and nothing to drag, so it goes away with it. */
+.ed-rail-edge::before{
   content:""; position:absolute; left:0; top:0; bottom:0; width:1px;
   background:var(--line2); transition:background .12s;
 }
-.ed-rail.hidden::before{ display:none; }
-.ed-rail:hover::before{ background:var(--accent); }
+.ed-rail.hidden .ed-rail-edge::before{ display:none; }
+.ed-rail-edge:hover::before{ background:var(--accent); }
+/* Keyboard focus lands on the rail, so the seam is where it has to show — the
+   same highlight the hover gives, thickened so it reads without a pointer. */
+.ed-rail:focus-visible .ed-rail-edge::before{ background:var(--accent); width:2px; }
 .ed-rail-tools{
   position:absolute; left:2px; top:16px; display:flex; flex-direction:column; gap:3px;
   background:color-mix(in srgb, var(--panel) 92%, transparent); border:1px solid var(--line);
   border-radius:9px; padding:4px; box-shadow:var(--edge); backdrop-filter:blur(6px);
+  cursor:default;
+}
+/* A vertical strip has no room for a tooltip centred underneath it — the rail
+   sits at the window's left edge with the sidebar hidden, and a centred tip
+   runs straight off it. These read to the side instead. */
+.ed-rail-tools [data-tip]:hover::after{
+  left:calc(100% + 7px); top:50%; transform:translateY(-50%);
 }
 .ed-rail-tools button{
   width:30px; height:30px; border:none; background:transparent; color:var(--text);
