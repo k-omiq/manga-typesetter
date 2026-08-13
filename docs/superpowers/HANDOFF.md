@@ -122,19 +122,42 @@ project card knows.
 
 ---
 
-## 3. Slice 2b — the editor wireframe
+## 3. Slice 2b — the editor wireframe — BUILT AND DRIVEN IN THE APP
 
-The wireframe is the authority. The user calls it "the mother wireframe" and said everything outside it is redundant. It is committed at `docs/wireframe-editor.png` — read it before designing anything in this slice.
+The wireframe at `docs/wireframe-editor.png` was the authority and the editor now matches it.
+Spec: `docs/superpowers/specs/2026-08-13-slice2b-editor-wireframe-design.md`.
+Plan: `docs/superpowers/plans/2026-08-13-slice2b-editor-wireframe.md`.
+Ledger, with every review finding, fix round and ruling: `.superpowers/sdd/2026-08-13-slice2b-editor-wireframe/progress.md` (git-ignored, on disk).
 
-Target layout:
-- Full-bleed canvas. The current top bar, status bar and column resizers are deleted.
-- Floating chrome: a **Home** pill and a **project info** pill top-left (the unsaved indicator moves onto the project pill — there is no manual save, so a failed autosave must stay visible somewhere); **detect** and **export options** top-right of the canvas; **settings + font library** far top-right.
-- Left: the raw reference sidebar, hideable, with its own zoom controls at the bottom.
-- A vertical rail between sidebar and canvas carrying the **tool switcher** (place / text / bulk-style), which also acts as the sidebar resizer.
-- Bottom of the canvas: a floating **zoom + undo/redo** bar and the **`<n/N>` pager**.
-- Right: two panels — **text box options** and **text queue** — each draggable, hideable and resizable, with position/size/hidden state persisted per user in `localStorage`.
+Forty-two commits. `npm test` 226 passing, `npm run build` and `cargo check` clean.
 
-**Undo/redo does not exist** — grep confirms no history anywhere in the codebase. The user's direction: *"it's a small 5 steps undo/redo max. Not a full document snapshot, go with a vectorized history (or whatever's best for saving RAM), include in this slice."* So: a bounded command/inverse-command history, cap 5, covering place / move / resize / delete / style / text edit / bulk apply. Not document snapshots.
+What it delivers: a full-bleed canvas; the top bar, status bar, column resizers and old right panel
+deleted; Home and project pills carrying the save indicator, detect and export pills, settings and
+fonts; a hideable raw-reference sidebar with its own zoom; a tool rail carrying place / text / bulk
+style that doubles as the sidebar's resizer; a floating zoom + undo/redo dock and a typeable pager;
+two draggable, resizable, hideable panels whose geometry persists per user; a translation field on
+the active queue line; per-page detection and a *Save detection JSON…* action; and undo/redo, which
+did not exist in this codebase before — five steps, per page, plain-data command records with
+inverses, spilled to `<chapter>/logs/history.json` and replayed after a relaunch.
+
+Verified in a debug bundle built from this worktree and proven with a temporary marker on the
+project pill: every panel dragged, resized, hidden into its button and restored; the layout, the
+theme and the history all surviving a quit and a relaunch (`logs/history.json` came back with three
+undo and two redo entries and replayed correctly); the five-step cap; both themes on every piece of
+chrome; the transform handles staying dark over the near-white page in dark mode.
+
+Two defects the app pass found, both since fixed and re-verified on screen:
+- the rail's restore caret sat underneath the fixed Home pill once the sidebar was hidden, so the
+  sidebar could not be brought back;
+- ⌘Z did nothing right after the Text tool's gesture. The cause was not in the web app at all:
+  Tauri's `Menu::default()` installs an Edit submenu whose **predefined** Undo/Redo own ⌘Z and
+  ⇧⌘Z at the macOS responder level, ahead of the web view. They are now removed in the same pass
+  that already swaps Quit.
+
+**Known trade-off from that second fix, worth a decision:** removing those menu items also removed
+the field-level text undo. ⌘Z inside an inline box edit no longer reverts the typing, and neither
+does it in the Inspector's textarea. The alternative — ordinary menu items delegating to
+`document.execCommand('undo')` when a field has focus — is unproven in WKWebView and was not taken.
 
 ---
 
