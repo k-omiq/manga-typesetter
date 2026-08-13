@@ -7,6 +7,7 @@
   import { app } from '../store.svelte.js';
   import { goProject, goLibrary } from '../route.svelte.js';
   import { projectById, chapterById } from '../library.svelte.js';
+  import { sidecarReady } from '../sidecar.js';
   import DetectMenu from './DetectMenu.svelte';
 
   let { onFontLib, onSettings } = $props();
@@ -50,6 +51,24 @@
     }
   }
 
+  // The pill is the only thing on screen while detection runs — the menu closes
+  // itself the moment an item is chosen — so it carries the whole progress
+  // report. `app.detecting` is what both scopes set, and it is what says
+  // something is happening at all; the count is the extra a whole-chapter run
+  // has to say and a single page does not.
+  const detectNote = $derived.by(() => {
+    if (!app.detecting) return null;
+    const b = app.detectBatch;
+    return b ? `${b.done}/${b.total}` : 'Detecting…';
+  });
+
+  // A greyed-out menu with no reason beside it is the state the spec's error
+  // handling forbids, and the sidecar being down is the one reason the user
+  // cannot work out from the page in front of them.
+  const detectTip = $derived(
+    sidecarReady() ? 'Detect text + OCR' : 'Detect text + OCR — sidecar not ready',
+  );
+
   // Handed to the menu so its outside-pointerdown check can spare the button
   // that opened it — see the note there.
   let detectBtn = $state(null);
@@ -71,19 +90,20 @@
     <button
       class="pill pill-icon"
       class:on={detectOpen}
-      class:busy={!!app.detectBatch}
+      class:busy={!!detectNote}
       bind:this={detectBtn}
       onclick={() => (detectOpen = !detectOpen)}
       aria-haspopup="menu"
       aria-expanded={detectOpen}
       aria-label="Detect text"
-      data-tip="Detect text + OCR"
+      data-tip={detectTip}
     >
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" /><path d="M7 12h10" /></svg>
-      <!-- The only thing the glyph cannot say on its own: how far through a
-           whole-chapter run we are. Present only while one is in flight. -->
-      {#if app.detectBatch}
-        <span class="pill-count">{app.detectBatch.done}/{app.detectBatch.total}</span>
+      <!-- The two things the glyph cannot say on its own: that a run is under
+           way at all, and how far through a whole-chapter one we are. Present
+           only while detection is in flight. -->
+      {#if detectNote}
+        <span class="pill-count">{detectNote}</span>
       {/if}
     </button>
     {#if detectOpen}

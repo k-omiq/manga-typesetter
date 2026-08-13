@@ -781,8 +781,9 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 .pill:disabled{ color:var(--t3); border-color:var(--line2); cursor:default; }
 .pill svg{ width:16px; height:16px; flex:none; }
 .pill-icon{ width:32px; flex:none; padding:0; justify-content:center; }
-/* Only while a whole-chapter detect is in flight: the glyph cannot say how far
-   through it is, so the pill grows a counter for exactly as long as that matters. */
+/* Only while a detect is in flight: the glyph cannot say that it is running,
+   nor how far through a whole-chapter run it is, so the pill grows a note for
+   exactly as long as that matters. */
 .pill-icon.busy{ width:auto; padding:0 11px; }
 .pill-icon.on{ background:var(--panel2); border-color:var(--t3); }
 .pill-count{ font-size:11px; color:var(--t2); }
