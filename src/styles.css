@@ -232,8 +232,28 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
 }
 .zoomdock button{ height:28px; min-width:30px; padding:0 8px; border:none; background:transparent; color:var(--text); border-radius:6px; cursor:pointer; font-size:12.5px; display:grid; place-items:center; }
 .zoomdock button:hover{ background:var(--panel2); }
+.zoomdock button:disabled{ color:var(--t3); cursor:default; background:transparent; }
 .zoomdock .zval{ min-width:52px; font-variant-numeric:tabular-nums; }
 .zoomdock .sep{ width:1px; height:18px; background:var(--line); margin:0 3px; }
+
+/* floating pager — same pill chrome as .zoomdock so the two dock pieces read
+   as one family. Neither positions itself: Task 10's `.ed-dockrow` places
+   both side by side, bottom-centred over the canvas viewport. */
+.pager{
+  display:flex; align-items:center; gap:2px; background:color-mix(in srgb, var(--panel) 92%, transparent);
+  border:1px solid var(--line); border-radius:9px; padding:4px;
+  box-shadow:var(--edge); backdrop-filter:blur(6px);
+}
+.pager button{ height:28px; min-width:28px; padding:0 8px; border:none; background:transparent; color:var(--text); border-radius:6px; cursor:pointer; font-size:13px; display:grid; place-items:center; }
+.pager button:hover{ background:var(--panel2); }
+.pager button:disabled{ color:var(--t3); cursor:default; background:transparent; }
+.pager .pnum{ min-width:30px; font-variant-numeric:tabular-nums; }
+.pager input.pnum{
+  border:1px solid var(--line2); background:var(--surface); color:var(--text);
+  border-radius:6px; text-align:center; outline:none;
+}
+.pager input.pnum:focus{ border-color:var(--t3); }
+.pager .pof{ color:var(--t2); padding:0 4px 0 2px; white-space:nowrap; }
 
 /* ---------- right panel ---------- */
 .col-right{ overflow:hidden; }
