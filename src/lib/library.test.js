@@ -628,6 +628,48 @@ describe('saveOpenChapter', () => {
     closeChapter();
   });
 
+  // The 800ms debounce cannot be called back once it has entered
+  // `Promise.resolve().then(saver)`, so two of these genuinely overlap. Each
+  // snapshots `app.pages` at its own moment: unserialised, the older snapshot
+  // can rename last and put a stale document over a newer one. The atomic write
+  // is what stops the file tearing; the queue is what makes the last edit win.
+  it('serialises overlapping saves so the later edit lands last', async () => {
+    const { c } = await seedOpenChapter();
+    const line = (en) => ({ n: 1, type: 'dialogue', jp: 'あ', en });
+    let release;
+    let entered;
+    const gate = new Promise((r) => (release = r));
+    const atGate = new Promise((r) => (entered = r));
+    const orig = fsx.writeTextFileAtomic;
+    let writes = 0;
+    // Only the first write waits, so a pair left to race would land in the
+    // wrong order — the second document first, the first one over the top of it.
+    fsx.writeTextFileAtomic = async function (p, contents) {
+      if (++writes === 1) {
+        entered();
+        await gate;
+      }
+      return orig.call(this, p, contents);
+    };
+    try {
+      app.pages[0].lines = [line('first')];
+      const a = saveOpenChapter();
+      await atGate; // `a` has taken its snapshot and is held at the write
+      app.pages[0].lines = [line('second')];
+      const b = saveOpenChapter();
+      // A tick of real time: enough for an unqueued `b` to run its reads and
+      // land its write ahead of the one still held below, and idle time for a
+      // queued one, which has not started at all.
+      await new Promise((r) => setTimeout(r, 0));
+      release();
+      await Promise.all([a, b]);
+    } finally {
+      fsx.writeTextFileAtomic = orig;
+    }
+    expect(chapterJson(c).pages[0].lines[0].en).toBe('second');
+    closeChapter();
+  });
+
   it('does nothing when no chapter is open', async () => {
     const { c } = await seedOpenChapter();
     const before = fsx._tree.files.get(`${c.dir}/chapter.json`);

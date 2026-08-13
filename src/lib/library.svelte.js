@@ -967,7 +967,25 @@ export async function openChapter(projectId, chapterId) {
   openHistory(c.dir, app.pages[0]?.id ?? null).catch(() => {});
 }
 
-export async function saveOpenChapter() {
+// Saves are serialised, the same way the history file's writes are and for the
+// same reason. `flushSave`'s clearTimeout cannot call back a debounce that has
+// already entered `Promise.resolve().then(saver)`, so two of these can be in
+// flight at once — and each snapshots `app.pages` at its own moment, so the
+// older snapshot can rename last and overwrite a genuinely later edit. The
+// atomic write means the file can never tear; the queue is what makes the last
+// edit the one that survives.
+let saving = Promise.resolve();
+
+export function saveOpenChapter() {
+  const done = saving.then(writeOpenChapter);
+  // The queue must outlive a save that fails, or one bad write would strand
+  // every later one — but the rejection still reaches this caller, because a
+  // rejected autosave is the user's only signal that their work is off-disk.
+  saving = done.catch(() => {});
+  return done;
+}
+
+async function writeOpenChapter() {
   // Captured once. Every await below is a window in which the user can close
   // this chapter or open another, and `app.pages` stops being what `ref`
   // describes the moment they do — so the identity of the ref is re-checked
