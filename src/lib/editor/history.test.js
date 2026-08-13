@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { app, loadProjectPages, deleteBox, placeActiveAt, page } from '../store.svelte.js';
+import {
+  app,
+  loadProjectPages,
+  deleteBox,
+  placeActiveAt,
+  addEmptyBox,
+  beginEdit,
+  endEdit,
+  page,
+} from '../store.svelte.js';
 import {
   history,
   record,
@@ -17,7 +26,10 @@ const doc = () => [
     id: 1,
     w: 800,
     h: 1200,
-    lines: [{ n: 1, type: 'dialogue', jp: 'あ', en: 'ah' }],
+    lines: [
+      { n: 1, type: 'dialogue', jp: 'あ', en: 'ah' },
+      { n: 2, type: 'dialogue', jp: 'い', en: 'ee' },
+    ],
     boxes: [
       { id: 'b1', lineN: null, text: 'one', x: 10, y: 10, w: 100, h: 40, style: null },
       { id: 'b2', lineN: null, text: 'two', x: 50, y: 50, w: 100, h: 40, style: null },
@@ -91,6 +103,67 @@ describe('command records', () => {
     record({ t: 'text', pageId: 1, boxId: 'b1', before: 'one', after: 'changed' });
     undo();
     expect(page().boxes[0].text).toBe('one');
+  });
+});
+
+// The queue's active line is part of the edit, not a view of it: a place
+// advances it and a delete hands the line back, so an undo that ignored it
+// would leave the queue disagreeing with the canvas.
+describe('the queue moves with the record', () => {
+  it('rewinds the queue when a place is undone, and forwards it on redo', () => {
+    expect(page().activeLineN).toBe(1);
+    placeActiveAt(400, 400);
+    expect(page().activeLineN).toBe(2);
+    undo();
+    expect(page().activeLineN).toBe(1);
+    redo();
+    expect(page().activeLineN).toBe(2);
+  });
+
+  it('takes the line back out of the queue when a delete is undone', () => {
+    placeActiveAt(400, 400);
+    const id = page().boxes[2].id;
+    deleteBox(id);
+    expect(page().activeLineN).toBe(1); // the line returned to the queue
+    undo();
+    expect(page().activeLineN).toBe(2); // and is placed again
+    redo();
+    expect(page().activeLineN).toBe(1);
+  });
+});
+
+// A new free-typed box is one gesture — created, typed into, committed. It
+// costs one undo press, or none at all when the user types nothing.
+describe('one gesture, one step', () => {
+  it('undoes a typed-into new box, text and all, in one press', () => {
+    const id = addEmptyBox(300, 300);
+    endEdit('hi', '');
+    expect(page().boxes.length).toBe(3);
+    undo();
+    expect(page().boxes.length).toBe(2);
+    expect(history.canUndo).toBe(false);
+    redo();
+    expect(page().boxes.map((b) => b.id)).toContain(id);
+    expect(page().boxes[2].text).toBe('hi');
+  });
+
+  it('leaves the history untouched when a new box is abandoned empty', () => {
+    addEmptyBox(300, 300);
+    endEdit('', '');
+    expect(page().boxes.length).toBe(2);
+    expect(history.canUndo).toBe(false);
+  });
+
+  it('still records the removal of an existing box emptied out', () => {
+    const id = addEmptyBox(300, 300);
+    endEdit('hi', '');
+    resetHistory();
+    beginEdit(id);
+    endEdit('  ', 'hi'); // whitespace only — the store drops the box
+    expect(page().boxes.length).toBe(2);
+    expect(history.canUndo).toBe(true);
+    undo();
+    expect(page().boxes.map((b) => b.id)).toContain(id);
   });
 });
 

@@ -38,6 +38,13 @@ const boxOf = (entry) => {
 // asked about rather than reported as one.
 const missing = (e) => new Error(pageById(e.pageId) ? 'the text box is gone' : 'the page is gone');
 
+// A place advances the queue and a delete hands the line back, so both records
+// carry the queue's position on either side of the edit. A record written
+// before the field existed simply leaves the queue alone.
+const setActive = (p, n) => {
+  if (n !== undefined) p.activeLineN = n;
+};
+
 // Geometry entries carry only the fields that changed. `size` lives on the
 // style rather than the box, and a resize changes it alongside w/h.
 const setFields = (b, from) => {
@@ -60,9 +67,11 @@ const KINDS = {
         const i = p.boxes.findIndex((b) => b.id === e.box.id);
         if (i === -1) throw new Error('the text box is gone');
         p.boxes.splice(i, 1);
+        setActive(p, e.activeBefore);
       } else {
         if (p.boxes.some((b) => b.id === e.box.id)) throw new Error('the text box is back already');
         p.boxes.splice(Math.min(e.index, p.boxes.length), 0, structuredClone(e.box));
+        setActive(p, e.activeAfter);
       }
     },
   },
@@ -76,10 +85,12 @@ const KINDS = {
         // `index` is what puts the box back where it sat in the stacking order
         // rather than on top of everything drawn since.
         p.boxes.splice(Math.min(e.index, p.boxes.length), 0, structuredClone(e.box));
+        setActive(p, e.activeBefore);
       } else {
         const i = p.boxes.findIndex((b) => b.id === e.box.id);
         if (i === -1) throw new Error('the text box is gone');
         p.boxes.splice(i, 1);
+        setActive(p, e.activeAfter);
       }
     },
   },

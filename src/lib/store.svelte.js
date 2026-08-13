@@ -89,6 +89,7 @@ export function loadProjectPages(rawPages) {
   app.pageIndex = 0;
   app.selectedId = null;
   app.editingId = null;
+  clearPending();
   app.loaded = true;
   markUnsaved();
   return minted;
@@ -246,6 +247,17 @@ export function recordEdit(entry) {
 // page being the one on screen.
 export const pageById = (id) => app.pages.find((p) => p.id === id) ?? null;
 
+// A free-typed box is not history until the user has typed into it. Creating it
+// and dropping it again are halves of one gesture, so `addEmptyBox` only leaves
+// it pending and `endEdit` decides: one `place` record carrying the committed
+// text, or — when the box is dropped empty — nothing at all. Recorded
+// separately they would cost two undo presses, the first of which brings back
+// an empty box the user never wanted.
+let pendingPlace = null;
+const clearPending = () => {
+  pendingPlace = null;
+};
+
 // ---------- toast ----------
 let toastT;
 export function toast(msg) {
@@ -261,6 +273,9 @@ export function gotoPage(i) {
   if (i < 0 || i > app.pages.length - 1) return;
   app.pageIndex = i;
   app.selectedId = null;
+  // A box left mid-edit on the page behind us is no longer a gesture in
+  // progress; leaving it pending would suppress the record of its own deletion.
+  clearPending();
   const p = page();
   if (p.activeLineN == null) p.activeLineN = firstUnplaced(p);
 }
@@ -297,6 +312,27 @@ export function endEdit(commitText, beforeText) {
     b.text = commitText;
     markUnsaved();
   }
+  // drop an empty placeholder box the user never typed into
+  if (b.text != null && b.text.trim() === '' && b.lineN == null) {
+    deleteBox(id);
+    return;
+  }
+  // The box survived, so the gesture that created it is now worth one record —
+  // with the text the user actually typed, not the empty string it was born
+  // with. Its own `text` record would be the same gesture counted twice.
+  if (pendingPlace?.id === id) {
+    const { pageId, index, activeBefore } = pendingPlace;
+    clearPending();
+    recordEdit({
+      t: 'place',
+      pageId,
+      index,
+      box: $state.snapshot(b),
+      activeBefore,
+      activeAfter: page().activeLineN,
+    });
+    return;
+  }
   if (beforeText !== undefined && commitText != null && commitText !== beforeText) {
     recordEdit({
       t: 'text',
@@ -305,10 +341,6 @@ export function endEdit(commitText, beforeText) {
       before: beforeText ?? null,
       after: commitText,
     });
-  }
-  // drop an empty placeholder box the user never typed into
-  if (b.text != null && b.text.trim() === '' && b.lineN == null) {
-    deleteBox(id);
   }
 }
 
@@ -358,6 +390,10 @@ export function placeActiveAt(imgX, imgY) {
   if (p.activeLineN == null) return;
   const ln = lineByN(p, p.activeLineN);
   if (!ln) return;
+  // The queue advances as part of this edit, so the record carries both sides
+  // of it — undoing the box without rewinding the queue would leave the two
+  // disagreeing about what still needs placing.
+  const activeBefore = p.activeLineN;
   const w = 220,
     h = 92;
   const b = {
@@ -371,8 +407,15 @@ export function placeActiveAt(imgX, imgY) {
     style: cloneStyle(app.lastStyle),
   };
   p.boxes.push(b);
-  recordEdit({ t: 'place', pageId: p.id, index: p.boxes.length - 1, box: $state.snapshot(b) });
   p.activeLineN = firstUnplaced(p);
+  recordEdit({
+    t: 'place',
+    pageId: p.id,
+    index: p.boxes.length - 1,
+    box: $state.snapshot(b),
+    activeBefore,
+    activeAfter: p.activeLineN,
+  });
   markUnsaved();
   selectBox(b.id);
   toast(
@@ -397,7 +440,12 @@ export function addEmptyBox(imgX, imgY) {
     style: cloneStyle(app.lastStyle),
   };
   p.boxes.push(b);
-  recordEdit({ t: 'place', pageId: p.id, index: p.boxes.length - 1, box: $state.snapshot(b) });
+  pendingPlace = {
+    id: b.id,
+    pageId: p.id,
+    index: p.boxes.length - 1,
+    activeBefore: p.activeLineN,
+  };
   markUnsaved();
   beginEdit(b.id);
   return b.id;
@@ -408,14 +456,28 @@ export function deleteBox(id) {
   const p = page();
   const b = byId(id);
   if (!b) return;
-  // Both taken before the removal: the undo has to put the box back where it
-  // was in the stacking order, not on the end.
+  // All three taken before the removal: the undo has to put the box back where
+  // it was in the stacking order, not on the end, and take its line back out of
+  // the queue.
   const index = p.boxes.findIndex((x) => x.id === id);
   const snap = $state.snapshot(b);
+  const activeBefore = p.activeLineN;
   p.boxes = p.boxes.filter((x) => x.id !== id);
-  recordEdit({ t: 'delete', pageId: p.id, index, box: snap });
   // only queued (line-backed) boxes return to the queue; free-typed boxes (lineN=null) don't
   if (b.lineN != null && !isPlaced(p, b.lineN)) p.activeLineN = b.lineN;
+  // A box that was never recorded as placed is never recorded as deleted: this
+  // is the half of the empty-placeholder gesture that undoes the other half.
+  if (pendingPlace?.id === id) clearPending();
+  else {
+    recordEdit({
+      t: 'delete',
+      pageId: p.id,
+      index,
+      box: snap,
+      activeBefore,
+      activeAfter: p.activeLineN,
+    });
+  }
   app.selectedId = null;
   markUnsaved();
   toast(b.lineN != null ? `Deleted box · line ${b.lineN} back to queue` : 'Deleted text box');
