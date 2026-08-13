@@ -526,8 +526,10 @@ async function toChapterPage(page, index) {
       w: page.w ?? PAGE_W,
       h: page.h ?? PAGE_H,
       lines: (page.lines ?? []).map((l) => ({ ...l })),
-      // Box ids are per-document and are reassigned when the chapter opens;
-      // these only have to be unique inside the record.
+      // Numbered per page, so pages past the first repeat ids the earlier ones
+      // already used. The loader keeps the first box to claim an id and mints a
+      // fresh one for the rest, so the record still opens with every box
+      // uniquely addressable.
       boxes: (page.boxes ?? []).map((b, i) => ({ ...b, id: `b${i + 1}`, style: { ...b.style } })),
       detect: page.detect ?? null,
     };

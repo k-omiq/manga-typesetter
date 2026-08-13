@@ -58,5 +58,5 @@ export function defaultStyle() {
 
 // merge older/partial styles up to the current schema (back-compat for saved data)
 export function normalizeStyle(s) {
-  return { ...defaultStyle(), ...s, shadow: { ...defaultStyle().shadow, ...(s.shadow || {}) }, roughen: { ...defaultStyle().roughen, ...(s.roughen || {}) } };
+  return { ...defaultStyle(), ...s, shadow: { ...defaultStyle().shadow, ...(s?.shadow || {}) }, roughen: { ...defaultStyle().roughen, ...(s?.roughen || {}) } };
 }

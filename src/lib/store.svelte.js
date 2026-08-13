@@ -13,12 +13,28 @@ export { PAGE_W, PAGE_H };
 let boxSeq = 1;
 let pageLoadSeq = 5000; // page ids for imported projects that carry none
 
-// Replace all pages from an imported project (e.g. a lossless PSD). Assigns
-// fresh box ids from the store's own sequence (so nothing collides with
-// existing state) and normalizes styles up to the current schema.
+// Replace all pages from an imported project (e.g. a lossless PSD). Normalizes
+// styles up to the current schema.
 // Object URLs (raw/cleaned) are passed through as-is — the caller regenerates
 // them from the source.
+//
+// Box ids are persisted in chapter.json and are addressed by the undo history
+// across sessions, so a load keeps the id it was given. A fresh one is minted
+// only when there is none, or when the file names one box twice — two boxes
+// answering to one id would confuse selection, deletion and undo alike. The
+// pre-pass walks every page first so the sequence starts past the highest id
+// in the whole document, and a box minted on page one cannot take an id a
+// kept box on page nine already owns.
+const idNum = (id) => (typeof id === 'string' && /^b\d+$/.test(id) ? Number(id.slice(1)) : 0);
+
 export function loadProjectPages(rawPages) {
+  const taken = new Set();
+  for (const p of rawPages) {
+    for (const b of p.boxes ?? []) {
+      const n = idNum(b.id);
+      if (n >= boxSeq) boxSeq = n + 1;
+    }
+  }
   app.pages = rawPages.map((p) => {
     const cp = {
       id: p.id ?? pageLoadSeq++,
@@ -36,16 +52,21 @@ export function loadProjectPages(rawPages) {
       detect: p.detect
         ? { panels: (p.detect.panels ?? []).slice(), boxes: p.detect.boxes.map((b) => ({ ...b })) }
         : null,
-      boxes: (p.boxes ?? []).map((b) => ({
-        id: 'b' + boxSeq++,
-        lineN: b.lineN,
-        text: b.text ?? null,
-        x: b.x,
-        y: b.y,
-        w: b.w,
-        h: b.h,
-        style: normalizeStyle(b.style),
-      })),
+      boxes: (p.boxes ?? []).map((b) => {
+        const keep = typeof b.id === 'string' && b.id !== '' && !taken.has(b.id);
+        const id = keep ? b.id : 'b' + boxSeq++;
+        taken.add(id);
+        return {
+          id,
+          lineN: b.lineN,
+          text: b.text ?? null,
+          x: b.x,
+          y: b.y,
+          w: b.w,
+          h: b.h,
+          style: normalizeStyle(b.style),
+        };
+      }),
       activeLineN: null,
     };
     cp.activeLineN = firstUnplaced(cp);
