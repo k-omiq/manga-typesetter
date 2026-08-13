@@ -199,6 +199,34 @@ describe('the file on disk', () => {
     expect(files.size).toBe(0);
   });
 
+  // closeChapter fires the close and does not wait on it. A chapter opened
+  // while that write is in flight must survive the close resuming underneath
+  // it: reset unconditionally, the new chapter loses its stack and — with `dir`
+  // cleared — every later flush returns early, so nothing it records ever
+  // reaches disk again for the rest of the session.
+  it('leaves a chapter opened during its close alone', async () => {
+    const { __setDir, closeHistory, flushHistory } = await mod();
+    const { record } = await hist();
+    const { files } = await disk();
+    __setDir(CH1);
+    record(anEntry(1));
+    const closing = closeHistory(); // in flight, deliberately not awaited yet
+    // What an `openHistory` landing under that flush leaves behind — the seam
+    // exists to put the module in exactly the state an open would. Driving the
+    // real `openHistory` here cannot reproduce the interleave: it flushes on
+    // the way in, so it queues behind this very write and always finishes
+    // second.
+    __setDir(CH2);
+    await closing;
+    // The chapter that was closing still wrote what it had…
+    expect(undoCount(files, PATH, '1')).toBe(1);
+    // …and the one that opened underneath it is still the live chapter, still
+    // writing to its own file.
+    record(anEntry(8));
+    await flushHistory();
+    expect(undoCount(files, PATH2, '1')).toBe(1);
+  });
+
   it('files the live page under its own key when the page turn does not say', async () => {
     const { __setDir, switchHistoryPage, flushHistory } = await mod();
     const { record } = await hist();

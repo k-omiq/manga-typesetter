@@ -226,7 +226,16 @@ export async function closeHistory(pageId) {
   const pid = pageId ?? livePageId;
   if (pid != null) doc = mergeStack(doc, pid, takeStack());
   livePageId = null;
+  // Bound before the await, like everything else here that survives one. This
+  // is called fire-and-forget by closeChapter, so a chapter can be opened while
+  // the flush is still in flight: `openHistory` would finish first and this
+  // would then wipe its document, its stack and its `dir` — and with `dir` null
+  // every later flush returns early, so that chapter's undo would silently
+  // never reach disk again. A close whose chapter has already been replaced has
+  // nothing left to tear down; the flush above has already written it.
+  const mine = dir;
   await flushHistory();
+  if (dir !== mine) return;
   dir = null;
   doc = emptyDoc();
   onDisk = false;
