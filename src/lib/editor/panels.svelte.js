@@ -67,7 +67,12 @@ export function sanitize(stored, vw, vh) {
       num(g.w) !== null &&
       num(g.h) !== null &&
       typeof g.hidden === 'boolean';
-    out[id] = usable ? clampPanel(g, vw, vh) : { ...defs[id] };
+    // The fallback goes through the clamp too. `defaultGeometry` lays the
+    // panels out by width alone, so on a short window an unclamped default
+    // parks the queue below the fold — the very thing this module exists to
+    // prevent, and it would happen on the first run rather than in some odd
+    // corner.
+    out[id] = clampPanel(usable ? g : defs[id], vw, vh);
   }
   return out;
 }
@@ -109,6 +114,11 @@ function save() {
   }, 200);
 }
 
+// The mutators take whatever the caller hands them, minimum sizes aside: the
+// module has no idea how big the window is, and inventing one here would fight
+// the drag it is meant to record. Keeping a panel reachable is the caller's
+// half of the bargain — call `clampAll` when the drag ends and whenever the
+// window resizes.
 export function movePanel(id, x, y) {
   panels[id].x = x;
   panels[id].y = y;
@@ -128,10 +138,16 @@ export function setHidden(id, hidden) {
 
 // Clicking a panel brings it forward. Two panels only, so the z values stay
 // small and never need normalising.
+// The test is against the *other* panels, not against the overall top: a
+// layout where both carry the same z — which a stored blob written without
+// them produces — would otherwise satisfy "I am already the top" forever, and
+// the user could never bring either one forward again.
 export function raisePanel(id) {
-  const top = Math.max(...PANEL_IDS.map((p) => panels[p].z));
-  if (panels[id].z === top) return;
-  panels[id].z = top + 1;
+  const rest = PANEL_IDS.filter((p) => p !== id).map((p) => panels[p].z);
+  if (!rest.length) return;
+  const below = Math.max(...rest);
+  if (panels[id].z > below) return;
+  panels[id].z = below + 1;
   save();
 }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   panels,
   PANEL_IDS,
@@ -25,6 +25,15 @@ const fakeStorage = (initial) => {
     dump: () => v,
   };
 };
+
+// The module debounces its writes, and the timer it leaves behind outlives the
+// case that scheduled it. Every case runs on a fake clock so a write from one
+// can never land in the middle of another.
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
 
 describe('defaults', () => {
   it('parks both panels down the right edge', () => {
@@ -55,6 +64,11 @@ describe('clampPanel', () => {
     expect(c.h).toBe(MIN_H);
   });
 
+  it('leaves a panel that already fits exactly where it is', () => {
+    const g = { x: 200, y: 300, w: 320, h: 400, hidden: false, z: 2 };
+    expect(clampPanel(g, 1000, 800)).toEqual(g);
+  });
+
   it('keeps a hidden panel reachable too', () => {
     const c = clampPanel({ x: 5000, y: 5000, w: 320, h: 400, hidden: true }, 1000, 800);
     expect(c.x).toBeLessThanOrEqual(1000 - 120);
@@ -72,6 +86,14 @@ describe('sanitize', () => {
     expect(g.options.x).toBe(40);
     expect(g.options.hidden).toBe(true);
     expect(g.queue).toEqual(defaultGeometry(1400).queue);
+  });
+
+  // The defaults are laid out by width alone, so a short window is the one
+  // case where falling back to them can park a panel out of reach.
+  it('clamps the panel it falls back to, not just the one it kept', () => {
+    const g = sanitize(null, 1000, 400);
+    expect(g.queue.y).toBeLessThanOrEqual(400 - 32);
+    expect(g.queue.h).toBeLessThanOrEqual(400 - 16);
   });
 
   it('drops values of the wrong type instead of trusting them', () => {
@@ -111,6 +133,12 @@ describe('the live state', () => {
     expect(panels.options.y).toBeLessThanOrEqual(400 - 32);
   });
 
+  it('never lands a fresh layout below a short window', () => {
+    loadPanels(fakeStorage(null), 1000, 400);
+    expect(panels.queue.y).toBeLessThanOrEqual(400 - 32);
+    expect(panels.options.y).toBeLessThanOrEqual(400 - 32);
+  });
+
   it('has an id list the UI can iterate', () => {
     expect(PANEL_IDS).toEqual(['options', 'queue']);
   });
@@ -132,5 +160,80 @@ describe('resize and raise', () => {
     expect(panels.options.z).toBeGreaterThan(panels.queue.z);
     raisePanel('queue');
     expect(panels.queue.z).toBeGreaterThan(panels.options.z);
+  });
+
+  // A blob saved before z existed loads both panels at the same depth. Being
+  // level with the top is not being on top.
+  it('still raises when the two panels are level', () => {
+    loadPanels(
+      fakeStorage(
+        JSON.stringify({
+          options: { x: 40, y: 40, w: 320, h: 400, hidden: false },
+          queue: { x: 80, y: 80, w: 320, h: 400, hidden: false },
+        }),
+      ),
+      1400,
+      900,
+    );
+    expect(panels.options.z).toBe(panels.queue.z);
+    raisePanel('options');
+    expect(panels.options.z).toBeGreaterThan(panels.queue.z);
+  });
+});
+
+// Every mutator debounces a write. Nothing above this point advances the
+// clock, so without these cases the whole persistence half could be deleted
+// and the suite would stay green.
+describe('persistence', () => {
+  beforeEach(() => {
+    resetPanels(1400, 900);
+    vi.clearAllTimers(); // the reset's own write is not what any case here is testing
+  });
+
+  it('writes the layout once the drag settles', () => {
+    const s = fakeStorage(null);
+    loadPanels(s, 1400, 900);
+    movePanel('queue', 120, 240);
+    expect(s.dump()).toBe(null);
+    vi.advanceTimersByTime(200);
+    expect(JSON.parse(s.dump()).queue).toMatchObject({ x: 120, y: 240 });
+  });
+
+  it('coalesces a burst of drag updates into one write', () => {
+    const s = fakeStorage(null);
+    let writes = 0;
+    loadPanels(
+      {
+        getItem: () => null,
+        setItem: (k, v) => {
+          writes++;
+          s.setItem(k, v);
+        },
+      },
+      1400,
+      900,
+    );
+    movePanel('queue', 100, 100);
+    vi.advanceTimersByTime(100);
+    movePanel('queue', 140, 160);
+    vi.advanceTimersByTime(200);
+    expect(writes).toBe(1);
+    expect(JSON.parse(s.dump()).queue).toMatchObject({ x: 140, y: 160 });
+  });
+
+  it('survives a storage that throws on write', () => {
+    loadPanels(
+      {
+        getItem: () => null,
+        setItem: () => {
+          throw new Error('quota');
+        },
+      },
+      1400,
+      900,
+    );
+    movePanel('options', 40, 40);
+    expect(() => vi.advanceTimersByTime(200)).not.toThrow();
+    expect(panels.options.x).toBe(40);
   });
 });
