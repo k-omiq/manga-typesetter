@@ -210,16 +210,52 @@ describe('the file on disk', () => {
     expect(Object.keys(JSON.parse(files.get(PATH)).pages)).toEqual(['1']);
   });
 
-  it('survives a disk that refuses', async () => {
-    const { fsx } = await disk();
-    const boom = vi.spyOn(fsx, 'writeTextFileAtomic').mockRejectedValue(new Error('read-only'));
-    const { __setDir, flushHistory } = await mod();
-    __setDir(CH1);
-    await expect(flushHistory()).resolves.toBeUndefined();
-    // The queue survives it: the next write still lands.
-    boom.mockRestore();
+  // A chapter the user opened, looked at and left is not a chapter with a
+  // history, and it must not acquire a logs directory to explain.
+  it('leaves nothing behind for a chapter that was opened and not edited', async () => {
+    const { openHistory, closeHistory } = await mod();
+    const { fsx, files } = await disk();
+    const mkdir = vi.spyOn(fsx, 'mkdir');
+    try {
+      await openHistory(CH1, 1);
+      await closeHistory();
+      expect(files.size).toBe(0);
+      expect(mkdir).not.toHaveBeenCalled();
+    } finally {
+      mkdir.mockRestore();
+    }
+  });
+
+  // The other direction: once there is a file, an empty document has to reach
+  // it, or a history the user has undone their way out of would never clear.
+  it('writes the empty document over a history that has been undone away', async () => {
     const { files } = await disk();
+    files.set(PATH, JSON.stringify({ version: 1, pages: { 1: { undo: [anEntry(5)], redo: [] } } }));
+    const { openHistory, closeHistory } = await mod();
+    const { loadStack, history } = await hist();
+    await openHistory(CH1, 1);
+    expect(history.canUndo).toBe(true);
+    loadStack(1, { undo: [], redo: [] }); // undone to the bottom
+    await closeHistory();
+    expect(JSON.parse(files.get(PATH))).toEqual({ version: 1, pages: {} });
+  });
+
+  it('survives a disk that refuses', async () => {
+    const { __setDir, flushHistory } = await mod();
+    const { record } = await hist();
+    const { fsx, files } = await disk();
+    __setDir(CH1);
+    // There has to be something to write, and a file already there to keep up
+    // to date, or the flush below has nothing to refuse.
+    record(anEntry(1));
     await flushHistory();
     expect(files.has(PATH)).toBe(true);
+    const boom = vi.spyOn(fsx, 'writeTextFileAtomic').mockRejectedValue(new Error('read-only'));
+    await expect(flushHistory()).resolves.toBeUndefined();
+    boom.mockRestore();
+    // The queue survives it: the next write still lands.
+    files.delete(PATH);
+    await flushHistory();
+    expect(undoCount(files, PATH, '1')).toBe(1);
   });
 });

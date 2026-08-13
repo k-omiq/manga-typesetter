@@ -53,6 +53,14 @@ let told = false;
 // first, so an edit reaches disk on its own debounce rather than waiting for a
 // page switch that may never come.
 let livePageId = null;
+// True once this chapter has a history file to keep up to date — one found when
+// it was opened, or one this session has written. Until then an empty document
+// is not worth writing: a chapter the user opened, looked at and left has to
+// leave nothing behind to explain, and this is the whole reason `logs/` is
+// created on the way to a write rather than on the way in. Once there IS a
+// file, an empty document is written like any other, or a history the user has
+// undone their way out of would never actually clear.
+let onDisk = false;
 
 setHistorySink((pageId) => {
   livePageId = pageId;
@@ -69,6 +77,7 @@ export function __setDir(d) {
   doc = emptyDoc();
   told = false;
   livePageId = null;
+  onDisk = false;
 }
 
 // Takes the directory rather than reading `dir`, because every caller has
@@ -103,6 +112,7 @@ export async function openHistory(chapterDir, pageId) {
   doc = emptyDoc();
   told = false;
   livePageId = pageId;
+  onDisk = false;
   resetHistory();
   if (!dir) return;
   // Bound once, at entry, and read back into the module only at the end — two
@@ -110,9 +120,13 @@ export async function openHistory(chapterDir, pageId) {
   // land its document, and its page's stack, on top of the newer one.
   const mine = dir;
   let loaded = emptyDoc();
+  // A file that is there is one to keep up to date from here on, whatever was
+  // in it — a corrupt one included, since the next write is what repairs it.
+  let found = false;
   try {
     const { file } = await pathsFor(mine);
     if (await fsx.exists(file)) {
+      found = true;
       const parsed = JSON.parse(await fsx.readTextFile(file));
       if (parsed && parsed.version === 1 && parsed.pages) loaded = parsed;
     }
@@ -123,6 +137,7 @@ export async function openHistory(chapterDir, pageId) {
   }
   if (dir !== mine) return;
   doc = loaded;
+  onDisk = found;
   // Whatever is in there is replayed optimistically. An entry that no longer
   // fits the document is reported and dropped by history.svelte.js at the
   // moment it is pressed, not weeded out here — validating a stack against a
@@ -169,7 +184,15 @@ export async function flushHistory() {
   if (!mine) return;
   // The live page's stack is only in memory until this point.
   if (livePageId != null) doc = mergeStack(doc, livePageId, peekStack());
+  // Nothing to say, and nothing on disk saying otherwise: a chapter opened,
+  // read and left leaves no `logs/` directory and no file behind.
+  if (!Object.keys(doc.pages ?? {}).length && !onDisk) return;
   const body = JSON.stringify(doc);
+  // Claimed here rather than after the write lands, so a flush queued behind
+  // this one cannot decide there is no file to clear while this one is still
+  // creating it. A write that then fails is reported, and the next attempt
+  // writes the same document again.
+  onDisk = true;
   const done = writing.then(() => write(mine, body));
   writing = done;
   await done;
@@ -206,5 +229,6 @@ export async function closeHistory(pageId) {
   await flushHistory();
   dir = null;
   doc = emptyDoc();
+  onDisk = false;
   resetHistory();
 }
