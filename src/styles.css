@@ -348,7 +348,6 @@ input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:14px; he
   background:var(--accent); color:var(--accent-fg); font-size:11px; padding:4px 8px; border-radius:5px; white-space:nowrap;
   pointer-events:none; z-index:200; border:1px solid var(--accent);
 }
-[data-tip].tip-down:hover::after{ top:auto; bottom:calc(100% + 7px); }
 
 /* toast */
 .toast{
