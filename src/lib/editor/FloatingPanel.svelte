@@ -14,12 +14,18 @@
   // the panels among themselves.
   const LAYER = 50;
 
-  // The controller for the gesture in flight, so an unmount can end that one
-  // too. It is the same leak as a cancelled pointer wearing different clothes:
-  // the listeners live on `document`, nothing guarantees a further pointer
-  // event once the component is gone, and they would go on writing geometry.
-  let active = null;
-  $effect(() => () => active?.abort());
+  // Every gesture in flight, so an unmount can end them all. It is the same
+  // leak as a cancelled pointer wearing different clothes: the listeners live
+  // on `document`, nothing guarantees a further pointer event once the
+  // component is gone, and they would go on writing geometry. A set rather
+  // than a single controller because two pointers can be down at once — the
+  // grip and the header both pressed before either releases — and a lone slot
+  // would let the second gesture overwrite the first one's net.
+  const live = new Set();
+  $effect(() => () => {
+    for (const ac of live) ac.abort();
+    live.clear();
+  });
 
   function drag(e, kind) {
     if (e.button !== 0) return;
@@ -51,7 +57,7 @@
     const ac = new AbortController();
     const end = (ev) => {
       if (ev.pointerId !== pid) return;
-      active = null;
+      live.delete(ac);
       ac.abort();
       // Clamped on drop, not per frame: clamping under a held pointer fights the
       // cursor, the panel lagging behind the hand that is dragging it. Waiting
@@ -60,7 +66,7 @@
       // the window where the user cannot reach it again.
       clampAll(window.innerWidth, window.innerHeight);
     };
-    active = ac;
+    live.add(ac);
     document.addEventListener('pointermove', move, { signal: ac.signal });
     document.addEventListener('pointerup', end, { signal: ac.signal });
     document.addEventListener('pointercancel', end, { signal: ac.signal });
