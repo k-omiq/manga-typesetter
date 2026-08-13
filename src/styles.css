@@ -692,9 +692,12 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
   background:var(--panel); border:1px solid var(--line2); border-radius:var(--radius);
   box-shadow:var(--edge); overflow:hidden;
 }
+/* touch-action:none on both drag surfaces — the header here and .fpanel-grip
+   below — exactly as .bulk-head already does: without it the browser may claim
+   the pointer for a pan and cancel the gesture mid-drag. */
 .fpanel-head{
   flex:0 0 auto; height:32px; display:flex; align-items:center; gap:8px; padding:0 6px 0 12px;
-  border-bottom:1px solid var(--line); cursor:grab; user-select:none;
+  border-bottom:1px solid var(--line); cursor:grab; touch-action:none; user-select:none;
   font-size:11px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--t2);
 }
 .fpanel-head:active{ cursor:grabbing; }
@@ -712,7 +715,7 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 .fpanel-hide:hover{ background:var(--panel2); color:var(--text); }
 .fpanel-hide svg{ width:15px; height:15px; }
 .fpanel-body{ flex:1 1 auto; min-height:0; overflow:auto; }
-.fpanel-grip{ position:absolute; right:0; bottom:0; width:16px; height:16px; cursor:nwse-resize; }
+.fpanel-grip{ position:absolute; right:0; bottom:0; width:16px; height:16px; cursor:nwse-resize; touch-action:none; }
 .fpanel-grip::after{
   content:""; position:absolute; right:3px; bottom:3px; width:8px; height:8px;
   border-right:1.5px solid var(--t3); border-bottom:1.5px solid var(--t3);
