@@ -18,6 +18,7 @@ import {
   markUnsaved,
   setSaver,
   flushSave,
+  clearPending,
   toast,
 } from './store.svelte.js';
 import { setLeaveEditorHook } from './route.svelte.js';
@@ -1010,6 +1011,9 @@ export function closeChapter() {
   app.pageIndex = 0;
   app.selectedId = null;
   app.editingId = null;
+  // Cleared, not settled: a box left mid-edit is going away with the chapter,
+  // and so is the history it would have been recorded into.
+  clearPending();
   // No document is loaded any more, so the editor falls back to its empty
   // state instead of offering a canvas over the blank stand-in page.
   app.loaded = false;

@@ -19,8 +19,9 @@ export const history = $state({ canUndo: false, canRedo: false, pageId: null });
 
 let undoStack = [];
 let redoStack = [];
-// While an entry is being applied the store's mutations must not be recorded —
-// an undo is not an edit.
+// While a step is being walked the store's mutations must not be recorded — an
+// undo is not an edit. This is the only guard there is, so it has to stay
+// raised for the whole of `step`, not just the apply.
 let applying = false;
 
 function sync() {
@@ -173,9 +174,27 @@ export function record(entry) {
 function step(from, to, dir) {
   const entry = from.pop();
   if (!entry) return false;
+  // The guard has to cover everything the step does, not just the apply:
+  // `selectBox` ends an inline edit, which settles a placement the user had in
+  // progress, which records. Left outside, that record would land on the undo
+  // stack mid-step and clear the redo entry this very step just pushed.
   try {
     applying = true;
     KINDS[entry.t].apply(entry, dir);
+    to.push(entry);
+    // Show the user what just changed. `place` and `delete` name their box
+    // inside the box itself, which is why this is not just `entry.boxId`. When
+    // the step was the one that took the box away, the selection has to go with
+    // it — left pointing at nothing, the inspector blanks and Delete becomes a
+    // no-op.
+    const id = entry.boxId ?? entry.box?.id;
+    if (id) {
+      if (pageById(entry.pageId)?.boxes.some((b) => b.id === id)) selectBox(id);
+      else if (app.selectedId === id) app.selectedId = null;
+    }
+    markUnsaved();
+    sync();
+    return true;
   } catch (err) {
     // Replay and fail loudly: the entry is dropped, the user is told what it
     // was, and the next press carries on to whatever is still valid beneath it.
@@ -185,19 +204,6 @@ function step(from, to, dir) {
   } finally {
     applying = false;
   }
-  to.push(entry);
-  // Show the user what just changed. `place` and `delete` name their box inside
-  // the box itself, which is why this is not just `entry.boxId`. When the step
-  // was the one that took the box away, the selection has to go with it — left
-  // pointing at nothing, the inspector blanks and Delete becomes a no-op.
-  const id = entry.boxId ?? entry.box?.id;
-  if (id) {
-    if (pageById(entry.pageId)?.boxes.some((b) => b.id === id)) selectBox(id);
-    else if (app.selectedId === id) app.selectedId = null;
-  }
-  markUnsaved();
-  sync();
-  return true;
 }
 
 export const undo = () => step(undoStack, redoStack, 'undo');

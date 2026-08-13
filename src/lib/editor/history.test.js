@@ -199,6 +199,20 @@ describe('one gesture, one step', () => {
 });
 
 describe('selection follows the step', () => {
+  // The step selects, selecting ends an inline edit, and ending one settles a
+  // placement — which records. If that record reached the stack mid-step it
+  // would clear the redo entry the step had just pushed, and the undo the user
+  // just pressed could not be redone.
+  it('leaves the redo stack alone when a step fires mid-edit', () => {
+    record({ t: 'move', pageId: 1, boxId: 'b1', before: { x: 0, y: 0 }, after: { x: 5, y: 5 } });
+    addEmptyBox(300, 300); // a gesture in progress on another box
+    undo();
+    expect(history.canRedo).toBe(true);
+    expect(history.canUndo).toBe(false);
+    redo();
+    expect(page().boxes[0].x).toBe(5);
+  });
+
   it('drops the selection with the box, and takes it back on redo', () => {
     placeActiveAt(400, 400);
     const id = page().boxes[2].id;

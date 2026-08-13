@@ -284,7 +284,9 @@ export const pageById = (id) => app.pages.find((p) => p.id === id) ?? null;
 // the box pending, and whoever ends the edit settles it: one `place` record if
 // the box survived, nothing at all if it did not.
 let pendingPlace = null;
-const clearPending = () => {
+// Exported for the paths that put the whole document away: there is nothing
+// left to record against, so the gesture is dropped rather than settled.
+export const clearPending = () => {
   pendingPlace = null;
 };
 // Every path that ends an edit calls this — not just `endEdit`. `deselect` and
@@ -526,6 +528,9 @@ export function deleteBox(id) {
 // Opened by double-clicking the Text tool. User tweaks one style, clicks the
 // boxes to apply it to, then hits Apply.
 export function openBulk() {
+  // Bulk mode ends any inline edit, and the box being typed into stays on the
+  // page — so the gesture that created it is settled and recorded, not dropped.
+  if (app.editingId) settlePending();
   const seed = app.selectedId ? byId(app.selectedId)?.style : null;
   app.bulk = {
     active: true,
