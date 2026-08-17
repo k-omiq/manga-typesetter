@@ -10,7 +10,9 @@ import {
   selectBox,
   deselect,
   page,
+  gotoPage,
   setEditSettleHook,
+  boxText,
 } from '../store.svelte.js';
 import {
   history,
@@ -23,6 +25,8 @@ import {
   takeStack,
   peekStack,
   loadStack,
+  setOffscreenSink,
+  setHistorySink,
 } from './history.svelte.js';
 
 const doc = () => [
@@ -102,6 +106,57 @@ describe('command records', () => {
     expect(history.canUndo).toBe(false);
   });
 
+  // An entry belongs to one page, and a bulk entry is no exception. It used to
+  // resolve each item through the item's own page id so that a chapter-wide tag
+  // apply could be undone from wherever it was pressed — which meant an entry on
+  // page A's stack mutating boxes on page B while B kept a stack of its own
+  // whose before/after still described the world before the apply. B's next undo
+  // then restored a style it had not been in since. The writer splits such an
+  // apply into one entry per page now, so the reader can hold the line.
+  const twoPageDoc = () => {
+    const pages = doc();
+    pages.push({
+      id: 2,
+      w: 800,
+      h: 1200,
+      lines: [],
+      boxes: [{ id: 'b3', lineN: null, text: 'three', x: 10, y: 10, w: 100, h: 40, style: null }],
+    });
+    return pages;
+  };
+
+  it('walks only the boxes on the page the entry names', () => {
+    loadProjectPages(twoPageDoc());
+    app.pages[1].boxes[0].style.size = 30;
+    record({
+      t: 'bulk',
+      pageId: 1,
+      items: [
+        { boxId: 'b1', pageId: 1, before: { size: 10 }, after: { size: 30 } },
+        // A writer that has regressed. Skipped rather than applied: page 2 keeps
+        // its own stack, and reaching into it from here is the desync.
+        { boxId: 'b3', pageId: 2, before: { size: 14 }, after: { size: 30 } },
+      ],
+    });
+    undo();
+    expect(app.pages[0].boxes[0].style.size).toBe(10);
+    expect(app.pages[1].boxes[0].style.size).toBe(30);
+  });
+
+  // And the page being gone is a different failure from the boxes being gone —
+  // the user is told which.
+  it('says the page is gone rather than blaming the boxes', () => {
+    loadProjectPages(twoPageDoc());
+    record({
+      t: 'bulk',
+      pageId: 99,
+      items: [{ boxId: 'b1', pageId: 99, before: { size: 10 }, after: { size: 30 } }],
+    });
+    undo();
+    expect(app.toast.msg).toMatch(/the page is gone/i);
+    expect(history.canUndo).toBe(false);
+  });
+
   it('undoes a text edit', () => {
     page().boxes[0].text = 'changed';
     record({ t: 'text', pageId: 1, boxId: 'b1', before: 'one', after: 'changed' });
@@ -148,7 +203,12 @@ describe('one gesture, one step', () => {
     expect(history.canUndo).toBe(false);
     redo();
     expect(page().boxes.map((b) => b.id)).toContain(id);
-    expect(page().boxes[2].text).toBe('hi');
+    // The text is on the box's queue line, not on the box — a free-typed box is
+    // line-backed like any other now (see `setBoxText`), and the redo has to
+    // bring the line back with it or the box returns rendering nothing.
+    const back = page().boxes.find((b) => b.id === id);
+    expect(back.text).toBe(null);
+    expect(boxText(back)).toBe('hi');
   });
 
   it('leaves the history untouched when a new box is abandoned empty', () => {
@@ -196,6 +256,123 @@ describe('one gesture, one step', () => {
     expect(history.canUndo).toBe(true);
     undo();
     expect(page().boxes.map((b) => b.id)).toContain(id);
+  });
+});
+
+// A free-typed box and its queue line are one thing: the box brings the line
+// into existence and takes it away again. The history has to move both or the
+// user is left with a box rendering nothing (its text lives on that line) or an
+// unplaceable blank row nothing can remove.
+describe('a free-typed box and its line move together', () => {
+  const freeLines = () => page().lines.filter((l) => l.n < 0);
+
+  it('takes the line back out when the placement is undone, and brings it back on redo', () => {
+    const id = addEmptyBox(300, 300);
+    endEdit('BOOM');
+    expect(freeLines()).toHaveLength(1);
+    undo();
+    expect(freeLines()).toHaveLength(0);
+    redo();
+    expect(freeLines()).toHaveLength(1);
+    // Brought back with its text, which is the only place that text ever was.
+    expect(boxText(page().boxes.find((b) => b.id === id))).toBe('BOOM');
+  });
+
+  it('brings the line back when the deletion is undone, where it sat', () => {
+    const id = addEmptyBox(300, 300);
+    endEdit('BOOM');
+    resetHistory();
+    deleteBox(id);
+    expect(freeLines()).toHaveLength(0);
+    undo();
+    expect(page().lines.map((l) => l.n)).toEqual([1, 2, -1]);
+    expect(boxText(page().boxes.find((b) => b.id === id))).toBe('BOOM');
+    redo();
+    expect(freeLines()).toHaveLength(0);
+  });
+
+  // An entry about a queue-placed box carries no line at all, so the ordinary
+  // path is untouched — an imported line must survive its box either way.
+  it('leaves an imported line alone', () => {
+    placeActiveAt(400, 400);
+    const id = page().boxes.at(-1).id;
+    deleteBox(id);
+    undo();
+    expect(page().lines.map((l) => l.n)).toEqual([1, 2]);
+  });
+
+  // The text of a free box lives on its line. Rewound onto `box.text` instead,
+  // the undo would leave the old text as a box-level override sitting over the
+  // new text still standing on the line, with no gesture that could put the two
+  // back in step.
+  it('rewinds a text edit into the line, not onto the box', () => {
+    const id = addEmptyBox(300, 300);
+    endEdit('first');
+    resetHistory();
+    beginEdit(id);
+    endEdit('second');
+    undo();
+    const b = page().boxes.find((x) => x.id === id);
+    expect(b.text).toBe(null);
+    expect(boxText(b)).toBe('first');
+    redo();
+    expect(boxText(page().boxes.find((x) => x.id === id))).toBe('second');
+  });
+});
+
+// Two edits, one click: the click that places a queued box is also what ends the
+// free-typed box the user was still in. The pair has to land in the order the
+// user made them. The settle used to ride on the `selectBox` at the bottom of
+// `placeActiveAt`, which put the older edit onto the stack on top of the newer
+// one — so the first press of undo rewound the box the user had finished with
+// while the one the click had just placed stayed put.
+describe('a placement that ends another edit records the pair in order', () => {
+  it('records the edit it ended before the placement it made', () => {
+    const typed = addEmptyBox(300, 300);
+    page().boxes.find((b) => b.id === typed).text = 'typed';
+    placeActiveAt(400, 400);
+    const placed = page().boxes.find((b) => b.lineN === 1).id;
+    // Newest first: the box this click placed is what the first press takes.
+    undo();
+    expect(page().boxes.map((b) => b.id)).not.toContain(placed);
+    expect(page().boxes.map((b) => b.id)).toContain(typed);
+    undo();
+    expect(page().boxes.map((b) => b.id)).not.toContain(typed);
+  });
+});
+
+// The page turn used to run `clearPending`, which threw the gesture away: the
+// box stayed on the page and the `place` record standing for it was never
+// written, so turning the page mid-typing cost the user one undo step and left
+// them a box that could not be rewound.
+describe('a page turn mid-gesture keeps its step', () => {
+  const twoPages = () => [
+    { id: 1, w: 800, h: 1200, lines: [], boxes: [] },
+    { id: 2, w: 800, h: 1200, lines: [], boxes: [] },
+  ];
+
+  it('records the free-typed box rather than dropping it', () => {
+    loadProjectPages(twoPages());
+    const id = addEmptyBox(300, 300);
+    page().boxes.find((b) => b.id === id).text = 'typed';
+    gotoPage(1);
+    expect(history.canUndo).toBe(true);
+    gotoPage(0);
+    undo();
+    expect(page().boxes.map((b) => b.id)).not.toContain(id);
+  });
+
+  // And it leaves nothing behind to settle twice: a second turn with the gesture
+  // already recorded must not write the same entry again.
+  it('settles the gesture once, not once per page turn', () => {
+    loadProjectPages(twoPages());
+    const id = addEmptyBox(300, 300);
+    page().boxes.find((b) => b.id === id).text = 'typed';
+    gotoPage(1);
+    gotoPage(0);
+    gotoPage(1);
+    undo();
+    expect(history.canUndo).toBe(false);
   });
 });
 
@@ -256,18 +433,28 @@ describe('one inline edit, one step', () => {
 });
 
 describe('selection follows the step', () => {
-  // The step selects, selecting ends an inline edit, and ending one settles a
-  // placement — which records. If that record reached the stack mid-step it
-  // would clear the redo entry the step had just pushed, and the undo the user
-  // just pressed could not be redone.
-  it('leaves the redo stack alone when a step fires mid-edit', () => {
+  // Two things have to hold at once here, and they pull in opposite directions.
+  // The gesture still in progress has to be settled BEFORE the step, or the
+  // press rewinds the move underneath it while the box the user was still typing
+  // into stands — the newest edit is the one they meant, which is the whole
+  // reason `undo` settles first. And the record must not reach the stack DURING
+  // the step, where it would clear the redo entry the step had just pushed and
+  // leave the press with no way back; `applying` is what covers that, and it has
+  // to stay raised for the whole of `step` because the step selects, selecting
+  // ends an inline edit, and ending one settles a placement.
+  it('settles the gesture in progress and steps that, keeping the redo', () => {
     record({ t: 'move', pageId: 1, boxId: 'b1', before: { x: 0, y: 0 }, after: { x: 5, y: 5 } });
-    addEmptyBox(300, 300); // a gesture in progress on another box
+    const id = addEmptyBox(300, 300); // a gesture in progress on another box
     undo();
+    expect(page().boxes.map((b) => b.id)).not.toContain(id); // the newest edit went
+    expect(page().boxes[0].x).toBe(10); // …and the move beneath it was not touched
     expect(history.canRedo).toBe(true);
-    expect(history.canUndo).toBe(false);
+    expect(history.canUndo).toBe(true); // the move is still there for the next press
     redo();
-    expect(page().boxes[0].x).toBe(5);
+    expect(page().boxes.map((b) => b.id)).toContain(id);
+    undo();
+    undo();
+    expect(page().boxes[0].x).toBe(0); // now the move, one press later
   });
 
   it('drops the selection with the box, and takes it back on redo', () => {
@@ -341,6 +528,66 @@ describe('per-page stacks', () => {
     loadStack(1, out);
     expect(history.canUndo).toBe(true);
   });
+
+  // The seam that stops an entry crossing a page boundary. Pushing an entry that
+  // names another page onto the live stack is the desync: it would rewind boxes
+  // on a page keeping its own stack, whose before/after still describe the world
+  // before this entry. The history file takes such an entry instead and merges
+  // it under its own page's key, without ever touching the live stack.
+  describe('an entry naming a page that is not the live one', () => {
+    const other = () => ({ t: 'move', pageId: 2, boxId: 'b9', before: { x: 0 }, after: { x: 1 } });
+
+    // Every entry with a page id is offered, because this module cannot tell
+    // which page is live — the history file can, and answering is its whole job.
+    it('goes to the sink instead of the live stack', () => {
+      const taken = [];
+      const off = setOffscreenSink((pageId, entry) => {
+        if (pageId === 1) return false; // stands in for "that is the live page"
+        taken.push([pageId, entry.t]);
+        return true;
+      });
+      try {
+        record({ t: 'move', pageId: 1, boxId: 'b1', before: { x: 0 }, after: { x: 5 } });
+        record(other());
+        expect(taken).toEqual([[2, 'move']]);
+        // Only the page-1 entry. The stack the user is standing on is untouched
+        // by an edit that did not happen on their page.
+        expect(peekStack().undo).toHaveLength(1);
+        expect(peekStack().undo[0].pageId).toBe(1);
+      } finally {
+        off();
+      }
+    });
+
+    it('is detached before the sink ever sees it', () => {
+      let held = null;
+      const off = setOffscreenSink((_pageId, entry) => {
+        held = entry;
+        return true;
+      });
+      const before = { x: 0 };
+      try {
+        record({ t: 'move', pageId: 2, boxId: 'b9', before, after: { x: 1 } });
+        before.x = 999;
+        expect(held.before.x).toBe(0);
+      } finally {
+        off();
+      }
+    });
+
+    it('stays on the live stack when the sink refuses it', () => {
+      // What a build with no history file does, and what the file itself answers
+      // for a chapter it has no document for: nobody else can keep this, so the
+      // live stack does — which is what it did before the seam existed.
+      const off = setOffscreenSink(() => false);
+      try {
+        record(other());
+        expect(peekStack().undo).toHaveLength(1);
+      } finally {
+        off();
+      }
+    });
+  });
 });
 
 // The next task writes these entries to a file as JSON, so anything a mutation
@@ -375,6 +622,76 @@ describe('plain data', () => {
     before.x = 999;
     undo();
     expect(page().boxes[0].x).toBe(1);
+  });
+});
+
+// A step moves the stack, and the stack is what the history file writes. The
+// document's own autosave runs for the same press, so a step that told the file
+// nothing left the two to reach disk 800ms apart describing different numbers of
+// edits — chapter.json past the undo, history.json still before it. A crash in
+// between and the next press replays an entry against a document it was never
+// recorded against.
+describe('a step schedules the journal', () => {
+  const seen = [];
+  const move = (n) =>
+    record({ t: 'move', pageId: 1, boxId: 'b1', before: { x: n, y: 0 }, after: { x: n + 1, y: 0 } });
+
+  const withSink = (fn) => {
+    seen.length = 0;
+    const off = setHistorySink((pageId) => seen.push(pageId));
+    try {
+      fn();
+    } finally {
+      off();
+    }
+  };
+
+  it('tells the file on undo, and again on redo', () => {
+    withSink(() => {
+      move(0);
+      seen.length = 0; // the record's own notification is not what this is about
+      undo();
+      expect(seen).toEqual([1]);
+      redo();
+      expect(seen).toEqual([1, 1]);
+    });
+  });
+
+  // A step that cannot apply drops its entry, so the stack has changed there
+  // too — left unwritten, the file would keep offering an entry this build has
+  // already refused once.
+  it('tells it about an entry it had to drop as well', () => {
+    withSink(() => {
+      record({ t: 'move', pageId: 1, boxId: 'ghost', before: { x: 0 }, after: { x: 9 } });
+      seen.length = 0;
+      expect(undo()).toBe(false);
+      expect(seen).toEqual([1]);
+    });
+  });
+
+  // Nothing moved, nothing to write.
+  it('says nothing when there was no step to take', () => {
+    withSink(() => {
+      expect(undo()).toBe(false);
+      expect(redo()).toBe(false);
+      expect(seen).toEqual([]);
+    });
+  });
+
+  // The page whose stack this is, not the page the entry names. They are the
+  // same for every entry the live stack should be holding, and when they are
+  // not — an entry for a page that has since gone, which is exactly the kind
+  // that lands in the failure branch — handing the file that dead page's id
+  // would file the live page's whole stack under it.
+  it('names the live page even when the entry names one that is gone', () => {
+    withSink(() => {
+      loadStack(1, {
+        undo: [{ t: 'move', pageId: 99, boxId: 'b1', before: { x: 0 }, after: { x: 9 } }],
+        redo: [],
+      });
+      undo();
+      expect(seen).toEqual([1]);
+    });
   });
 });
 

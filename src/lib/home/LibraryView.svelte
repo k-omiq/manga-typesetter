@@ -11,6 +11,10 @@
   let confirmingId = $state(null); // inline two-step delete confirm
   let naming = $state(false);
   let newName = $state('');
+  // How this project's chapters are read, and the one thing about a project that
+  // cannot be changed after it exists — see `createProject`. Offered here rather
+  // than buried in settings for exactly that reason.
+  let layout = $state('pages');
 
   onMount(scanLibrary);
 
@@ -19,10 +23,12 @@
     if (!name) return;
     naming = false;
     newName = '';
+    const chosen = layout;
+    layout = 'pages';
     // Every other mutation on this screen reports its own failure; a create
     // that throws must not become a silent unhandled rejection.
     try {
-      const p = await createProject(name);
+      const p = await createProject(name, { layout: chosen });
       goProject(p.id);
     } catch (e) {
       toast(`Could not create ${name}: ${e?.message ?? e}`);
@@ -58,6 +64,14 @@
       onkeydown={(e) => e.key === 'Enter' && onCreate()}
       autofocus
     />
+    <!-- Pages is a chapter you turn a page at a time; Longstrip is a webtoon —
+         every page of the chapter stacked into one column with no gaps, which
+         is how the art was cut and how it has to be read back. Chosen here
+         because it cannot be chosen later. -->
+    <div class="seg new-layout">
+      <button class:on={layout === 'pages'} onclick={() => (layout = 'pages')}>Pages</button>
+      <button class:on={layout === 'longstrip'} onclick={() => (layout = 'longstrip')}>Longstrip</button>
+    </div>
     <button class="soft-btn wide" onclick={onCreate}>Create</button>
   {:else}
     <button class="soft-btn wide" onclick={() => (naming = true)}>New project</button>

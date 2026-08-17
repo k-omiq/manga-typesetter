@@ -1,12 +1,25 @@
 <script>
-  import { app, saveExportPrefs } from './store.svelte.js';
+  import { app, saveExportPrefs, isLongstrip } from './store.svelte.js';
   import { exportImages } from './exporter.js';
+  import { SLICE_H_MIN, SLICE_H_MAX, SLICE_H_DEFAULT } from './editor/strip-cuts.js';
 
   const isTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
 
   // JSON exports the detected/typeset text, not a rendered page — one document
   // for the whole scope rather than one file per page.
   const isJson = $derived(app.fmt === 'JSON');
+  // A longstrip chapter's raster export is a re-cut of the whole column, so the
+  // slice height only has anything to answer for the formats and the scope that
+  // re-cut it: not PSD (one layered document per source page) and not JSON.
+  const isStrip = $derived(isLongstrip() && !isJson && app.fmt !== 'PSD');
+
+  // Typing "9" on the way to "9000" must not be clamped to the floor under the
+  // user's fingers, so the field is only pulled into range when it is committed.
+  function onSliceH(e) {
+    const v = Math.round(Number(e.target.value));
+    app.stripSliceH = isFinite(v) && v > 0 ? Math.min(SLICE_H_MAX, Math.max(SLICE_H_MIN, v)) : SLICE_H_DEFAULT;
+    e.target.value = String(app.stripSliceH);
+  }
 
   function close() {
     app.exportOpen = false;
@@ -62,11 +75,36 @@
             One file — <code>{app.exportName}-text.json</code> for the whole chapter, or
             <code>{app.exportName}-&lt;page&gt;-text.json</code> for a single page — carrying
             the detected text (JP + your translation), reading order and box geometry.
+          {:else if isStrip}
+            <!-- Two answers, because the two scopes below produce different
+                 files: a whole strip chapter is re-cut into slices, one page of
+                 it is still that page. -->
+            All pages: <code>{app.exportName}-strip-01.{app.fmt.toLowerCase()}</code> — this page:
+            <code>{app.exportName}-&lt;page&gt;.{app.fmt.toLowerCase()}</code>
           {:else}
             Saved as <code>{app.exportName}-&lt;page&gt;.{app.fmt.toLowerCase()}</code>
           {/if}
         </div>
       </div>
+
+      {#if isStrip}
+        <div class="grp">
+          <label class="lbl" for="exp-slice">Slice height</label>
+          <input
+            id="exp-slice"
+            type="number"
+            min={SLICE_H_MIN}
+            max={SLICE_H_MAX}
+            step="500"
+            value={app.stripSliceH}
+            onchange={onSliceH}
+          />
+          <div class="exp-sub">
+            Height of each exported image, in page pixels. Cuts move off this height to avoid
+            landing on a text box.
+          </div>
+        </div>
+      {/if}
 
       <div class="grp">
         <label class="lbl">Output folder</label>
@@ -88,7 +126,13 @@
           <button class="exp-card" onclick={() => go('all')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="13" height="15" rx="2" /><path d="M8 2h11a2 2 0 0 1 2 2v13" /></svg>
             <div class="t">All pages</div>
-            <div class="d">{app.pages.length} {isJson ? 'pages, one file' : 'images'}</div>
+            <div class="d">
+              {#if isStrip}
+                Whole strip, re-sliced
+              {:else}
+                {app.pages.length} {isJson ? 'pages, one file' : 'images'}
+              {/if}
+            </div>
           </button>
         </div>
       </div>

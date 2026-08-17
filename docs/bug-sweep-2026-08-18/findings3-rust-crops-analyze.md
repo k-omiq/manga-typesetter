@@ -1,0 +1,1 @@
+Clean: all cited edge cases (degenerate quads, anchor windows, convolve offset, crop-count cursor, `ocr=false`, empty panels/identical boxes, empty median) are correctly guarded and handled across `crops.rs`, `analyze.rs`, and `sorting.rs`.

@@ -13,11 +13,31 @@
     isBulkTarget,
     cloneStyle,
     settleEdits,
+    setBoxText,
+    autoFitBox,
+    focusPage,
   } from './store.svelte.js';
+  import { untrack } from 'svelte';
   import { record } from './editor/history.svelte.js';
-  import { arcLayout } from './measure.js';
+  import {
+    createFieldUndo,
+    recordFieldEdit,
+    resyncField,
+    undoField,
+    redoField,
+    caretAfter,
+    isAtomicInput,
+  } from './editor/field-undo.svelte.js';
+  import { arcLayout, applyCase, layoutLines, BOX_PAD, balloonWidthsFor } from './measure.js';
 
-  let { box, pageFrameEl } = $props();
+  // `pg` is the page this box is on. It defaults to the current page, which is
+  // the only page a paged canvas draws — but a longstrip canvas draws every page
+  // in the chapter at once, and a box two slices below the one the scroll
+  // position calls current still has to resolve its own line, clamp to its own
+  // page's height and measure against its own frame. Everything below that used
+  // to call `page()` reads this instead; the default is what keeps the paged
+  // call site identical.
+  let { box, pageFrameEl, pg = page() } = $props();
 
   const z = $derived(app.zoom);
   const selected = $derived(app.selectedId === box.id);
@@ -25,15 +45,24 @@
   const bulkOn = $derived(app.bulk.active);
   const bulkTarget = $derived(isBulkTarget(box.id));
   const s = $derived(box.style);
-  const text = $derived(boxText(box));
+  const text = $derived(boxText(box, pg));
   // Japanese reference for the box's source line (overlay only — never the text content).
-  const line = $derived(box.lineN != null ? lineByN(page(), box.lineN) : null);
+  const line = $derived(box.lineN != null ? lineByN(pg, box.lineN) : null);
   const jp = $derived(line?.jp ?? '');
   const isSfx = $derived(line?.type === 'sfx');
 
   const effSize = $derived(s.size * z);
   const effLs = $derived(s.letterSpacing * z);
-  const effStroke = $derived(s.outlineWidth * z);
+  // Doubled, because both painters centre their stroke on the glyph path and
+  // then cover the inner half with the fill — so what you actually see is half
+  // the width you asked for. The exporter already accounts for that
+  // (`ctx.lineWidth = s.outlineWidth * 2` in exporter.js, and the PSD writer
+  // emits an *outside* stroke of `s.outlineWidth`), which made `outlineWidth`
+  // mean "visible outline" everywhere except here: this preview drew
+  // `outlineWidth` centred, showed `outlineWidth / 2`, and every export came
+  // back twice as heavy as the canvas it was set on. Same convention now in all
+  // three, so the number in the Inspector is the outline the reader sees.
+  const effStroke = $derived(s.outlineWidth * 2 * z);
 
   const justify = $derived(
     s.align === 'left' ? 'flex-start' : s.align === 'right' ? 'flex-end' : 'center',
@@ -73,8 +102,89 @@
   });
 
   const layout = $derived.by(() =>
-    s.curve && s.curve !== 0 && !editing && text !== '' ? arcLayout(text, s, effSize) : null,
+    s.curve && s.curve !== 0 && !editing && text !== '' ? arcLayout(applyCase(text, s), s, effSize) : null,
   );
+
+  // The lines the canvas actually draws, when shaping is on. Two things about
+  // how they are computed are load-bearing:
+  //
+  //   the size is s.size, NOT effSize. The exporter breaks lines at the style's
+  //   own size and the box's own content width; asking the same question with
+  //   the same numbers here is what makes the canvas and the PNG break in the
+  //   same places at every zoom level. Rendering then happens at effSize, which
+  //   only scales the picture.
+  //
+  //   the text is case-applied. The CSS does the uppercasing visually, but
+  //   uppercase glyphs are wider, so the *measurement* has to see the same
+  //   string the exporter measures. Rendering the case-applied line under a
+  //   `text-transform:uppercase` that would produce it anyway changes nothing.
+  //
+  // Null while editing: the contenteditable is uncontrolled and its caret logic
+  // is delicate, so the raw editable is left exactly as it was and the shaped
+  // block reappears when the edit ends.
+  const shaped = $derived.by(() => {
+    if (editing || layout) return null;
+    if ((s.shape ?? 'auto') === 'off') return null;
+    // A font arriving is a change to every width this measures with, and it is
+    // not otherwise reactive: the family named in the style is the same string
+    // before and after the face loads. Without this the block keeps the breaks
+    // it derived against the fallback family for the rest of the session, and
+    // the export — which waits for the fonts before it measures — draws
+    // different ones. See `noteFontsChanged`.
+    app.fontsVersion;
+    // The fifth argument is the balloon this box was fitted to, as one usable
+    // width per line, and it is null for a box that has none — which is every
+    // box that ever existed before fitting did, so that path is unchanged down
+    // to the character. `balloonWidthsFor` reads `box.fit`, `s.balloon`,
+    // `s.lineHeight` and `s.valign` through the reactive proxy, so changing any
+    // of them re-breaks the block here without another dependency being named.
+    return layoutLines(
+      applyCase(text, s),
+      s,
+      s.size,
+      Math.max(1, box.w - BOX_PAD * 2),
+      balloonWidthsFor(box, s, s.size),
+    );
+  });
+
+  // The safety net, and only that. Every path that changes a box's text or its
+  // metrics fits the box itself (see `autoFitBox` in the store), because a box on
+  // a page the user is not looking at has no component to run an effect in. What
+  // this covers is the residue: any path added later that forgets.
+  //
+  // `app.fontsVersion` is in the list because a face loading changes what every
+  // width measures to. The store refits the whole chapter on the same signal, so
+  // this is genuinely redundant for a box that was already on screen — and not
+  // for one whose page is opened between the bump and now, whose height was
+  // written from the fallback metric by a `loadProjectPages` that ran before the
+  // font existed.
+  //
+  // Untracked around the call because `autoFitBox` reads `box.h` and writes it —
+  // tracked, that is a loop. The dependencies are the ones named here on purpose:
+  // what the box has to fit, and nothing it produces.
+  $effect(() => {
+    text;
+    box.w;
+    s.font;
+    s.size;
+    s.lineHeight;
+    s.letterSpacing;
+    s.uppercase;
+    s.bold;
+    s.italic;
+    s.valign;
+    s.shape;
+    s.minOrphan;
+    s.hyphenate;
+    s.autoHeight;
+    // Both halves of the balloon fit: the shape itself, and the switch that says
+    // whether to lay out to it. Either changing changes the line count, which is
+    // the box's height.
+    s.balloon;
+    box.fit;
+    app.fontsVersion;
+    untrack(() => autoFitBox(box, pg));
+  });
 
   // Mirror flip applied to the rendered glyphs (not the box chrome / handles).
   // Rotation lives on .tbox (outer) and the flip on the text (inner), so the
@@ -102,6 +212,12 @@
 
   function onBoxPointerDown(e) {
     if (editing) return; // let caret work
+    // Before anything is selected or recorded. In a strip the box under the
+    // pointer may be on a page the index is not on, and selection, the live undo
+    // stack and the inspector are all scoped to the current page — so touching a
+    // box is what makes its page current. A no-op in a paged chapter, where the
+    // only boxes on screen are this page's.
+    focusPage(pg);
     // in bulk mode, clicking a box toggles it as an apply-target
     if (bulkOn) {
       e.stopPropagation();
@@ -116,6 +232,7 @@
 
   function onDblClick(e) {
     e.stopPropagation();
+    focusPage(pg); // see onBoxPointerDown
     beginEdit(box.id);
   }
 
@@ -127,7 +244,7 @@
     // two of their five steps for one gesture.
     settleEdits();
     const zz = app.zoom;
-    const dims = page();
+    const dims = pg;
     const pid = e.pointerId;
     const sx = e.clientX, sy = e.clientY, ox = box.x, oy = box.y;
     // One drag is one entry, so the before-state is taken here and the record
@@ -169,6 +286,7 @@
   function startTransform(e, dir) {
     e.preventDefault();
     e.stopPropagation();
+    focusPage(pg); // see onBoxPointerDown
     if (!selected) selectBox(box.id);
     settleEdits(); // same as startMove: one gesture must not cost two steps
     const zz = app.zoom;
@@ -178,13 +296,21 @@
     // record is written from — the same five fields either way.
     const o = { x: box.x, y: box.y, w: box.w, h: box.h, size: s.size };
     const isRot = dir === 'rot';
-    const pageId = page().id;
+    // Held rather than re-read per frame, exactly as `startMove` holds it: the
+    // auto-fit clamps against this page's height, and the page cannot change
+    // under a drag that is already in flight.
+    const dims = pg;
+    const pageId = dims.id;
     // The rotate handle writes `style.rotation`, which is not one of those five
     // and does not belong to a geometry record at all — `resize` would try to
     // set it on the box itself. So the rotation gesture records the style it
     // actually changed. Unrecorded, it would leave the next undo rewinding some
     // earlier edit instead, which is worse than having no undo for it.
     const styleBefore = isRot ? cloneStyle(box.style) : null;
+    // Rotation changes no measurement, so the fit cannot move — but the entry
+    // says so explicitly rather than leaving the history to re-derive a height
+    // from whatever the box reads by the time it is walked back.
+    const fitBefore = isRot ? { y: box.y, h: box.h } : null;
     const cx = () => box.x + box.w / 2;
     const cy = () => box.y + box.h / 2;
 
@@ -194,7 +320,13 @@
         const r = pageFrameEl.getBoundingClientRect();
         const mx = (ev.clientX - r.left) / zz, my = (ev.clientY - r.top) / zz;
         let ang = (Math.atan2(my - cy(), mx - cx()) * 180) / Math.PI + 90;
-        if (ev.shiftKey) ang = Math.round(ang / 15) * 15;
+        if (ang > 180) ang -= 360;
+        else if (ang < -180) ang += 360;
+        if (ev.shiftKey) {
+          ang = Math.round(ang / 15) * 15;
+          if (ang > 180) ang -= 360;
+          else if (ang < -180) ang += 360;
+        }
         box.style.rotation = clamp(Math.round(ang), -180, 180);
       } else {
         const dx = (ev.clientX - sx) / zz, dy = (ev.clientY - sy) / zz;
@@ -207,6 +339,13 @@
         if (hasN) { nh = Math.max(30, o.h - dy); ny = o.y + (o.h - nh); }
         box.w = nw; box.h = nh; box.x = nx; box.y = ny;
         if (corner) box.style.size = clamp(Math.round(o.size * (nh / o.h)), 6, 200);
+        // Live, inside the drag, so the user sees the height the text needs
+        // while they are choosing the width. It costs no second undo step: the
+        // `resize` record below is written from `box` after this has run, so its
+        // `after` is exactly what is on screen and one press rewinds the whole
+        // gesture. Grow-only means the drag is still deterministic — each frame
+        // starts from `o.h`, so there is no ratchet.
+        autoFitBox(box, dims);
       }
       markUnsaved();
     };
@@ -220,7 +359,15 @@
       if (isRot) {
         const after = cloneStyle(box.style);
         if (after.rotation !== styleBefore.rotation) {
-          record({ t: 'style', pageId, boxId: box.id, before: styleBefore, after });
+          record({
+            t: 'style',
+            pageId,
+            boxId: box.id,
+            before: styleBefore,
+            after,
+            geomBefore: fitBefore,
+            geomAfter: { y: box.y, h: box.h },
+          });
         }
         return;
       }
@@ -235,11 +382,21 @@
     document.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
+  // ⌘Z inside the editable, which the web view no longer does for us — see
+  // field-undo.svelte.js. One per component instance, not per edit session: this
+  // box outlives every edit made in it, so the stack does too. What keeps it
+  // honest is `resyncField` in `focusSelect`, which throws the previous
+  // session's steps away and re-seeds from the text the node is being seeded
+  // with. Without that, ⌘Z in a second edit would walk back into the first —
+  // restoring text from before an edit the editor history has its own record of.
+  const fieldUndo = createFieldUndo();
+
   function focusSelect(node) {
     // Seed the editable content ONCE on mount so the node stays uncontrolled
     // while typing (its content is NOT derived from reactive state, so input
     // never re-renders the text node and the caret never resets to 0).
-    node.textContent = boxText(box);
+    node.textContent = boxText(box, pg);
+    resyncField(fieldUndo, node.textContent);
     const sel = () => {
       node.focus();
       const r = document.createRange();
@@ -252,18 +409,59 @@
     return {};
   }
 
+  // `setBoxText` rather than `box.text = …`: a free-typed box's text lives on
+  // its queue line, not on the box, and writing `box.text` here would put a
+  // box-level override on top of the line the queue's textarea is still editing.
+  // The two would then say different things about the same box for the rest of
+  // the session. See `setBoxText` in the store for which field is which.
   function onEditInput(e) {
-    box.text = e.currentTarget.innerText;
+    const v = e.currentTarget.innerText;
+    setBoxText(box, v);
+    recordFieldEdit(fieldUndo, v, { atomic: isAtomicInput(e.inputType) });
     markUnsaved();
   }
   function onEditBlur(e) {
     endEdit(e.currentTarget.innerText);
   }
   function onEditKey(e) {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+      // Claimed rather than left to bubble: App's window handler bows out while
+      // `editingId` is set, but a browser build still has a native stack that
+      // would otherwise undo the same keystroke a second time.
+      e.preventDefault();
+      const next = e.shiftKey ? redoField(fieldUndo) : undoField(fieldUndo);
+      if (next != null) restoreEdit(e.currentTarget, next); // "" is a step too
+      return;
+    }
     if (e.key === 'Escape') {
       e.preventDefault();
       e.currentTarget.blur();
     }
+  }
+
+  // Writing `textContent` collapses whatever structure WebKit built while the
+  // user typed — a hard return leaves a <div> or a <br> behind — back to the
+  // single text node the edit started as, which is also the only shape a caret
+  // can be placed in by plain offset. The offset comes from the two strings
+  // rather than from the DOM because a contenteditable's node/offset pairs do
+  // not map onto `innerText` positions across a line break, and `box.text` is
+  // kept in `innerText` terms.
+  function restoreEdit(node, value) {
+    const caret = caretAfter(node.innerText, value);
+    node.textContent = value;
+    const t = node.firstChild;
+    const r = document.createRange();
+    if (t) r.setStart(t, Math.min(caret, t.textContent.length));
+    else r.setStart(node, 0);
+    r.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+    // The same two writes `onEditInput` makes, because that is what this is:
+    // the store follows the node, and the one history record for the whole
+    // session is still settled by whoever ends the edit.
+    setBoxText(box, value);
+    markUnsaved();
   }
 
   const corners = [['corner', 'nw'], ['corner', 'ne'], ['corner', 'sw'], ['corner', 'se']];
@@ -313,6 +511,20 @@
           style="{textStyle};transform:translate(calc(-50% + {g.x}px), calc(-50% + {g.y}px)) rotate({g.rot}rad)"
         >{g.ch}</span>
       {/each}
+    </div>
+  {:else if shaped}
+    <!-- One element per computed line, with `white-space:pre` on each (see
+         `.txt.shaped` in styles.css) so the browser cannot re-wrap a line we
+         already measured and break it somewhere the exporter would not. The
+         width still comes from the box, so an over-long unbreakable word hangs
+         over the edge here exactly as it does in the export. -->
+    <div class="txt shaped" style="{textStyle}{mirror ? `transform:${mirror};` : ''}">
+      <!-- A zero-width space stands in for a blank line: an empty block has no
+           line box at all and would collapse to nothing, while the exporter
+           counts that paragraph as a line and the auto-height reserves room for
+           it. U+200B has a line box and no advance, so it costs no width and
+           does not shift a centred block. -->
+      {#each shaped as ln, i (i)}<div class="tline">{ln === '' ? '\u200b' : ln}</div>{/each}
     </div>
   {:else}
     <div class="txt" style="{textStyle}{mirror ? `transform:${mirror};` : ''}">{text}</div>

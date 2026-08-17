@@ -11,11 +11,17 @@ The clean features were removed in `4960252`, which exists only on `strip-clean`
 
 Work all of this **in the worktree above**. Do not `cd` to the parent repo.
 
+**Update, 2026-08-16.** The sessions since then have run in the parent repo,
+`/Users/caved/dev/manga-typesetter`, on `main` — not in the `strip-clean` worktree named
+above. Everything in sections 5 and 6 was done there. State at this handoff: `cargo test
+--lib` 17 passing, `npx vitest run` 720 passing, `npm run build` and `npm run tauri build`
+clean, a DMG produced. Check which of the two locations you are in before starting.
+
 ---
 
 ## Where things stand
 
-The UI remake was split into slices. Slice 1 is built and reviewed; slices 2a, 2b and the colour-fidelity work are specified or scoped but not started.
+The UI remake was split into slices. Slice 1 is built and reviewed; slices 2a, 2b and the colour-fidelity work are specified or scoped but not started. That sentence is from 2026-08-12 and the section headings below now govern it — 2a and 2b were subsequently built. Sections 5 and 6 cover work that is not part of the UI remake at all: the ONNX migration that removes the Python sidecar, which is the live piece of work, and a set of fixes landed alongside it.
 
 **Slice 1 — design system, app shell, project library — BUILT.**
 Spec: `docs/superpowers/specs/2026-08-12-ui-remake-slice1-design.md` (carries an "Amendments made during implementation" section that governs where it disagrees with the body).
@@ -177,6 +183,127 @@ The approved design (revised once, after the first version conceded too much):
 
 ---
 
+## 5. Sidecar removal — ONNX in Rust — COMPLETE, ALL FOUR SLICES
+
+Spec: `docs/superpowers/specs/2026-08-16-onnx-sidecar-removal-design.md`. The migration is
+done: all three models run from Rust via `ort`, the Python tree and `sidecar.rs` are deleted,
+and the frontend calls the Rust engine. Completed 2026-08-17.
+
+**The verification bar, met everywhere.** Every stage was golden-tested against the real
+Python sidecar's output on real Tsukimichi chapter-1 pages before the Python path was
+removed, and the final gate is end-to-end: `detect::analyze::tests::
+analyze_matches_the_python_sidecar_on_every_golden_page` asserts the exact `/analyze`
+response — line order, boxes, `jp` strings, types, panels — byte-for-byte against
+`src-tauri/testdata/analyze-golden/e2e-golden.json` on three pages (34 lines). All fixtures
+live under `src-tauri/testdata/`; tests skip with an eprintln on machines missing the models
+(`~/.mangatypesetter/models`) or the fixture pages (absolute paths under
+`/Users/caved/Documents/MangaTypesetter/`).
+
+**What exists now, all under `src-tauri/src/detect/`:**
+
+- `geometry.rs`, `panels.rs` — manga109 panel YOLO (slice 1). Ultralytics-exact after a
+  late fix: predict mode letterboxes to a stride-32 *rectangle* (a 1080×1535 page enters at
+  640×480, not 640×640), resize is OpenCV fixed-point INTER_LINEAR (`cvops::
+  resize_linear_u8`, not `image`'s Triangle), NMS IoU is 0.7, and `scale_boxes` is ported
+  verbatim. Panel coordinates now match ultralytics with **zero** delta on all 15 fixture
+  panels. The panel session runs **CPU-only, deliberately**: CoreML's reduced precision
+  moved boxes ~0.03 px — enough to flip an int and swap two reading-order lines on page 10
+  — and CPU was also faster (287 vs 361 ms). Rationale recorded at the `load_session` call.
+- `ocr.rs` — manga-ocr (slice 2), encoder + decoder ONNX (fp32, from
+  onnx-community/manga-ocr-base-ONNX) with a faithful transformers **beam search** port:
+  num_beams 4, no_repeat_ngram_size 3, length_penalty 2.0 (rewards *longer* — easy to
+  invert), early_stopping, `BeamHypotheses.add` ported literally. Preprocessing is
+  bit-exact Pillow: `pil_luma` is the L24 fixed-point formula, `pil_bilinear_resize`
+  hand-ports Pillow's 8-bit two-pass resample — the `image` crate's Triangle filter is NOT
+  a substitute. Golden: 34/34 crops exact-match. Encoder takes CoreML; the decoder cannot
+  (its sequence length grows each step and CoreML compiles per shape).
+- `textdetector.rs`, `textblock.rs`, `dbnet.rs`, `cvops.rs`, `minrect.rs` — the
+  comic_text_detector port (slice 3): rect letterbox (pad bottom/right, black), BGR input,
+  pre-decoded YOLOv5 head, DBNet shrink-map → Suzuki–Abe contours → minAreaRect →
+  ClipperOffset JT_ROUND unclip (the analytical grow-by-d shortcut was tried and measurably
+  wrong — Clipper's integer truncation bulges results ~0.5 px and changed block splits) →
+  full `group_output` grouping with the original's quirks preserved (its `union_area` is
+  really intersection; NaN density gates; sort-index mismatches). Golden: all 34 blocks at
+  IoU exactly 1.0.
+- `crops.rs` — `_block_crop` and the per-line fallback (slice 3.5): exact
+  `get_transformed_region` (4-point DLT homography + OpenCV fixed-point warpPerspective,
+  byte-identical on all 40 line crops) and `_split_into_chunks` (scipy gaussian window,
+  numpy off-centre `same` convolve). The raw `seg` mask stands in for Python's refined mask
+  in the density-valley split; on the fixture nothing splits, so the seam is pinned by unit
+  tests only — see residuals.
+- `sorting.rs` — `sort_bubbles_by_reading_order` (rtl) + `_assign_types` (median font-size
+  SFX heuristic), golden-tested.
+- `analyze.rs` — the pipeline: decode → text blocks → panels → crops → OCR → sort → the
+  exact `/analyze` response shape.
+- `engine.rs` — `DetectEngine` Tauri state, lazy streaming model downloads (`.part` +
+  rename, 300 s deadline, `MT_DOWNLOAD_DEADLINE` override) from HF/GitHub, and the
+  commands: `detect_analyze`, `detect_models_cache`, `detect_models_cache_clear`,
+  `detect_health`. `cache_clear` canonicalises and requires the path to end in
+  `.mangatypesetter/models` before deleting anything.
+
+**The cutover (slice 4).** `src/lib/sidecar.js` now invokes the `detect_*` commands;
+restart-sidecar UI removed (nothing to restart); Settings model-cache panel unchanged in
+shape; `src-tauri/src/sidecar.rs` and the tracked `python/` tree deleted; the
+`bundle.resources` sidecar entry left `tauri.conf.json`; the CI python job is gone; reqwest
+trimmed to `default-features = false, features = ["rustls-tls"]` (model downloads are the
+only outbound traffic); `getrandom` and `tokio` dropped as direct deps.
+
+**Suites:** `cargo test --lib` 134 green (~60 s — the OCR beam-search goldens dominate);
+`npx vitest run` 720 green; `npm run build` clean.
+
+**Residuals, none blocking:**
+
+- `cvops::resize_linear_u8` is not perfectly bit-exact vs cv2 on two fixture pages
+  (≤1 count on ~1k bytes near the right edge, 9 columns) despite its module doc's claim.
+  It changes nothing observable — panel boxes still match ultralytics exactly on those
+  pages — and is filed as a task chip rather than touched, since `textdetector.rs` also
+  depends on it.
+- The per-line chunk splitter uses the raw seg mask where Python used the refined mask,
+  and the fixture never exercises a split (nothing on these pages exceeds the ratio
+  guard). If a future page splits long lines at odd places, capture a golden for it first.
+- The text detector still offers CoreML; its DBNet scores drift ~0.005 near the 0.6
+  box_thresh under CoreML, stable on the fixture but worth remembering if a line ever
+  flickers in and out of detection between machines.
+- ~5.4 GB of untracked leftovers remain on disk: `python/models/` (5.1 GB, the old HF
+  cache), `python/build-sidecar/` (298 MB PyInstaller output), `python/sidecar/__pycache__`,
+  `src-tauri/binaries/mt-sidecar/`. Deleting them is irreversible and was left to the user:
+  `rm -rf python/models python/build-sidecar python/sidecar src-tauri/binaries` reclaims it
+  and keeps `python/flux_sidecar/` (the FLUX inpainting server — separate live work,
+  untouched by this migration).
+- INT8 OCR models are downloaded (`*_quantized.onnx`) but unused; adopting them needs the
+  accuracy comparison the spec calls for.
+
+---
+
+## 6. Assorted fixes, 2026-08-16
+
+All verified, all in the parent repo on `main`.
+
+- **Bulk style panel** could not scroll or be resized. The scroll region is now a single
+  `.bulk-scroll` wrapping the tag block, the hint and the property list, with `min-height:0`
+  so it can actually shrink; a corner grip resizes the panel; and both the width and height
+  caps now track the panel's dragged position rather than assuming it sits at the top left.
+- **Exported outlines were twice the canvas weight.** Both painters centre the stroke on the
+  glyph and then fill over the inner half, so the visible outline is half the requested width.
+  The PNG exporter and the PSD writer already compensated; the editor preview did not.
+  `TextBox.svelte` now doubles too, so all three renderers agree.
+- **The hand tool only worked when scrollbars existed**, which meant it did nothing at Fit.
+  `Canvas.svelte` now spends scroll room first and turns the remainder into a clamped
+  `translate` on `.page-frame`, keeping at least 96px of page on screen. Fit and page turns
+  reset it; zoom re-clamps it.
+- **Page images are windowed** to the current page ±2 (`src/lib/page-images.js`). `openChapter`
+  used to mint a blob URL for every raw and every cleaned page before showing the first one —
+  about 600 MB held for a 200-page chapter, for the whole session. Export, PSD export and
+  batch detect borrow pages through `withPageImages`, which pins them so a page turn cannot
+  revoke an image mid-draw.
+- **Settings → Memory** reports the app's real footprint (`src-tauri/src/memory.rs`). It
+  counts the WebKit content process, which is where the page images live and which is not a
+  child of this process — it is matched by macOS responsible-process, with a launch-session
+  fallback for terminal-started dev builds that the panel labels as such.
+- **The reference sidebar image** is vertically centred instead of pinned to the top.
+
+---
+
 ## Working agreements to carry forward
 
 - **Caveman mode is active** (`full`). Terse, no filler, technical substance intact. It does not apply to anything persisted outside chat — commits, docs, specs and memory files are written in normal prose.
@@ -185,6 +312,38 @@ The approved design (revised once, after the first version conceded too much):
 - **Verify against this worktree's own build.** A packaged build of this app used to exist on the machine and could be launched by mistake; it has been uninstalled, but prove the window under test is this worktree's build (a temporary distinctive wordmark or window title, confirmed on screen, then reverted) before trusting any observation.
 - **The app is unsigned**, so macOS prompts for folder access after each reinstall and that prompt can sit unanswered for a while. That is expected — it is not a hang. One agent misdiagnosed it as one and added a 30-second filesystem deadline; that was reverted.
 - `npm run tauri dev` works (the script was added during slice 1). `npm test` is Vitest, `node` environment, 78 tests.
+
+## Verification commands
+
+```
+cd src-tauri && cargo test --lib     # 17 tests
+npx vitest run                       # 720 tests
+npm run build                        # vite
+npm run tauri build                  # DMG at src-tauri/target/release/bundle/dmg/
+```
+
+## Traps found the hard way, 2026-08-16
+
+- **The DMG step can fail and leave a disk image mounted** at `/Volumes/dmg.*`, which then
+  blocks every retry. Eject it and delete `src-tauri/target/release/bundle/macos/rw.*.dmg`
+  before building again. Note also that a successful DMG step *moves* the `.app` into the
+  image, so `bundle/macos/` is empty afterwards — that is not a failed build.
+- **Tauri's resource copier follows symlinks.** PyInstaller ships 121 symlinked dylibs, so the
+  bundler duplicates 361 MB of them — `libtorch_cpu.dylib` alone appears twice at 236 MB. That
+  is the whole difference between the 1.3 GB staged sidecar and the 1.7 GB app. It compresses
+  away in the DMG, so it costs installed size and not download size, and it becomes moot once
+  the sidecar is gone. There is no Tauri setting for it; fixing it would mean building the
+  `.app`, deduping, and producing the DMG by hand.
+- **The in-app Browser pane got wedged on "Policy check in progress"** twice, on two separate
+  attempts hours apart. Headless Chrome is a working fallback for checking real layout:
+  `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new
+  --virtual-time-budget=4000 --dump-dom http://localhost:PORT/page.html`, having the page
+  write its measurements into an element the DOM dump will contain. Read the port from
+  `preview_logs` — vite's actual port differs from the one the preview tool reports.
+- **Antigravity subagents can return an empty response** with `"status":"SUCCESS"` when a
+  shell command they chose hits the permission allowlist. It is a failed run, not an empty
+  answer. Re-dispatch with a prompt that only reads files and supply any measurements in the
+  prompt yourself.
 
 ## Deferred items, all recorded in the slice 1 ledger
 

@@ -3,5 +3,7 @@
 /target/
 /gen/schemas
 
-# PyInstaller --onedir sidecar bundle (built by python/build-sidecar.sh)
+# Bundled child binaries. Nothing builds into here any more — the PyInstaller
+# sidecar bundle that used to live here went with the Python sidecar — but a
+# stale copy may still be on disk, and it must never be committed.
 /binaries/

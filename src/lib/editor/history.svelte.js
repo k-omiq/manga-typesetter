@@ -12,6 +12,8 @@ import {
   setRecorder,
   cloneStyle,
   settleEdits,
+  setBoxText,
+  autoFitBox,
 } from '../store.svelte.js';
 
 export const MAX_STEPS = 5;
@@ -56,9 +58,48 @@ const setFields = (b, from) => {
   }
 };
 
+// The height an edit's auto-fit left the box at, on either side of it. Carried
+// by every kind whose edit can change what the box has to fit — `style`, `text`,
+// `bulk` — because the fit is grow-only, so re-deriving it on the way back can
+// never give the height back: an Inspector size change from 20 to 48 grew a
+// three-line box from 80 to 320 and an undo left it 320 tall around 20pt text,
+// with no step that could recover it. Worse with `autoHeight`, where the undo
+// restores the flag to false and the re-derivation does not even run.
+//
+// A missing pair is not an error. Entries persist to disk and outlive the build
+// that wrote them, and a caller that changed a style without measuring anything
+// (the rotate drag) has no geometry to offer; both mean "nobody recorded a
+// height here", and re-deriving one is what this code did for every entry until
+// now — safe, because grow-only cannot make a box too small for its text.
+const restoreFit = (b, e, dir, p) => {
+  const g = dir === 'undo' ? e.geomBefore : e.geomAfter;
+  if (g) setFields(b, g);
+  else autoFitBox(b, p);
+};
+
 // Every command type, and how to walk it in each direction. `apply` throws a
 // plain Error when the document no longer matches; the caller turns that into
 // a message and drops the entry.
+// A free-typed box brings a queue line into existence with it and takes that
+// line away again when it is deleted (see `addEmptyBox` and `deleteBox`), so the
+// two have to move together in the history as well — otherwise an undo leaves
+// either a box rendering nothing or an unplaceable blank row nothing can remove.
+// `e.line` is carried only by entries about such a box; every entry about a
+// queue-placed box has none, and these are no-ops for it.
+//
+// Both halves ask whether the line is there rather than asserting it: the
+// history is bounded at five steps and shares a page with edits it did not
+// record, so a line that is already back (or already gone) is a document that
+// agrees with where this entry is trying to take it, not a failure to report.
+const dropLine = (p, e) => {
+  if (!e.line) return;
+  p.lines = p.lines.filter((l) => l.n !== e.line.n);
+};
+const restoreLine = (p, e) => {
+  if (!e.line || p.lines.some((l) => l.n === e.line.n)) return;
+  p.lines.splice(Math.min(e.lineIndex ?? p.lines.length, p.lines.length), 0, structuredClone(e.line));
+};
+
 const KINDS = {
   place: {
     label: 'that placement',
@@ -69,9 +110,11 @@ const KINDS = {
         const i = p.boxes.findIndex((b) => b.id === e.box.id);
         if (i === -1) throw new Error('the text box is gone');
         p.boxes.splice(i, 1);
+        dropLine(p, e);
         setActive(p, e.activeBefore);
       } else {
         if (p.boxes.some((b) => b.id === e.box.id)) throw new Error('the text box is back already');
+        restoreLine(p, e);
         p.boxes.splice(Math.min(e.index, p.boxes.length), 0, structuredClone(e.box));
         setActive(p, e.activeAfter);
       }
@@ -84,6 +127,10 @@ const KINDS = {
       if (!p) throw new Error('the page is gone');
       if (dir === 'undo') {
         if (p.boxes.some((b) => b.id === e.box.id)) throw new Error('the text box is back already');
+        // The line first, so the box is never in the document for a tick with
+        // nothing behind it — and because the box's text lives on that line, a
+        // box restored without it renders empty.
+        restoreLine(p, e);
         // `index` is what puts the box back where it sat in the stacking order
         // rather than on top of everything drawn since.
         p.boxes.splice(Math.min(e.index, p.boxes.length), 0, structuredClone(e.box));
@@ -92,6 +139,7 @@ const KINDS = {
         const i = p.boxes.findIndex((b) => b.id === e.box.id);
         if (i === -1) throw new Error('the text box is gone');
         p.boxes.splice(i, 1);
+        dropLine(p, e);
         setActive(p, e.activeAfter);
       }
     },
@@ -118,6 +166,10 @@ const KINDS = {
       const b = boxOf(e);
       if (!b) throw missing(e);
       b.style = cloneStyle(dir === 'undo' ? e.before : e.after);
+      // After the style, never before: the fit these two fields describe was
+      // taken with that style in place, and a re-derivation triggered in between
+      // would be measuring the wrong one.
+      restoreFit(b, e, dir, pageById(e.pageId));
     },
   },
   text: {
@@ -125,19 +177,51 @@ const KINDS = {
     apply(e, dir) {
       const b = boxOf(e);
       if (!b) throw missing(e);
-      b.text = dir === 'undo' ? e.before : e.after;
+      // Through the store, because which field a box's text lives in is the
+      // store's rule and there are two answers: a free-typed box's text is on
+      // its line, everything else's is on the box. Written straight to `b.text`
+      // here, an undo of a free box's edit would leave the old text as a box-
+      // level override *over* the new text still standing on the line — the box
+      // and its queue row saying different things, with no gesture that could
+      // put them back in step.
+      const p = pageById(e.pageId);
+      setBoxText(b, dir === 'undo' ? e.before : e.after, p);
+      // `setBoxText` fits as it writes, which is right for an edit and wrong for
+      // a step: what the box's height was on this side of the edit is recorded,
+      // not derived. Grow-only means the fit it just did cannot be undone by
+      // another fit, so the recorded pair is written over the top of it.
+      restoreFit(b, e, dir, p);
     },
   },
   bulk: {
     label: 'that bulk style',
     apply(e, dir) {
+      // One entry, one page — and the page is the entry's, not the item's. An
+      // entry that reached across pages could only ever live on one stack, so
+      // undoing it from there mutated boxes on a page that was keeping its own
+      // stack meanwhile: that page's `before`/`after` still described the
+      // pre-mutation world, and its next undo restored a style it had not been
+      // in since. A chapter-wide tag apply is split by the writer into one entry
+      // per page instead (`applyBulkToTag`), so the invariant this reads for is
+      // established at the source.
+      //
+      // Stated here rather than merely relied on: an item naming another page is
+      // a writer that has regressed, and skipping it is what makes that show up
+      // as a bulk that undid less than it should rather than as a desync on a
+      // page the user is not even looking at. The item's own `pageId` stays on
+      // the record because that is what lets the writer group by page, and
+      // because a record is worth more when it describes what it changed.
       const p = pageById(e.pageId);
       if (!p) throw new Error('the page is gone');
       let hit = 0;
       for (const item of e.items) {
+        if (item.pageId != null && item.pageId !== e.pageId) continue;
         const b = p.boxes.find((x) => x.id === item.boxId);
         if (!b) continue;
         b.style = cloneStyle(dir === 'undo' ? item.before : item.after);
+        // Per item, because one entry covers many boxes and they grew by
+        // different amounts — same reasoning as the `style` kind above.
+        restoreFit(b, item, dir, p);
         hit++;
       }
       // A bulk that touched five boxes is still worth undoing when one has
@@ -150,9 +234,46 @@ const KINDS = {
 // The history file registers itself here so a new entry can schedule its own
 // write. Without it the live page's stack would only reach disk on a page
 // switch, and an edit made and then abandoned would be lost on quit.
+//
+// Hands back a release that puts the previous sink back, for the same reason
+// `setOffscreenSink` below does: a test standing in front of the real one —
+// registered at the history file's module load, before any test runs — must not
+// unhook it for whatever runs next.
 let sink = null;
 export function setHistorySink(fn) {
+  const prev = sink;
   sink = fn;
+  return () => {
+    if (sink === fn) sink = prev;
+  };
+}
+
+// The other half of the same seam, for an entry that names a page whose stack
+// is not the live one — a chapter-wide tag apply's share of a page the user is
+// not looking at. Pushing that onto the live stack is the desync this exists to
+// prevent: the entry would rewind boxes on another page while that page kept a
+// stack whose own `before`/`after` still described the world before the bulk,
+// so its next undo would restore a style it had not been in since. And it must
+// not go through `sink` either, which assigns the history file's `livePageId`
+// — an entry naming another page would hand this page's whole stack to that
+// page's key in history.json, which is the worse half of the same bug.
+//
+// So the file takes such an entry and merges it straight into the stored
+// document under its own page's key, touching neither the live stack nor
+// `livePageId`. It answers true when it has done so; false means the page named
+// IS the live one, or there is no chapter file to merge into, and the live
+// stack keeps the entry exactly as before.
+// Hands back a release that puts the previous sink back rather than clearing the
+// slot, so a test can stand in front of the real one — registered at the history
+// file's module load, before any test runs — without unhooking it for whatever
+// runs next.
+let offscreen = null;
+export function setOffscreenSink(fn) {
+  const prev = offscreen;
+  offscreen = fn;
+  return () => {
+    if (offscreen === fn) offscreen = prev;
+  };
 }
 
 export function record(entry) {
@@ -164,6 +285,12 @@ export function record(entry) {
   // Both halves earn their place — `snapshot` unwraps the proxies, and it hands
   // plain objects straight back, which is exactly the aliasing case.
   const flat = structuredClone($state.snapshot(entry));
+  // An entry belongs to the page it names, and this is the one line that makes
+  // that true of every mutation site at once rather than of the careful ones.
+  // With no sink registered — a build with no history file, and every test of
+  // this module alone — nothing routes and the live stack takes everything,
+  // which is what it did before.
+  if (flat.pageId != null && offscreen?.(flat.pageId, flat)) return;
   undoStack.push(flat);
   if (undoStack.length > MAX_STEPS) undoStack.shift();
   redoStack = [];
@@ -204,6 +331,23 @@ function step(from, to, dir) {
     return false;
   } finally {
     applying = false;
+    // A step moves the stack as surely as a record does, so the journal has to
+    // be scheduled here too. Without it the document's own autosave wrote the
+    // post-undo pages 800ms later while history.json still held the pre-undo
+    // stack, and a crash or a kill in between left the two disagreeing about
+    // how many edits had happened — the next press then replayed an entry
+    // against a document it was never recorded against.
+    //
+    // In the failure branch as well: a step that could not apply DROPS its
+    // entry, and a stack that has lost an entry is as changed as one that has
+    // moved it. Left unscheduled, the journal would keep offering an entry this
+    // build has already refused once.
+    //
+    // The live page rather than the entry's own: this is `livePageId` on the
+    // other side of the seam, and an entry naming a page that is gone — the one
+    // kind that reliably lands in the branch above — would otherwise hand the
+    // live page's whole stack to a dead page's key.
+    sink?.(history.pageId);
   }
 }
 
@@ -257,7 +401,14 @@ export function resetHistory() {
   sync();
 }
 
-// Registered once, at boot. Idempotent.
+// Registered once, at boot. Idempotent, and it has to say so itself now that the
+// store's seams take a list rather than a slot: a second call used to overwrite
+// the one subscriber and cost nothing, and would now leave two of us on the
+// recorder — every edit pushed onto the stack twice, so one press of undo would
+// only ever rewind half a step. Releasing our own registration first is what the
+// unsubscribe the store hands back is for.
+let releaseRecorder = null;
 export function initHistory() {
-  setRecorder(record);
+  releaseRecorder?.();
+  releaseRecorder = setRecorder(record);
 }

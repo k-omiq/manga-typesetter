@@ -27,6 +27,15 @@
   let psdFiles = $state([]);
   let translations = $state(null); // { name, pages } from a picked JSON
   let error = $state('');
+  // The chapter's workflow mode, not this dialog's creation mode — `mode` above
+  // is already taken by files-vs-PSD. Only the files path offers it: a chapter
+  // rebuilt from PSDs arrives with its typesetting already on it, so calling it
+  // a translation job would be describing work that is finished.
+  let workflow = $state('typeset');
+  // Only ever read on the "New project…" path: the layout belongs to the
+  // project, so an existing one already has an answer and this dialog has no
+  // business offering to change it.
+  let newProjectLayout = $state('pages');
 
   const isPsd = $derived(mode === 'psd');
 
@@ -53,6 +62,8 @@
       translations = null;
       error = '';
       newProjectName = '';
+      newProjectLayout = 'pages';
+      workflow = 'typeset';
     });
   });
 
@@ -163,7 +174,7 @@
     let createdProject = null;
     try {
       if (target === '__new__') {
-        createdProject = await createProject(newProjectName.trim());
+        createdProject = await createProject(newProjectName.trim(), { layout: newProjectLayout });
       }
       const pid = createdProject ? createdProject.id : target;
       // An emptied number input binds null; that must mean 1, not chapter 000.
@@ -191,6 +202,7 @@
           files,
           cleanedFiles: cleaned,
           translations: translations?.pages ?? null,
+          mode: workflow,
         });
         note = `${plural(files.length, 'page')} copied`;
         if (cleaned.length) note += ` · ${Math.min(cleaned.length, files.length)} cleaned`;
@@ -237,6 +249,18 @@
           <span>Project name</span>
           <input bind:value={newProjectName} placeholder="Series name" />
         </label>
+        <!-- Offered only while a project is being created, because that is the
+             only moment it can be answered: a project's layout is fixed for its
+             lifetime (see `createProject`), and every chapter in it inherits.
+             Longstrip stacks the whole chapter into one scrolling column with no
+             gaps — a webtoon — rather than a page at a time. -->
+        <div class="field">
+          <span>Layout</span>
+          <div class="seg">
+            <button class:on={newProjectLayout === 'pages'} onclick={() => (newProjectLayout = 'pages')} disabled={busy}>Pages</button>
+            <button class:on={newProjectLayout === 'longstrip'} onclick={() => (newProjectLayout = 'longstrip')} disabled={busy}>Longstrip</button>
+          </div>
+        </div>
       {/if}
 
       <label class="field">
@@ -261,6 +285,18 @@
           PNGs. Every other page in your library keeps its original bytes.
         </div>
       {:else}
+        <!-- What this chapter is for, and it decides what the editor gives you
+             when it opens: Typeset is the whole app, Translate is the raw page
+             and the translation queue. Changeable afterwards from the project
+             screen, so this is a starting point rather than a commitment. -->
+        <div class="field">
+          <span>Mode</span>
+          <div class="seg">
+            <button class:on={workflow === 'typeset'} onclick={() => (workflow = 'typeset')} disabled={busy}>Typeset</button>
+            <button class:on={workflow === 'translate'} onclick={() => (workflow = 'translate')} disabled={busy}>Translate</button>
+          </div>
+        </div>
+
         <div class="field">
           <span>Raw pages</span>
           <button class="soft-btn" onclick={pickRaws} disabled={busy}>

@@ -75,6 +75,7 @@ const {
   applyTranslations,
 } = await import('./library.svelte.js');
 const { app } = await import('./store.svelte.js');
+const { setResidentWindow } = await import('./page-images.js');
 
 // ---------- fixtures ----------
 // Real PNGs, written by hand so the bit depth is something this file chose
@@ -224,9 +225,37 @@ describe('six raws and four cleaned, on a real disk', () => {
     try {
       expect(app.pages).toHaveLength(6);
       // Pages 1-4 typeset on the cleaned image; 5-6 fall back to their raw.
-      expect(app.pages.map((pg) => !!pg.cleaned)).toEqual([true, true, true, true, false, false]);
+      // Asserted on the filenames, which every page carries, and not on the
+      // blob URLs: those exist only for the pages in the resident window (see
+      // page-images.js), so `!!pg.cleaned` answers where the window is, not
+      // what each page is typeset on. The residency itself is the next test.
       expect(app.pages.map((pg) => pg.cleanedFile)).toEqual([...CLEANED, null, null]);
-      expect(app.pages.every((pg) => !!pg.raw)).toBe(true);
+      expect(app.pages.every((pg) => !!pg.file)).toBe(true);
+      expect(!!app.pages[0].cleaned).toBe(true);
+    } finally {
+      closeChapter();
+    }
+  });
+
+  it('holds only a window of page images in memory, and moves it', async () => {
+    const { p, c } = await sixAndFour();
+    await openChapter(p.id, c.id);
+    try {
+      // Opening awaits the page being opened and starts its neighbours, so the
+      // far end of the chapter is the honest assertion: it has a file on disk
+      // and no picture in memory. This is the whole point — a 200-page chapter
+      // used to mint all 200 before it drew one.
+      expect(!!app.pages[0].raw).toBe(true);
+      expect(!!app.pages[5].raw).toBe(false);
+
+      // Move the window to the far end. Awaiting is what makes page 5 present;
+      // page 0 is now three pages outside a radius-2 window and is given back.
+      await setResidentWindow(app.pages, 5);
+      expect(!!app.pages[5].raw).toBe(true);
+      expect(!!app.pages[0].raw).toBe(false);
+      // The name is untouched by any of it — a released page is a page that can
+      // be read again, not a page that has lost its image.
+      expect(app.pages[0].file).toBeTruthy();
     } finally {
       closeChapter();
     }

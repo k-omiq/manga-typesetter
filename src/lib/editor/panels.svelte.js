@@ -4,6 +4,12 @@
 // relaunches. This module owns nothing but that geometry — no DOM, no pointer
 // handling — so the rules that are easy to get wrong (a window that shrank
 // between sessions, a corrupt preference) are testable without a browser.
+//
+// The one thing it takes from the store is the interval its writes are debounced
+// on, so this module and the sidebar's preference coalesce on the same beat
+// rather than on two numbers that drifted apart. Nothing else — no state, no
+// document.
+import { PREF_SAVE_MS } from '../store.svelte.js';
 
 export const PANEL_IDS = ['options', 'queue'];
 
@@ -24,6 +30,14 @@ const DEF_OPTIONS_H = 420;
 // needs the reset button.
 const KEEP_X = 120;
 const KEEP_Y = 32;
+// A hidden panel is not drawn as a panel — it is a 34px square icon, and 34px
+// is its whole footprint. Clamped against KEEP_X the stub could not be parked
+// in the right ~86px of the window at all: drag the icon into the top-right
+// corner, let go, and the clamp yanked it 120px in from an edge it was only
+// 34px from. Keeping the whole stub on screen is both the strictest and the
+// most permissive rule for it — nothing is ever half off, and every corner is
+// reachable. Mirrored by `.panel-stub`'s width/height in src/styles.css.
+const KEEP_STUB = 34;
 
 const KEY = 'mt.panels';
 
@@ -43,12 +57,20 @@ export function defaultGeometry(vw) {
 export function clampPanel(g, vw, vh) {
   const w = clamp(num(g.w) ?? DEF_W, MIN_W, Math.max(MIN_W, vw - GAP));
   const h = clamp(num(g.h) ?? MIN_H, MIN_H, Math.max(MIN_H, vh - GAP));
+  // What has to stay on screen is whatever is actually drawn there, which for
+  // a hidden panel is the stub and not the panel — see KEEP_STUB. The stored
+  // w/h are still clamped either way: they are the size the panel comes back
+  // at, and a stub restored to a geometry that no longer fits is the same
+  // unreachable window by a slower route.
+  const hidden = g.hidden === true;
+  const keepX = hidden ? KEEP_STUB : KEEP_X;
+  const keepY = hidden ? KEEP_STUB : KEEP_Y;
   return {
-    x: clamp(num(g.x) ?? 0, 0, Math.max(0, vw - KEEP_X)),
-    y: clamp(num(g.y) ?? 0, 0, Math.max(0, vh - KEEP_Y)),
+    x: clamp(num(g.x) ?? 0, 0, Math.max(0, vw - keepX)),
+    y: clamp(num(g.y) ?? 0, 0, Math.max(0, vh - keepY)),
     w,
     h,
-    hidden: g.hidden === true,
+    hidden,
     z: num(g.z) ?? 1,
   };
 }
@@ -113,15 +135,44 @@ export function serializePanels() {
   return JSON.stringify(out);
 }
 
+// `loadPanels` binds the editor's storage, and until the editor has mounted this
+// session there is none — but `resetPanels` is a Settings action, and Settings
+// opens from the library screen too. A reset that wrote nowhere would be the
+// worst of both: the panels snap back in memory, the stale blob stays on disk,
+// and the next editor mount loads it straight back over the top. So a write with
+// nothing bound falls back to the storage the editor would have handed us.
+const writeTo = () => store ?? globalThis.localStorage ?? null;
+
+function writePanels() {
+  try {
+    writeTo()?.setItem(KEY, serializePanels());
+  } catch {
+    /* a layout preference is not worth a message */
+  }
+}
+
+// Null whenever there is nothing pending, so `flushPanels` can tell "a panel was
+// dragged and the timer has not fired" from "there is nothing to write" — a
+// session nobody moved a panel in must not leave a storage entry behind that it
+// did not already have.
 function save() {
   clearTimeout(saveT);
   saveT = setTimeout(() => {
-    try {
-      store?.setItem(KEY, serializePanels());
-    } catch {
-      /* a layout preference is not worth a message */
-    }
-  }, 200);
+    saveT = null;
+    writePanels();
+  }, PREF_SAVE_MS);
+}
+
+// The debounce given back on the way out, the same obligation `flushSidebar`
+// carries one module over: ⌘Q destroys the window without an unload the page can
+// await, so a panel dragged inside the last PREF_SAVE_MS would be lost. Safe to
+// call with nothing pending, and idempotent — clearing a fired or never-set
+// timer is a no-op.
+export function flushPanels() {
+  if (!saveT) return;
+  clearTimeout(saveT);
+  saveT = null;
+  writePanels();
 }
 
 // The mutators take whatever the caller hands them, minimum sizes aside: the
@@ -173,6 +224,13 @@ export function clampAll(vw, vh, persist = true) {
   if (persist) save();
 }
 
+// The way out of a layout the user cannot drag back, and the only caller is the
+// Settings modal — which is not part of the editor route, so this runs just as
+// often with no panel mounted and no `loadPanels` behind it. Nothing here
+// touches the DOM or the document: `panels` is this module's own singleton and
+// exists from load, and the write goes through `writeTo` so a reset from the
+// library screen still reaches disk. The caller passes the live window size,
+// which is the only thing this cannot work out for itself.
 export function resetPanels(vw, vh) {
   assign(defaultGeometry(vw));
   clampAll(vw, vh);

@@ -1,5 +1,5 @@
 <script>
-  import { projectById, deleteChapter } from '../library.svelte.js';
+  import { projectById, deleteChapter, setChapterMode } from '../library.svelte.js';
   import { route, goLibrary, goEditor } from '../route.svelte.js';
   import { toast } from '../store.svelte.js';
   import { relativeTime, plural } from '../format.js';
@@ -19,6 +19,32 @@
   const pageTotal = $derived((project?.chapters ?? []).reduce((n, c) => n + c.pageCount, 0));
 
   let confirmingId = $state(null);
+  // The row whose mode is being written, so a slow disk cannot be clicked twice
+  // into two writes of the same file.
+  let switchingId = $state(null);
+
+  // The chapter's workflow mode, switched from the row rather than from inside
+  // the editor: it decides what the editor *is* when it opens, and a control
+  // that reshapes the window you are looking at belongs on the screen you choose
+  // the chapter from. Two states, so the badge is the switch — a menu for a
+  // binary would be one more click for no more choice.
+  //
+  // A chapter that is currently open takes a different path inside
+  // `setChapterMode` (the state changes and autosave persists it), so this works
+  // either way and the caller does not have to know which.
+  async function onToggleMode(c) {
+    if (switchingId) return;
+    switchingId = c.id;
+    const next = c.mode === 'translate' ? 'typeset' : 'translate';
+    try {
+      await setChapterMode(project.id, c.id, next);
+      toast(`Chapter ${c.number} is now a ${next} chapter`);
+    } catch (e) {
+      toast(`Could not change the mode: ${e?.message ?? e}`);
+    } finally {
+      switchingId = null;
+    }
+  }
 
   async function onDelete(chapter) {
     if (confirmingId !== chapter.id) {
@@ -79,6 +105,16 @@
           <div class="chapter-pages">{c.unreadable ? '' : plural(c.pageCount, 'page')}</div>
           <div class="chapter-time">{c.unreadable ? '' : relativeTime(c.updatedAt)}</div>
         </button>
+        <button
+          class="chapter-act chapter-mode"
+          class:on={c.mode === 'translate'}
+          onclick={() => onToggleMode(c)}
+          disabled={c.unreadable || switchingId === c.id}
+          title={c.mode === 'translate'
+            ? 'Opens as a translation workspace — click to typeset instead'
+            : 'Opens as the full typesetting editor — click to translate instead'}
+          >{c.mode === 'translate' ? 'Translate' : 'Typeset'}</button
+        >
         <button
           class="chapter-act"
           onclick={() => onSources(project.id, c.id)}

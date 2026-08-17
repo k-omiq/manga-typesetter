@@ -1,16 +1,43 @@
 <script>
   // The editor's chrome, floating over a full-bleed canvas rather than sitting
-  // in a bar above it: identity and the way out at top-left, the two verbs the
-  // canvas answers to at its top-right, the app-level drawers at the far right.
+  // in a bar above it: identity and the way out at top-left, everything else in
+  // one cluster at the top right. Detect, Bulk style and Export used to float in
+  // the middle of the band, over the page, where they read as four loose buttons
+  // with no relationship to each other; they now sit in the same row as the font
+  // and settings drawers, split from them by a hairline — chapter verbs on the
+  // left of it, app drawers on the right.
   // Nothing here is laid out by a parent — every row pins itself to the window,
   // so the canvas underneath is never inset by chrome it does not know about.
-  import { app } from '../store.svelte.js';
+  import { app, openBulk, closeBulk, isTranslateMode, toast } from '../store.svelte.js';
   import { goProject, goLibrary } from '../route.svelte.js';
   import { projectById, chapterById } from '../library.svelte.js';
+  import { exportTextJson } from '../exporter.js';
   import { sidecarReady } from '../sidecar.js';
   import DetectMenu from './DetectMenu.svelte';
 
   let { onFontLib, onSettings } = $props();
+
+  // What a translate chapter keeps: the way out, who you are, Detect, and the
+  // JSON. Bulk style and the font library configure typesetting that is not
+  // happening here, and Settings is reachable from the home screens — so the
+  // whole right-hand group goes with the hairline that separated it.
+  const translate = $derived(isTranslateMode());
+
+  // The export in a translate chapter has one meaningful format and one
+  // meaningful scope, so the dialog that asks about both is skipped and the
+  // button does the thing. The busy flag and the catch are held here rather than
+  // inside `exportTextJson`, exactly as `exportImages` and the detect menu's own
+  // JSON item hold them — see the note on that function.
+  async function saveJson() {
+    app.exporting = true;
+    try {
+      await exportTextJson('all');
+    } catch (e) {
+      toast('Export failed: ' + (e?.message || e));
+    } finally {
+      app.exporting = false;
+    }
+  }
 
   const label = $derived.by(() => {
     const ref = app.chapterRef;
@@ -63,16 +90,22 @@
   });
 
   // A greyed-out menu with no reason beside it is the state the spec's error
-  // handling forbids, and the sidecar being down is the one reason the user
-  // cannot work out from the page in front of them.
+  // handling forbids, and the detection engine being unavailable is the one
+  // reason the user cannot work out from the page in front of them.
   const detectTip = $derived(
-    sidecarReady() ? 'Detect text + OCR' : 'Detect text + OCR — sidecar not ready',
+    sidecarReady() ? 'Detect text + OCR' : 'Detect text + OCR — engine not ready',
   );
 
   // Handed to the menu so its outside-pointerdown check can spare the button
   // that opened it — see the note there.
   let detectBtn = $state(null);
   let detectOpen = $state(false);
+
+  // The bulk button is lit while bulk mode is on, so its second press has to be
+  // the way out of it. `openBulk` on an already-open mode would silently empty
+  // the targets the user had picked and reseed the style; `closeBulk` is what
+  // Escape and the panel's own Cancel already do.
+  const toggleBulk = () => (app.bulk.active ? closeBulk() : openBulk());
 </script>
 
 <div class="pill-row left">
@@ -85,7 +118,7 @@
   </div>
 </div>
 
-<div class="pill-row canvas-right">
+<div class="pill-row far-right">
   <div class="pill-anchor">
     <button
       class="pill pill-icon"
@@ -110,16 +143,34 @@
       <DetectMenu anchor={detectBtn} onClose={() => (detectOpen = false)} />
     {/if}
   </div>
-  <button class="pill pill-accent" onclick={() => (app.exportOpen = true)} disabled={app.exporting}>
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" /></svg>Export
-  </button>
-</div>
-
-<div class="pill-row far-right">
-  <button class="pill pill-icon" onclick={onFontLib} data-tip="Font library" aria-label="Font library">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" /><path d="M12 4v16" /><path d="M9 20h6" /></svg>
-  </button>
-  <button class="pill pill-icon" onclick={onSettings} data-tip="Settings" aria-label="Settings">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
-  </button>
+  {#if !translate}
+    <button
+      class="pill pill-icon"
+      class:on={app.bulk.active}
+      onclick={toggleBulk}
+      aria-pressed={app.bulk.active}
+      aria-label="Bulk style"
+      data-tip="Bulk style — one style, many boxes"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l9 5-9 5-9-5z" /><path d="M3 14l9 5 9-5" /></svg>
+    </button>
+    <button class="pill pill-accent" onclick={() => (app.exportOpen = true)} disabled={app.exporting}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" /></svg>Export
+    </button>
+    <!-- The hairline is the whole grouping: three chapter verbs, then the two
+         drawers that belong to the app and not to the open chapter. -->
+    <span class="pill-sep"></span>
+    <button class="pill pill-icon" onclick={onFontLib} data-tip="Font library" aria-label="Font library">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" /><path d="M12 4v16" /><path d="M9 20h6" /></svg>
+    </button>
+    <button class="pill pill-icon" onclick={onSettings} data-tip="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+    </button>
+  {:else}
+    <!-- The one export a translate chapter has: the whole chapter's text, as the
+         same document the typeset side's JSON format writes. -->
+    <button class="pill pill-accent" onclick={saveJson} disabled={app.exporting} data-tip="Save this chapter's text as JSON">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" /></svg>JSON
+    </button>
+  {/if}
 </div>

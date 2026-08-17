@@ -9,7 +9,7 @@
   // and by nothing else, so fit-to-window measures the canvas viewport. The
   // floating panels are ignored by that measurement on purpose: a panel dragged
   // over the page covers it rather than reflowing it.
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import Canvas from './Canvas.svelte';
   import RefSidebar from './RefSidebar.svelte';
   import RailTools, { RAIL_W } from './RailTools.svelte';
@@ -20,8 +20,10 @@
   import Inspector from '../Inspector.svelte';
   import Queue from '../Queue.svelte';
   import BulkStylePanel from '../BulkStylePanel.svelte';
-  import { app, page, isPlaced } from '../store.svelte.js';
+  import { app, page, isPlaced, isTranslateMode, isLongstrip, translatedCount } from '../store.svelte.js';
   import { loadPanels, clampAll } from './panels.svelte.js';
+  import { setResidentWindow } from '../page-images.js';
+  import { residentRadiusFor } from './strip.js';
 
   let { onFontLib, onSettings } = $props();
 
@@ -29,10 +31,27 @@
   // actually measure itself.
   let canvas = $state(null);
 
-  const canvasLeft = $derived((app.sidebarHidden ? 0 : app.leftWidth) + RAIL_W);
+  // A translate chapter is the raw page, the queue and the way around them.
+  // Everything that exists to put type on a page — the bulk panel, the box
+  // inspector, the place and text tools — is not mounted rather than disabled:
+  // there is no state in which the user wants a greyed-out typesetting control
+  // in a chapter they are translating.
+  const translate = $derived(isTranslateMode());
+  // A longstrip chapter: the canvas is one scrolling column of every page, so
+  // the shell drops the one control that assumes otherwise. Everything else —
+  // the rail, the docks, the panels — is the same editor.
+  const strip = $derived(isLongstrip());
+
+  // The reference sidebar is redundant when the canvas itself is showing the
+  // raw, so it goes with the rest — and the canvas takes back the width it was
+  // inset by, rather than leaving a column of nothing down the left.
+  const canvasLeft = $derived((translate || app.sidebarHidden ? 0 : app.leftWidth) + RAIL_W);
 
   const placed = $derived(page().lines.filter((l) => isPlaced(page(), l.n)).length);
   const total = $derived(page().lines.length);
+  // Translating counts a different thing finished. Derived from the lines
+  // themselves — see `translatedCount` for why nothing stores it.
+  const done = $derived(translatedCount(page().lines));
 
   // The stored layout is read once, when the shell mounts and the window's size
   // is finally known. Every later resize only clamps — a window the user shrank
@@ -49,6 +68,60 @@
   // Clamp without writing: see `clampAll`. A window the user shrank must not be
   // able to make the layout they chose smaller for good.
   const onResize = () => clampAll(window.innerWidth, window.innerHeight, false);
+
+  // Which pages' pictures are in memory, and it is the editor's job because the
+  // editor is what decides which page is on screen. `setResidentWindow` mints
+  // the current page and its two neighbours either side and revokes everything
+  // else — see page-images.js for why the window is that size and why a page
+  // held open by an export is exempt. `openChapter` sets the first window
+  // itself, so the chapter is drawable before this ever runs; this is the page
+  // turns, and a chapter swapped underneath the editor without a remount.
+  // The two dependencies are named and read here; the call itself is untracked.
+  // `setResidentWindow` both reads and writes `raw`/`cleaned` on page objects,
+  // and tracked it would re-run itself every time a prefetch landed — harmless,
+  // because a second pass over an already-minted window does nothing, but it is
+  // a loop that only terminates by luck and there is no reason to keep it.
+  //
+  // A strip needs a different rule, and it is the same rule measured in the unit
+  // that matters. Five pages is five screens of lookahead when the slices are
+  // 1000px tall and a third of one screen when they are 8000px, and in a strip
+  // the reader is not turning pages — they are scrolling, continuously, past
+  // whatever is in the window. So the radius is grown until the window holds
+  // three viewports of art either side, with the paged radius as its floor and a
+  // hard cap on top: see `residentRadiusFor`. The heights are the on-screen ones
+  // (page pixels × zoom), because it is screens of scrolling being counted.
+  //
+  // `window.innerHeight` rather than the canvas viewport's own height: the
+  // canvas layer is `inset:0` of a viewport-fixed root, so the two agree to
+  // within the chrome that floats over it, and reading it here needs no seam
+  // through Canvas for a number that is only ever multiplied by three.
+  $effect(() => {
+    const pages = app.pages;
+    const index = app.pageIndex;
+    const strip = isLongstrip();
+    // Read inside the branch, so a paged chapter does not take a dependency on
+    // the zoom and re-run this on every zoom step, as it never has.
+    const zoom = strip ? app.zoom : 1;
+    // Read HERE, tracked, and not inside the `untrack` below. Every page in a
+    // freshly opened chapter is `h: 0` until its art has been decoded once, so a
+    // radius computed from those heights is the cap — twelve pages held in
+    // memory — and left untracked it stayed the cap for the rest of the session,
+    // because the decodes that fill `p.h` in never re-ran this.
+    //
+    // Tracking them is safe in the one way that matters: nothing below writes a
+    // page's height. `setResidentWindow` writes `raw`/`cleaned`, which is what
+    // the untrack is still here for — tracked, a landing prefetch would re-enter
+    // this effect — and `p.h` is written only by the canvas measuring a decoded
+    // image. So this re-runs when a page is measured and never on its own
+    // output. A paged chapter takes no dependency on the heights at all.
+    const heights = strip ? pages.map((p) => (p.h ?? 0) * zoom) : null;
+    untrack(() => {
+      const radius = heights
+        ? residentRadiusFor(heights, index, typeof window === 'undefined' ? 0 : window.innerHeight)
+        : undefined;
+      setResidentWindow(pages, index, radius);
+    });
+  });
 </script>
 
 <svelte:window onresize={onResize} />
@@ -63,10 +136,10 @@
          chrome pills. `.ed-canvas` is positioned, so it takes the role, and it
          carries no z-index of its own, so 40 still orders against the root's
          context exactly as before. -->
-    <BulkStylePanel />
+    {#if !translate}<BulkStylePanel />{/if}
   </div>
 
-  {#if !app.sidebarHidden}<RefSidebar />{/if}
+  {#if !translate && !app.sidebarHidden}<RefSidebar />{/if}
   <RailTools />
 
   <ChromePills {onFontLib} {onSettings} />
@@ -77,14 +150,26 @@
   {#if app.loaded}
     <div class="ed-dockrow">
       <ZoomDock onFit={() => canvas?.fit()} />
-      <Pager />
+      <!-- No pager in a strip. There are no pages to turn — the index follows
+           the scroll position rather than leading it (see `syncStrip`), so a
+           control that writes it would be fighting the reader's own scrolling,
+           and "page 7 of 40" is not how anyone reads a webtoon. Not mounted
+           rather than disabled, for the same reason the typesetting controls are
+           not mounted in a translate chapter. -->
+      {#if !strip}<Pager />{/if}
     </div>
   {/if}
 
-  <FloatingPanel id="options" title="Text box options">
-    <Inspector />
-  </FloatingPanel>
-  <FloatingPanel id="queue" title="Text queue" count="{placed} / {total} placed">
+  {#if !translate}
+    <FloatingPanel id="options" title="Text box options">
+      <Inspector />
+    </FloatingPanel>
+  {/if}
+  <FloatingPanel
+    id="queue"
+    title={translate ? 'Translation' : 'Text queue'}
+    count={translate ? `${done} / ${total} translated` : `${placed} / ${total} placed`}
+  >
     <Queue />
   </FloatingPanel>
 </div>

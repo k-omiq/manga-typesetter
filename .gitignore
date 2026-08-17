@@ -15,11 +15,14 @@ dist-ssr
 # Rust / Tauri build output
 src-tauri/target
 
-# Python sidecar venv + scratch
+# Python leftovers. The detection/OCR sidecar was deleted (detection runs in
+# process now, see src-tauri/src/detect/), but the untracked FLUX inpainting
+# server, its venv and its multi-GB weight caches still sit under python/.
 python/.venv
 python/**/__pycache__
 python/_*.json
 python/_*.txt
+python/build-sidecar/
 
 # Downloaded ML model caches (multi-GB HF snapshots — never commit)
 python/models/

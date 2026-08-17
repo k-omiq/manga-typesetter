@@ -10,8 +10,16 @@
 // a save or a page turn: every disk error is reported once and swallowed, and
 // nothing on the document's own save path ever waits on this one.
 import { fsx } from '../fsx.js';
-import { toast } from '../store.svelte.js';
-import { takeStack, peekStack, loadStack, resetHistory, setHistorySink } from './history.svelte.js';
+import { toast, DOC_SAVE_MS } from '../store.svelte.js';
+import {
+  takeStack,
+  peekStack,
+  loadStack,
+  resetHistory,
+  setHistorySink,
+  setOffscreenSink,
+  MAX_STEPS,
+} from './history.svelte.js';
 
 export const emptyDoc = () => ({ version: 1, pages: {} });
 
@@ -39,14 +47,47 @@ export function mergeStack(doc, pageId, stack) {
   return next;
 }
 
+// One entry onto the stack of a page whose stack is not in memory. Everything
+// the live stack does to a new entry, done to a stored one: appended to the
+// undo side, capped at the same depth, and the redo tail forfeited — a page the
+// user had undone their way back through and then left has no branch forward
+// once something new lands on it, exactly as it would have had none if they
+// had been standing on it at the time.
+//
+// A pure function over the document, like `mergeStack` beside it, because that
+// is what makes the one thing worth testing here testable without a disk.
+export function appendEntry(doc, pageId, entry) {
+  const cur = stackFrom(doc, pageId);
+  return mergeStack(doc, pageId, { undo: [...cur.undo, entry].slice(-MAX_STEPS), redo: [] });
+}
+
 export function stackFrom(doc, pageId) {
   if (!doc || doc.version !== 1 || !doc.pages) return { undo: [], redo: [] };
   const s = doc.pages[String(pageId)];
   return { undo: s?.undo ?? [], redo: s?.redo ?? [] };
 }
 
+// Records made while a read was in flight sit on top of whatever that read
+// brought back: the disk half is older by definition — it was written before
+// this session started — so it goes underneath, and the newer half's redo
+// branch is the one that stands, because anything recorded has already
+// forfeited a redo. An untouched stack takes the stored one whole, which is
+// what every ordinary open does.
+export function graft(stored, live) {
+  if (!live?.undo?.length && !live?.redo?.length) return stored;
+  return { undo: [...stored.undo, ...live.undo].slice(-MAX_STEPS), redo: live.redo };
+}
+
 let dir = null;
 let doc = emptyDoc();
+// Which visit to a chapter is in force. Bumped every time a chapter is
+// installed or torn down, and captured by anything that has to survive an
+// await — because `dir` cannot answer the question those callers are actually
+// asking. Two visits to the SAME chapter are two sessions and share a path, so
+// a close comparing paths found its own path still in place after a reopen had
+// landed underneath it and tore the new session down: stack wiped, `dir`
+// nulled, and every later write returning early for the rest of the session.
+let session = 0;
 let saveT = null;
 let told = false;
 // The id of the page whose stack is live in memory. Every write merges it in
@@ -67,6 +108,25 @@ setHistorySink((pageId) => {
   schedule();
 });
 
+// The off-screen write. Deliberately the only path that can add to a page other
+// than the live one, and deliberately unable to move `livePageId`: that is the
+// difference between filing one entry against page B and handing page A's whole
+// stack to page B's key, which is what happened while `record` had nowhere else
+// to put such an entry.
+//
+// Refused in two cases, both of which mean "there is no stored stack for this",
+// and both of which leave the entry on the live stack where it has always been:
+// no chapter open (nothing to merge into, and `flushHistory` would drop it), and
+// no live page claimed — the test seam and the moment before a chapter's first
+// page is loaded, where the module cannot say which page the stack in memory
+// belongs to and must not guess.
+setOffscreenSink((pageId, entry) => {
+  if (!dir || livePageId == null || pageId === livePageId) return false;
+  doc = appendEntry(doc, pageId, entry);
+  schedule();
+  return true;
+});
+
 // Test seam. The app reaches this through openHistory, and this has to leave the
 // module in the same state that would: a leftover live page id or a pending
 // debounce from the previous chapter would file one chapter's entries into
@@ -78,6 +138,10 @@ export function __setDir(d) {
   told = false;
   livePageId = null;
   onDisk = false;
+  // Including the session, or this seam would not stand in for an open at all:
+  // what an open installs is a new session, and that is the whole of what tells
+  // a close still in flight that the chapter it was tearing down is gone.
+  session++;
 }
 
 // Takes the directory rather than reading `dir`, because every caller has
@@ -114,17 +178,20 @@ export async function openHistory(chapterDir, pageId) {
   livePageId = pageId;
   onDisk = false;
   resetHistory();
+  // The session this open installs, claimed in the same synchronous breath as
+  // `dir` so that two opens are ordered by the assignment that installed them:
+  // the slower read then finds a session that is no longer its own and drops
+  // what it read, rather than landing its document and its page's stack on top
+  // of the newer chapter's.
+  const mine = ++session;
   if (!dir) return;
-  // Bound once, at entry, and read back into the module only at the end — two
-  // chapters opened in quick succession would otherwise have the slower read
-  // land its document, and its page's stack, on top of the newer one.
-  const mine = dir;
   let loaded = emptyDoc();
   // A file that is there is one to keep up to date from here on, whatever was
   // in it — a corrupt one included, since the next write is what repairs it.
   let found = false;
   try {
-    const { file } = await pathsFor(mine);
+    // The argument rather than `dir`, which can change under every await below.
+    const { file } = await pathsFor(chapterDir);
     if (await fsx.exists(file)) {
       found = true;
       const parsed = JSON.parse(await fsx.readTextFile(file));
@@ -135,14 +202,30 @@ export async function openHistory(chapterDir, pageId) {
     // replaced by the next write.
     loaded = emptyDoc();
   }
-  if (dir !== mine) return;
-  doc = loaded;
-  onDisk = found;
-  // Whatever is in there is replayed optimistically. An entry that no longer
-  // fits the document is reported and dropped by history.svelte.js at the
-  // moment it is pressed, not weeded out here — validating a stack against a
-  // document would cost a walk of every page to save a message nobody may see.
-  loadStack(pageId, stackFrom(doc, pageId));
+  // Not `dir !== chapterDir`: a close and a reopen of this very chapter, both
+  // landing while the read was in flight, leave the same path in place while
+  // everything the read was for has been thrown away and replaced.
+  if (session !== mine) return;
+  // Nothing above waited on the user. A page turn, an off-screen record, an
+  // edit on this very page — all of them can have happened while the disk was
+  // answering, and all of them are NEWER than what it answered with. So the
+  // read lands underneath what is already here rather than over the top of it:
+  // assigning `doc = loaded` was how a page turned during a chapter's load lost
+  // the entries it had made, and how the stack of the page the open was started
+  // for arrived on top of the page the user had moved to.
+  const pages = { ...loaded.pages };
+  for (const [key, live] of Object.entries(doc.pages ?? {})) {
+    pages[key] = graft(stackFrom(loaded, key), live);
+  }
+  doc = { version: 1, pages };
+  if (found) onDisk = true;
+  // The page on screen NOW, which is not necessarily the one this open was
+  // called for. Whatever is in there is replayed optimistically: an entry that
+  // no longer fits the document is reported and dropped by history.svelte.js at
+  // the moment it is pressed, not weeded out here — validating a stack against
+  // a document would cost a walk of every page to save a message nobody may
+  // see.
+  loadStack(livePageId, graft(stackFrom(doc, livePageId), peekStack()));
 }
 
 export async function switchHistoryPage(fromPageId, toPageId) {
@@ -156,14 +239,18 @@ export async function switchHistoryPage(fromPageId, toPageId) {
   schedule();
 }
 
-// The same 800ms the document's own autosave uses, on its own timer. The two
-// never wait on each other: a page turn is not held up by this write, and this
-// write failing is not the document's problem.
+// The same interval the document's own autosave uses, and the same constant
+// rather than the same number written twice — the two describe one document, and
+// a history file written on a different beat than the pages it addresses is the
+// one way they can reach disk disagreeing about how many edits have happened.
+// Its own timer all the same: the two never wait on each other, so a page turn
+// is not held up by this write, and this write failing is not the document's
+// problem.
 function schedule() {
   clearTimeout(saveT);
   saveT = setTimeout(() => {
     flushHistory();
-  }, 800);
+  }, DOC_SAVE_MS);
 }
 
 // Writes are serialised. A debounce that has just fired and a close that flushes
@@ -233,9 +320,19 @@ export async function closeHistory(pageId) {
   // every later flush returns early, so that chapter's undo would silently
   // never reach disk again. A close whose chapter has already been replaced has
   // nothing left to tear down; the flush above has already written it.
-  const mine = dir;
+  //
+  // The session and not the path, because the case that matters most is the one
+  // a path cannot see: closing a chapter and going straight back into it — the
+  // reader's own back button — installs a NEW session on the same directory. On
+  // `dir !== mine` that read as "nothing happened here" and the teardown ran
+  // over the top of the session the user was now in.
+  const mine = session;
   await flushHistory();
-  if (dir !== mine) return;
+  if (session !== mine) return;
+  // Torn down, and the session with it: an `openHistory` still waiting on its
+  // read belongs to the chapter this just closed, and must not land its
+  // document on a module that no longer has one.
+  session++;
   dir = null;
   doc = emptyDoc();
   onDisk = false;

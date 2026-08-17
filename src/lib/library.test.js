@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('./fsx.js', () => {
   const tree = { dirs: new Set(), files: new Map() };
@@ -76,9 +76,16 @@ vi.mock('./fsx.js', () => {
 });
 
 const { fsx } = await import('./fsx.js');
-const { library, setRoot, scanLibrary, createProject, deleteProject, deleteChapter, projectById } = await import(
-  './library.svelte.js'
-);
+const {
+  library,
+  setRoot,
+  scanLibrary,
+  createProject,
+  deleteProject,
+  deleteChapter,
+  projectById,
+  createChapterFromPages,
+} = await import('./library.svelte.js');
 
 function seedProject(slug, json, chapters = []) {
   fsx._tree.dirs.add(`/lib/${slug}`);
@@ -311,6 +318,39 @@ describe('deleteProject', () => {
   });
 });
 
+const { withinHome } = await import('./library.svelte.js');
+
+// $HOME/** is the only filesystem scope this app is granted, so a root outside
+// it is refused — which makes the comparison the one thing standing between a
+// Windows user and a library they cannot choose.
+describe('withinHome', () => {
+  it('accepts the home directory and what is under it, and nothing else', async () => {
+    expect(await withinHome('/home/u')).toBe(true);
+    expect(await withinHome('/home/u/')).toBe(true);
+    expect(await withinHome('/home/u/Documents/Manga')).toBe(true);
+    expect(await withinHome('/elsewhere')).toBe(false);
+    // Not a prefix match on the string: a sibling whose name starts with the
+    // home directory's is outside it.
+    expect(await withinHome('/home/u2/Manga')).toBe(false);
+  });
+
+  it('reads a Windows path as the path it is', async () => {
+    // `homeDir()` answers `C:\Users\u` there, and the folder picker hands back
+    // backslashes too. Compared with '/' written into the test, every valid
+    // Windows path failed and Settings refused the folder the user just chose.
+    const orig = fsx.homeDir;
+    fsx.homeDir = async () => 'C:\\Users\\u';
+    try {
+      expect(await withinHome('C:\\Users\\u\\Documents\\Manga')).toBe(true);
+      expect(await withinHome('C:\\Users\\u')).toBe(true);
+      expect(await withinHome('C:\\Users\\u2\\Manga')).toBe(false);
+      expect(await withinHome('D:\\Manga')).toBe(false);
+    } finally {
+      fsx.homeDir = orig;
+    }
+  });
+});
+
 describe('deleteChapter', () => {
   it('removes the chapter directory and entry without touching the project', async () => {
     const p = await createProject('Keep');
@@ -459,6 +499,310 @@ describe('createChapter', () => {
     expect(fsx._tree.dirs.has(`${p.dir}/001`)).toBe(false);
     expect(projectById(p.id).chapters).toHaveLength(0);
     expect(projectById(p.id).coverChapterId).toBeNull();
+  });
+});
+
+// The project's cover art is one chapter's first page, and `buildChapter`
+// decides whether to offer a new one on `!p.coverChapterId` alone. So an id left
+// naming a chapter that has been deleted is not a stale field — it is a project
+// that can never have a thumbnail again, however many chapters are imported into
+// it afterwards.
+describe('deleting the chapter the project cover came from', () => {
+  const projectJson = (p) => JSON.parse(fsx._tree.files.get(`${p.dir}/project.json`));
+
+  it('gives the cover up rather than leaving it naming nothing', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    expect(projectById(p.id).coverChapterId).toBe(c.id);
+
+    await deleteChapter(p.id, c.id);
+
+    // In memory and on disk both — a catalogue that agreed and a project.json
+    // that did not would come back wrong on the next scan.
+    expect(projectById(p.id).coverChapterId).toBeNull();
+    expect(projectJson(p).coverChapterId).toBeNull();
+    expect(projectJson(p).coverPageId).toBeNull();
+  });
+
+  it('lets the next import become the cover again', async () => {
+    const p = await createProject('Series');
+    const first = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    await deleteChapter(p.id, first.id);
+
+    const second = await createChapter({ projectId: p.id, number: 2, title: '', files: [fakeFile('b.png', 2)] });
+    // The whole point of clearing it: this used to be `false` forever.
+    expect(projectById(p.id).coverChapterId).toBe(second.id);
+    expect(projectJson(p).coverChapterId).toBe(second.id);
+  });
+
+  it('leaves the cover alone when some other chapter goes', async () => {
+    const p = await createProject('Series');
+    const cover = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    const other = await createChapter({ projectId: p.id, number: 2, title: '', files: [fakeFile('b.png', 2)] });
+    const before = projectJson(p);
+
+    await deleteChapter(p.id, other.id);
+
+    expect(projectById(p.id).coverChapterId).toBe(cover.id);
+    // Not rewritten at all: a delete that touches nothing has nothing to say.
+    expect(projectJson(p)).toEqual(before);
+  });
+
+  it('keeps the layout when it does have to rewrite project.json', async () => {
+    // The rewrite is whole-record, and the layout is chosen once at creation and
+    // can never be chosen again — losing it here would silently turn a webtoon
+    // project back into a paged one.
+    const p = await createProject('Webtoon', { layout: 'longstrip' });
+    const c = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    await deleteChapter(p.id, c.id);
+    expect(projectJson(p).layout).toBe('longstrip');
+    await scanLibrary();
+    expect(projectById(p.id).layout).toBe('longstrip');
+  });
+});
+
+// Staging the thumbnail during chapter creation ensures that a mid-import failure
+// never unlinks or overwrites an existing project-level thumb.png, and leaves
+// no orphaned thumbnail file when creating the project's first chapter.
+describe('cover thumbnail lifecycle and rollback', () => {
+  function withThumbSupport(fn) {
+    const origImage = globalThis.Image;
+    const origDocument = globalThis.document;
+    const origCreateObjectURL = URL.createObjectURL;
+    const origRevokeObjectURL = URL.revokeObjectURL;
+
+    URL.createObjectURL = () => 'blob:fake-thumb';
+    URL.revokeObjectURL = () => {};
+    globalThis.Image = class {
+      set src(_) {
+        this.naturalWidth = 100;
+        this.naturalHeight = 100;
+        setTimeout(() => this.onload?.(), 0);
+      }
+    };
+    globalThis.document = {
+      createElement(tag) {
+        if (tag === 'canvas') {
+          return {
+            width: 0,
+            height: 0,
+            getContext: () => ({
+              imageSmoothingQuality: 'high',
+              drawImage: () => {},
+            }),
+            toBlob: (cb) => cb(new Blob([new Uint8Array([99, 100])])),
+          };
+        }
+        return {};
+      },
+    };
+
+    return fn().finally(() => {
+      globalThis.Image = origImage;
+      globalThis.document = origDocument;
+      URL.createObjectURL = origCreateObjectURL;
+      URL.revokeObjectURL = origRevokeObjectURL;
+    });
+  }
+
+  it('preserves existing project thumb.png when a subsequent chapter import fails', async () => {
+    const p = await createProject('Series');
+    await withThumbSupport(() =>
+      createChapter({
+        projectId: p.id,
+        number: 1,
+        title: '',
+        files: [fakeFile('a.png', 1)],
+      }),
+    );
+    expect(fsx._tree.files.get(`${p.dir}/thumb.png`)).toEqual(new Uint8Array([99, 100]));
+    expect(projectById(p.id).coverChapterId).toBeTruthy();
+
+    // Second chapter import fails during page copy
+    const broken = { name: 'bad.png', arrayBuffer: async () => { throw new Error('read failed'); } };
+    await withThumbSupport(async () => {
+      await expect(
+        createChapter({
+          projectId: p.id,
+          number: 2,
+          title: '',
+          files: [broken],
+        }),
+      ).rejects.toThrow();
+    });
+
+    // The project's existing thumb.png must be completely preserved
+    expect(fsx._tree.files.get(`${p.dir}/thumb.png`)).toEqual(new Uint8Array([99, 100]));
+  });
+
+  it('leaves no thumb.png behind when the first chapter import fails during copy', async () => {
+    const p = await createProject('Series');
+    const broken = { name: 'bad.png', arrayBuffer: async () => { throw new Error('read failed'); } };
+    await withThumbSupport(async () => {
+      await expect(
+        createChapter({
+          projectId: p.id,
+          number: 1,
+          title: '',
+          files: [broken],
+        }),
+      ).rejects.toThrow();
+    });
+
+    expect(fsx._tree.files.has(`${p.dir}/thumb.png`)).toBe(false);
+  });
+
+  it('rolls back thumb.png if project.json write fails after thumbnail is written', async () => {
+    const orig = fsx.writeTextFile;
+    let projectWrites = 0;
+    fsx.writeTextFile = async (path, contents) => {
+      if (path.endsWith('/project.json')) {
+        projectWrites++;
+        if (projectWrites === 2) throw new Error('disk full');
+      }
+      return orig(path, contents);
+    };
+
+    try {
+      const p = await createProject('Series');
+      await withThumbSupport(async () => {
+        await expect(
+          createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] }),
+        ).rejects.toThrow();
+      });
+      expect(fsx._tree.files.has(`${p.dir}/thumb.png`)).toBe(false);
+    } finally {
+      fsx.writeTextFile = orig;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// what a page knows about its own size on the day it is imported
+// ---------------------------------------------------------------------------
+//
+// A page's `w`/`h` is its coordinate space: box geometry is in it, the exporters
+// size their documents to it, and the store treats `0` as "nobody has measured
+// this yet" rather than as a size (see `hasPageSpace`). Until createChapter
+// measured, the ONLY thing in the app that ever decoded an image was the canvas,
+// one page at a time as the user opened it — so a 28-page chapter had 23 pages
+// stored 0x0, and Export All ran the whole chapter through a zero.
+//
+// The measurement runs through `createImageBitmap`, which this environment has
+// not got: node is exactly the "no decoder at all" case the import has to
+// survive, so every case here installs its own. A decoder keyed by the file's
+// one byte, because `fakeFile(name, byte)` is what the rest of this file builds
+// pages out of.
+function withDecoder(sizes, fn) {
+  const real = globalThis.createImageBitmap;
+  globalThis.createImageBitmap = async (blob) => {
+    const [byte] = new Uint8Array(await blob.arrayBuffer());
+    const size = sizes[byte];
+    if (!size) throw new Error('unsupported image');
+    return { ...size, close() {} };
+  };
+  return fn().finally(() => {
+    globalThis.createImageBitmap = real;
+  });
+}
+
+describe('createChapter measures its pages', () => {
+  const pageSizes = (c) =>
+    JSON.parse(fsx._tree.files.get(`${c.dir}/chapter.json`)).pages.map((pg) => [pg.w, pg.h]);
+
+  it('stores each raw page at the size the decoder read off its bytes', async () => {
+    const p = await createProject('Series');
+    const c = await withDecoder(
+      { 1: { width: 1080, height: 1535 }, 2: { width: 2160, height: 1535 } },
+      () =>
+        createChapter({
+          projectId: p.id,
+          number: 1,
+          title: '',
+          files: [fakeFile('a.png', 1), fakeFile('b.png', 2)],
+        }),
+    );
+    // Per page, not per chapter: a double-page spread is a different size from
+    // the pages either side of it, and one number for the chapter would draw it
+    // stretched for the whole of the user's session.
+    expect(pageSizes(c)).toEqual([
+      [1080, 1535],
+      [2160, 1535],
+    ]);
+  });
+
+  it('leaves a page it could not decode unmeasured rather than guessing at it', async () => {
+    const p = await createProject('Series');
+    const c = await withDecoder({ 1: { width: 1080, height: 1535 } }, () =>
+      createChapter({
+        projectId: p.id,
+        number: 1,
+        title: '',
+        files: [fakeFile('a.png', 1), fakeFile('corrupt.png', 9)],
+      }),
+    );
+    // 0, not PAGE_W/PAGE_H and not the neighbour's size: the store adopts a
+    // first measurement from 0 without moving anything, and adopts one from a
+    // *learned* space by dragging every box on the page across the difference.
+    // A guess here would be defended later as if it had been measured.
+    expect(pageSizes(c)).toEqual([
+      [1080, 1535],
+      [0, 0],
+    ]);
+    // The page is still a page — an undecodable file is copied and kept, and
+    // the canvas gets another go at measuring it when the user opens it.
+    expect(JSON.parse(fsx._tree.files.get(`${c.dir}/chapter.json`)).pages).toHaveLength(2);
+  });
+
+  it('measures the cleaned raster, not the raw, when a page has both', async () => {
+    const p = await createProject('Series');
+    const c = await withDecoder(
+      { 1: { width: 1080, height: 1535 }, 2: { width: 2160, height: 3070 } },
+      () =>
+        createChapter({
+          projectId: p.id,
+          number: 1,
+          title: '',
+          files: [fakeFile('raw.png', 1)],
+          cleanedFiles: [fakeFile('clean.png', 2)],
+        }),
+    );
+    // Everything that draws a page draws `cleaned ?? raw`, so the cleaned
+    // raster's size IS the page's space. Storing the raw's would put every box
+    // the user places into a coordinate system nothing on screen is drawn in.
+    expect(pageSizes(c)).toEqual([[2160, 3070]]);
+  });
+
+  it('takes a page back to unmeasured when its cleaned raster will not decode', async () => {
+    const p = await createProject('Series');
+    const c = await withDecoder({ 1: { width: 1080, height: 1535 } }, () =>
+      createChapter({
+        projectId: p.id,
+        number: 1,
+        title: '',
+        files: [fakeFile('raw.png', 1)],
+        cleanedFiles: [fakeFile('clean.png', 9)],
+      }),
+    );
+    // The raw's measurement is a true fact about a file this page no longer
+    // displays. Kept, it would be a stored page size the exporter renders at,
+    // with the cleaned art stretched into a shape it never had.
+    expect(pageSizes(c)).toEqual([[0, 0]]);
+  });
+
+  it('imports normally where there is no image decoder at all', async () => {
+    // The headless case, and the one this whole file runs in: no
+    // `createImageBitmap`, so nothing is measured and nothing is invented. An
+    // import must not fail because the environment cannot decode a PNG.
+    expect(globalThis.createImageBitmap).toBeUndefined();
+    const p = await createProject('Series');
+    const c = await createChapter({
+      projectId: p.id,
+      number: 1,
+      title: '',
+      files: [fakeFile('a.png', 1)],
+    });
+    expect(pageSizes(c)).toEqual([[0, 0]]);
   });
 });
 
@@ -692,6 +1036,38 @@ describe('saveOpenChapter', () => {
     await b;
     expect(app.saved).toBe(true);
     expect(chapterJson(c).pages[0].lines[0].en).toBe('second');
+    closeChapter();
+  });
+
+  it('updates the live catalogue entry when scanLibrary completes concurrently during save', async () => {
+    const { p, c } = await seedOpenChapter();
+    app.pages[0].boxes = [
+      { id: 'b1', lineN: null, text: 'Ah', x: 0, y: 0, w: 10, h: 10, style: {} },
+    ];
+    markUnsaved();
+
+    const orig = fsx.writeTextFileAtomic;
+    let scanned = false;
+    fsx.writeTextFileAtomic = async function (path, contents) {
+      const res = await orig.call(this, path, contents);
+      // Trigger a rescan while writeOpenChapter is awaiting disk operations
+      if (!scanned && path.endsWith('chapter.json')) {
+        scanned = true;
+        await scanLibrary();
+      }
+      return res;
+    };
+
+    try {
+      await saveOpenChapter();
+    } finally {
+      fsx.writeTextFileAtomic = orig;
+    }
+
+    const live = chapterById(p.id, c.id);
+    expect(live).toBeTruthy();
+    expect(live.typeset).toBe(true);
+    expect(live.pageCount).toBe(2);
     closeChapter();
   });
 
@@ -1075,12 +1451,144 @@ describe('the chapter sources sheet', () => {
     expect(chapterJson(c).pages[0].boxes).toHaveLength(2);
   });
 
+  // A translations file has never carried tags, and the re-import replaces a
+  // page's lines wholesale — so it used to leave the boxes standing and strip
+  // every tag they had been placed under, with nothing said about it.
+  it('carries hand-applied tags across a re-import, by line number', async () => {
+    const { p, c } = await seedThree();
+    const record = chapterJson(c);
+    record.pages[0].lines = [
+      { n: 1, type: 'dialogue', jp: 'あ', en: 'Old', tags: ['whisper', 'sfx'] },
+      { n: 2, type: 'dialogue', jp: 'い', en: 'Old two', tags: [] },
+    ];
+    record.pages[0].boxes = [{ id: 'b1', lineN: 1, text: null, x: 0, y: 0, w: 1, h: 1, style: {} }];
+    fsx._tree.files.set(`${c.dir}/chapter.json`, JSON.stringify(record));
+
+    await applyTranslations(p.id, c.id, [
+      { lines: [line(1, 'New'), { n: 2, type: 'sfx', jp: 'い', en: 'New two' }] },
+    ]);
+
+    const after = chapterJson(c).pages[0].lines;
+    expect(after[0].en).toBe('New'); // the file still owns the words
+    expect(after[0].tags).toEqual(['whisper', 'sfx']); // …and the user still owns the tags
+    expect(after[0].type).toBe('sfx'); // re-projected, so the exporters agree
+    // An empty array is the user having taken the tags *off*, so the file's
+    // `sfx` must not put one back.
+    expect(after[1].tags).toEqual([]);
+    expect(after[1].type).toBe('dialogue');
+  });
+
+  it('lets the file speak for a line the user never tagged', async () => {
+    const { p, c } = await seedThree();
+    const record = chapterJson(c);
+    record.pages[0].lines = [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Old' }];
+    fsx._tree.files.set(`${c.dir}/chapter.json`, JSON.stringify(record));
+    await applyTranslations(p.id, c.id, [{ lines: [{ n: 1, type: 'narration', jp: 'あ', en: 'New' }] }]);
+    const after = chapterJson(c).pages[0].lines[0];
+    expect(after.type).toBe('narration');
+    expect('tags' in after).toBe(false);
+  });
+
   it('never appends the pages a longer file describes', async () => {
     const { p, c } = await seedThree();
     const out = await applyTranslations(p.id, c.id, parsed('1', '2', '3', '4', '5'));
     expect(out.ignored).toBe(2);
     // No page arrives with file:'' — unrenderable, and impossible to get rid of.
     expect(chapterJson(c).pages.map((pg) => pg.file)).toEqual(['a.png', 'b.png', 'c.png']);
+  });
+});
+
+// A page's `w`/`h` is the space its boxes are placed in and the size every
+// exporter writes its document at, and everything that draws a page draws
+// `cleaned ?? raw`. So swapping a page's cleaned raster for one of another size
+// and leaving the old numbers standing is not a stale field: it is boxes in a
+// coordinate system nothing on screen is drawn in, and a PSD sized to a raster
+// that is not there any more. Worse, `hasPageSpace` reads the old number as
+// measured, so no later open ever repairs it.
+describe('a cleaned page brings its own coordinate space', () => {
+  const sizes = (c) => chapterJson(c).pages.map((pg) => [pg.w, pg.h]);
+
+  // Measured at import, so the numbers under test are real ones rather than the
+  // 0x0 every no-decoder seed in this file produces.
+  async function measuredPair() {
+    const p = await createProject('Series');
+    const c = await withDecoder({ 1: { width: 1000, height: 1400 } }, () =>
+      createChapter({
+        projectId: p.id,
+        number: 1,
+        title: '',
+        files: [fakeFile('a.png', 1), fakeFile('b.png', 1)],
+      }),
+    );
+    expect(sizes(c)).toEqual([
+      [1000, 1400],
+      [1000, 1400],
+    ]);
+    return { p, c };
+  }
+
+  it('re-measures the pages a bulk replace lands on, and only those', async () => {
+    const { p, c } = await measuredPair();
+    await withDecoder({ 5: { width: 2000, height: 2800 } }, () =>
+      replaceCleanedPages(p.id, c.id, [fakeFile('hi.png', 5)]),
+    );
+    expect(sizes(c)).toEqual([
+      [2000, 2800],
+      [1000, 1400],
+    ]);
+  });
+
+  it('re-measures the page a per-page set lands on', async () => {
+    const { p, c } = await measuredPair();
+    const id = chapterJson(c).pages[1].id;
+    await withDecoder({ 5: { width: 2000, height: 2800 } }, () =>
+      setPageCleaned(p.id, c.id, id, fakeFile('hi.png', 5)),
+    );
+    expect(sizes(c)).toEqual([
+      [1000, 1400],
+      [2000, 2800],
+    ]);
+  });
+
+  it('takes a page back to unmeasured when the new raster will not decode', async () => {
+    const { p, c } = await measuredPair();
+    // 0, not the raw's number: the raw's size is a true fact about a file this
+    // page no longer displays, and kept it would be rendered at. 0 is what every
+    // consumer already reads as "nobody has measured this", and `openChapter`
+    // repairs it off the file itself.
+    await withDecoder({}, () => replaceCleanedPages(p.id, c.id, [fakeFile('hi.png', 5)]));
+    expect(sizes(c)).toEqual([
+      [0, 0],
+      [1000, 1400],
+    ]);
+  });
+
+  it('takes a page back to unmeasured when its cleaned image is taken away', async () => {
+    const { p, c } = await measuredPair();
+    await withDecoder({ 5: { width: 2000, height: 2800 } }, () =>
+      replaceCleanedPages(p.id, c.id, [fakeFile('hi.png', 5), fakeFile('lo.png', 5)]),
+    );
+    const [one, two] = chapterJson(c).pages.map((pg) => pg.id);
+    await clearPageCleaned(p.id, c.id, one);
+    // The page draws its raw again, and the raw is not necessarily 2000x2800.
+    // There are no raw bytes in hand here, so it goes back to unmeasured and the
+    // next open reads the truth off disk.
+    expect(sizes(c)[0]).toEqual([0, 0]);
+    expect(sizes(c)[1]).toEqual([2000, 2800]);
+
+    await removeAllCleaned(p.id, c.id);
+    expect(sizes(c)).toEqual([
+      [0, 0],
+      [0, 0],
+    ]);
+    // …and the open makes them real again, which is the half that makes the 0
+    // safe to write.
+    await withDecoder({ 1: { width: 1000, height: 1400 } }, () => openChapter(p.id, c.id));
+    expect(app.pages.map((pg) => [pg.w, pg.h])).toEqual([
+      [1000, 1400],
+      [1000, 1400],
+    ]);
+    closeChapter();
   });
 });
 
@@ -1355,6 +1863,202 @@ describe('autosave debounce', () => {
   });
 });
 
+// ===== switching chapters =====
+// The window between "app.pages is chapter B's" and "app.chapterRef says B" is
+// the most expensive bug in this file: everything that writes reads the ref, and
+// chapter.json is the only copy of a chapter's typesetting. A save landing in
+// that window — the 800ms debounce, a quit, or the goBack the App runs when an
+// open fails — used to serialise chapter B's document straight over chapter A.
+const { flushSave } = await import('./store.svelte.js');
+
+describe('switching from one chapter to another', () => {
+  const line = (en) => ({ n: 1, type: 'dialogue', jp: 'あ', en });
+
+  // Two chapters whose page filenames differ, so a test can tell which document
+  // is in the store just by looking at it. Chapter A is opened and saved with a
+  // line of its own, which is what must still be on disk at the end.
+  async function twoChapters() {
+    const p = await createProject('Series');
+    const a = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    const b = await createChapter({ projectId: p.id, number: 2, title: '', files: [fakeFile('b.png', 2)] });
+    await openChapter(p.id, a.id);
+    app.pages[0].lines = [line('From A')];
+    await saveOpenChapter();
+    return { p, a, b };
+  }
+
+  // Runs `hook` once, at the exact moment `app.pages` has become chapter B's
+  // document — `page-images.js` reads the pages around the one being opened
+  // through this seam, which is the await the old code left the ref standing
+  // across. Reports whether the window was ever actually entered, so a case
+  // cannot pass by never reaching the thing it is about.
+  function duringTheSwap(hook) {
+    const orig = fsx.readFile;
+    const state = { entered: false, restore: () => (fsx.readFile = orig) };
+    fsx.readFile = async (path) => {
+      if (!state.entered && app.pages[0]?.file === 'b.png') {
+        state.entered = true;
+        await hook();
+      }
+      return orig(path);
+    };
+    return state;
+  }
+
+  it('has no chapter to save into while the document is being swapped', async () => {
+    const { p, a, b } = await twoChapters();
+    const seen = [];
+    const hook = duringTheSwap(async () => {
+      seen.push(app.chapterRef);
+      // Both routes a save reaches disk by, fired inside the window.
+      await flushSave();
+      await saveOpenChapter();
+    });
+    try {
+      await openChapter(p.id, b.id);
+    } finally {
+      hook.restore();
+    }
+    expect(hook.entered).toBe(true);
+    expect(seen).toEqual([null]);
+    // Chapter A still says what it said. Before the fix this file held chapter
+    // B's single page and chapter A's typesetting was gone for good.
+    expect(chapterJson(a).pages.map((pg) => pg.file)).toEqual(['a.png']);
+    expect(chapterJson(a).pages[0].lines[0].en).toBe('From A');
+    expect(chapterJson(b).pages.map((pg) => pg.file)).toEqual(['b.png']);
+    expect(app.chapterRef).toEqual({ projectId: p.id, chapterId: b.id });
+    closeChapter();
+  });
+
+  it('cannot write the incoming chapter into the outgoing one on the way out', async () => {
+    // Finding 3's shape: the open fails mid-way, `App.svelte` answers by
+    // navigating back, and the route's leave hook flushes on the way. That flush
+    // has to find nothing to write, not chapter A's name over chapter B's pages.
+    const { p, a, b } = await twoChapters();
+    let left;
+    const hook = duringTheSwap(async () => {
+      left = await flushBeforeLeaving('editor');
+    });
+    try {
+      await openChapter(p.id, b.id);
+    } finally {
+      hook.restore();
+    }
+    expect(hook.entered).toBe(true);
+    expect(left).toBe(true); // nothing pending, so the user is free to go
+    expect(chapterJson(a).pages[0].lines[0].en).toBe('From A');
+    expect(chapterJson(a).pages).toHaveLength(1);
+    closeChapter();
+  });
+
+  it('puts the editor away when the open fails part-way, rather than half-loading', async () => {
+    const { p, a, b } = await twoChapters();
+    const orig = fsx.readTextFile;
+    fsx.readTextFile = async (path) => {
+      if (path === `${b.dir}/chapter.json`) throw new Error('volume went away');
+      return orig(path);
+    };
+    try {
+      await expect(openChapter(p.id, b.id)).rejects.toThrow(/volume went away/);
+    } finally {
+      fsx.readTextFile = orig;
+    }
+    // Nothing is open, so the goBack that follows has nothing to aim at.
+    expect(app.chapterRef).toBeNull();
+    expect(app.loaded).toBe(false);
+    expect(await flushBeforeLeaving('editor')).toBe(true);
+    expect(chapterJson(a).pages[0].lines[0].en).toBe('From A');
+  });
+
+  it('keeps the chapter it could not flush on screen, rather than dropping it', async () => {
+    // The open starts by writing out whatever the outgoing chapter still owes.
+    // A disk that refuses that is not a reason to close the chapter: the edits
+    // it could not write are still in front of the user, and the next attempt is
+    // their way out. Nothing has been given up at that point, so nothing is.
+    const { p, a, b } = await twoChapters();
+    app.pages[0].lines = [line('unwritten')];
+    markUnsaved();
+    const orig = fsx.writeTextFile;
+    fsx.writeTextFile = async () => {
+      throw new Error('disk full');
+    };
+    try {
+      await expect(openChapter(p.id, b.id)).rejects.toThrow(/disk full/);
+    } finally {
+      fsx.writeTextFile = orig;
+    }
+    expect(app.chapterRef).toEqual({ projectId: p.id, chapterId: a.id });
+    expect(app.pages[0].lines[0].en).toBe('unwritten');
+    // And the retry still lands where it should.
+    await saveOpenChapter();
+    expect(chapterJson(a).pages[0].lines[0].en).toBe('unwritten');
+    closeChapter();
+    resetSaveFailures();
+  });
+
+  it('lets the newer open win when a slower one settles late', async () => {
+    const p = await createProject('Series');
+    const slow = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('slow.png', 1)] });
+    const quick = await createChapter({ projectId: p.id, number: 2, title: '', files: [fakeFile('quick.png', 2)] });
+
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const orig = fsx.readFile;
+    // One chapter's read sits; the other comes back at once. That is the real
+    // ordering — a user who clicks one chapter, changes their mind, and clicks
+    // another before the first has finished decoding.
+    fsx.readFile = async (path) => {
+      if (path.endsWith('slow.png')) await gate;
+      return orig(path);
+    };
+    let opening;
+    try {
+      opening = openChapter(p.id, slow.id);
+      await new Promise((r) => setTimeout(r, 0)); // it reaches the gate
+      await openChapter(p.id, quick.id);
+      release();
+      await opening;
+    } finally {
+      fsx.readFile = orig;
+    }
+
+    // The late one abandoned everything: the document, the ref, and any claim on
+    // where the next edit goes.
+    expect(app.pages.map((pg) => pg.file)).toEqual(['quick.png']);
+    expect(app.chapterRef).toEqual({ projectId: p.id, chapterId: quick.id });
+
+    app.pages[0].lines = [line('Ah')];
+    await saveOpenChapter();
+    expect(chapterJson(quick).pages[0].lines[0].en).toBe('Ah');
+    expect(chapterJson(slow).pages[0].lines).toEqual([]);
+    closeChapter();
+  });
+
+  it('refuses a sources edit to a chapter that is still opening', async () => {
+    // `app.chapterRef` is null for the whole of a load, so the refusal that
+    // keeps the sheet off an open chapter has to know about one on its way in —
+    // the open finishes holding its own copy of the pages, and the first autosave
+    // would put that straight back over whatever the sheet wrote.
+    const { p, b } = await twoChapters();
+    let refused;
+    const hook = duringTheSwap(async () => {
+      refused = await replaceCleanedPages(p.id, b.id, [fakeFile('n.png', 3)]).then(
+        () => null,
+        (e) => e,
+      );
+    });
+    try {
+      await openChapter(p.id, b.id);
+    } finally {
+      hook.restore();
+    }
+    expect(hook.entered).toBe(true);
+    expect(refused?.message).toMatch(/open/);
+    expect(chapterJson(b).pages[0].cleaned).toBeNull();
+    closeChapter();
+  });
+});
+
 // The two ends of the wiring, against the same fake disk the chapter uses: the
 // chapter's own directory is where its undo history lives, and putting the
 // chapter away is what gets the live page's stack into it.
@@ -1383,6 +2087,26 @@ describe('the undo history follows the chapter', () => {
     await settled();
     expect(historyJson(c).pages[String(pid)].undo).toHaveLength(1);
     expect(history.canUndo).toBe(false); // and the live stack went with it
+  });
+
+  // The journal used to be started and left to arrive. The user can act the
+  // instant the open resolves, and `openHistory` overwrites the document
+  // unconditionally when it lands — so a page turn or an edit inside that window
+  // met a read that wiped the in-flight records and loaded page one's stack over
+  // whichever page they had moved to.
+  it('has the page-one stack in hand the moment the open resolves', async () => {
+    const { p, c } = await seedOpenChapter();
+    await settled();
+    record(aMove(app.pages[0].id));
+    closeChapter();
+    await settled();
+    resetHistory();
+
+    await openChapter(p.id, c.id);
+    // No settle: this is the state the editor is handed.
+    expect(history.canUndo).toBe(true);
+    closeChapter();
+    await settled();
   });
 
   it('brings that stack back when the chapter is opened again', async () => {
@@ -1472,5 +2196,545 @@ describe('the undo history follows the chapter', () => {
     }
     closeChapter();
     await settled();
+  });
+});
+
+// Pages imported before `createChapter` measured them sit on disk as w:0,h:0.
+// The canvas repairs one per visit, so a chapter nobody has flipped through end
+// to end still exports blank sheets. The open is where the whole chapter can be
+// repaired at once — and the repair has to be marked unsaved, or every open
+// redoes it and never writes it.
+describe('openChapter backfills unmeasured pages', () => {
+  // A chapter written before the measuring import: both pages 0x0 on disk.
+  async function seedUnmeasured() {
+    const { p, c } = await seedOpenChapter();
+    closeChapter();
+    const record = chapterJson(c);
+    for (const pg of record.pages) {
+      pg.w = 0;
+      pg.h = 0;
+    }
+    fsx._tree.files.set(`${c.dir}/chapter.json`, JSON.stringify(record));
+    return { p, c };
+  }
+
+  it('measures every page stored 0x0 and marks the repair to be written', async () => {
+    const { p, c } = await seedUnmeasured();
+    await withDecoder({ 1: { width: 1080, height: 1535 }, 2: { width: 2160, height: 1535 } }, () =>
+      openChapter(p.id, c.id),
+    );
+    // Per page, off each page's own bytes — a spread must not inherit its
+    // neighbour's width.
+    expect(app.pages.map((pg) => [pg.w, pg.h])).toEqual([
+      [1080, 1535],
+      [2160, 1535],
+    ]);
+    // Unsaved, or the repair never reaches disk and the next open redoes it.
+    expect(app.saved).toBe(false);
+    closeChapter();
+  });
+
+  it('leaves a page it cannot decode at 0 rather than guessing', async () => {
+    const { p, c } = await seedUnmeasured();
+    await withDecoder({ 1: { width: 1080, height: 1535 } }, () => openChapter(p.id, c.id));
+    expect([app.pages[1].w, app.pages[1].h]).toEqual([0, 0]);
+    closeChapter();
+  });
+
+  it('does not re-decode a chapter whose pages are already measured', async () => {
+    // Seeded through a decoder, so `createChapter` measured it — unlike
+    // `seedOpenChapter`, which runs in node's no-decoder case and therefore
+    // writes exactly the 0x0 pages the two cases above are about.
+    const sizes = { 1: { width: 1080, height: 1535 }, 2: { width: 2160, height: 1535 } };
+    const p = await createProject('Series');
+    const c = await withDecoder(sizes, () =>
+      createChapter({
+        projectId: p.id,
+        number: 1,
+        title: '',
+        files: [fakeFile('page.png', 1), fakeFile('page.png', 2)],
+      }),
+    );
+    let decodes = 0;
+    await withDecoder(
+      new Proxy(sizes, {
+        get(t, k) {
+          decodes++;
+          return t[k];
+        },
+      }),
+      () => openChapter(p.id, c.id),
+    );
+    // The open pays nothing on a measured chapter and — the point of the
+    // `repaired` flag — does not schedule a write of what it just read.
+    expect(decodes).toBe(0);
+    expect(app.saved).toBe(true);
+    closeChapter();
+  });
+});
+
+// ===== the chapter's workflow mode =====
+// A chapter is either being typeset or translated, and the answer lives in its
+// own chapter.json — not in a preference, so two chapters in one project can
+// disagree and each open the way its own file says.
+const { setChapterMode } = await import('./library.svelte.js');
+const { setTool } = await import('./store.svelte.js');
+
+describe('the chapter mode on disk', () => {
+  beforeEach(() => {
+    closeChapter();
+    setTool('place');
+  });
+
+  it('reads a chapter.json with no mode field as typeset', async () => {
+    // Every chapter written before this field existed. None of them may change
+    // behaviour, which is the whole reason the default is not stored.
+    seedProject('old', PROJECT('p1', 'Old'), [['001', CHAPTER('c1', 1, [{ id: 1 }])]]);
+    await scanLibrary();
+    expect(chapterJson({ dir: '/lib/old/001' }).mode).toBeUndefined();
+    expect(projectById('p1').chapters[0].mode).toBe('typeset');
+  });
+
+  it('reads an explicit mode, and refuses one it does not implement', async () => {
+    const withMode = (id, n, mode) =>
+      JSON.stringify({ schema: 1, id, number: n, title: '', mode, createdAt: 'T0', updatedAt: 'T0', pages: [] });
+    seedProject('m', PROJECT('p1', 'M'), [
+      ['001', withMode('c1', 1, 'translate')],
+      ['002', withMode('c2', 2, 'typeset')],
+      // Hand-edited, or written by something else. It must not leave a chapter
+      // in a mode the editor has no branch for.
+      ['003', withMode('c3', 3, 'clean')],
+    ]);
+    await scanLibrary();
+    expect(projectById('p1').chapters.map((c) => c.mode)).toEqual(['translate', 'typeset', 'typeset']);
+  });
+
+  it('writes the mode a new chapter was created in, and defaults to typeset', async () => {
+    const p = await createProject('Series');
+    const t = await createChapter({
+      projectId: p.id,
+      number: 1,
+      title: 'Translate me',
+      files: [fakeFile('a.png', 1)],
+      mode: 'translate',
+    });
+    expect(chapterJson(t).mode).toBe('translate');
+    expect(t.mode).toBe('translate');
+
+    const d = await createChapter({ projectId: p.id, number: 2, title: '', files: [fakeFile('b.png', 2)] });
+    expect(chapterJson(d).mode).toBe('typeset');
+    expect(d.mode).toBe('typeset');
+  });
+});
+
+describe('opening a chapter in each mode', () => {
+  beforeEach(() => {
+    closeChapter();
+    setTool('place');
+  });
+  afterEach(() => {
+    closeChapter();
+    setTool('place');
+  });
+
+  it('mirrors the chapter it opened, and puts the tool on the hand', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({
+      projectId: p.id,
+      number: 1,
+      title: '',
+      files: [fakeFile('a.png', 1)],
+      mode: 'translate',
+    });
+    await openChapter(p.id, c.id);
+    expect(app.chapterMode).toBe('translate');
+    // The place and text tools are about to leave the rail, so whatever the
+    // previous chapter was left holding cannot survive into this one.
+    expect(app.tool).toBe('pan');
+  });
+
+  it('leaks nothing from a translate chapter into the typeset one opened after it', async () => {
+    const p = await createProject('Series');
+    const t = await createChapter({
+      projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)], mode: 'translate',
+    });
+    const s = await createChapter({
+      projectId: p.id, number: 2, title: '', files: [fakeFile('b.png', 2)],
+    });
+    await openChapter(p.id, t.id);
+    expect(app.chapterMode).toBe('translate');
+    await openChapter(p.id, s.id);
+    expect(app.chapterMode).toBe('typeset');
+    // And the other way round, so neither order is the one that happens to work.
+    await openChapter(p.id, t.id);
+    expect(app.chapterMode).toBe('translate');
+  });
+
+  it('goes back to the default when the chapter closes', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({
+      projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)], mode: 'translate',
+    });
+    await openChapter(p.id, c.id);
+    closeChapter();
+    // Nothing typeset-specific may stay stripped on the way back to the library.
+    expect(app.chapterMode).toBe('typeset');
+  });
+});
+
+describe('switching a chapter mode from the project screen', () => {
+  beforeEach(() => {
+    closeChapter();
+    setTool('place');
+  });
+  afterEach(() => closeChapter());
+
+  it('patches a closed chapter.json without opening it', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    const before = chapterJson(c);
+
+    await setChapterMode(p.id, c.id, 'translate');
+
+    expect(chapterJson(c).mode).toBe('translate');
+    expect(chapterById(p.id, c.id).mode).toBe('translate');
+    // Nothing else in the record moved. A mode switch is one field, and the
+    // pages are the part of this file that cannot be re-derived.
+    expect(chapterJson(c).pages).toEqual(before.pages);
+    // And no chapter was opened to do it.
+    expect(app.chapterRef).toBeNull();
+
+    await setChapterMode(p.id, c.id, 'typeset');
+    expect(chapterJson(c).mode).toBe('typeset');
+  });
+
+  it('refuses a mode nothing implements rather than storing it', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    await setChapterMode(p.id, c.id, 'clean');
+    expect(chapterJson(c).mode).toBe('typeset');
+  });
+
+  it('goes through the open document when that chapter is the one on screen', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    await openChapter(p.id, c.id);
+    expect(app.saved).toBe(true);
+
+    await setChapterMode(p.id, c.id, 'translate');
+    // The state changes immediately — the editor is on screen and has to
+    // restripe now — and the write is the ordinary autosave, so it cannot race
+    // the open document's own next save into the same file.
+    expect(app.chapterMode).toBe('translate');
+    expect(app.tool).toBe('pan');
+    expect(app.saved).toBe(false);
+    expect(chapterJson(c).mode).toBe('typeset'); // not yet — the debounce owns it
+
+    await saveOpenChapter();
+    expect(chapterJson(c).mode).toBe('translate');
+  });
+});
+
+// ===== translations.json =====
+// A second file beside chapter.json, rewritten by every save in both modes. It
+// is derived — chapter.json is still the only copy of anything — so nothing
+// reads it back; it exists so the chapter's text is a plain JSON document on
+// disk at all times rather than only after an export.
+const { buildTextJson } = await import('./text-json.js');
+const translationsJson = (c) => JSON.parse(fsx._tree.files.get(`${c.dir}/translations.json`));
+
+describe('the translations file', () => {
+  beforeEach(() => closeChapter());
+  afterEach(() => closeChapter());
+
+  it('is written when the chapter is created, from whatever lines it came with', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({
+      projectId: p.id,
+      number: 1,
+      title: '',
+      files: [fakeFile('a.png', 1), fakeFile('b.png', 2)],
+      translations: [{ lines: [{ n: 1, jp: 'あ', en: 'Ah' }] }, { lines: [] }],
+    });
+    const doc = translationsJson(c);
+    expect(doc.schema).toBe(1);
+    expect(doc.pages).toHaveLength(2);
+    expect(doc.pages[0].lines).toEqual([
+      expect.objectContaining({ n: 1, jp: 'あ', en: 'Ah' }),
+    ]);
+    expect(doc.pages[1].lines).toEqual([]);
+  });
+
+  it('exists from birth even for a chapter with nothing in it yet', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    expect(translationsJson(c).pages).toHaveLength(1);
+  });
+
+  it("follows every save, and is the export's own document", async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({
+      projectId: p.id,
+      number: 1,
+      title: '',
+      files: [fakeFile('a.png', 1)],
+      translations: [{ lines: [{ n: 1, jp: 'あ', en: '' }] }],
+    });
+    await openChapter(p.id, c.id);
+    expect(translationsJson(c).pages[0].lines[0].en).toBe('');
+
+    // What the queue's textarea does: write the line, mark the document dirty.
+    // The 800ms debounce then carries both files, which is why this needs no
+    // rule about saving every N boxes.
+    page().lines[0].en = 'Ah';
+    markUnsaved();
+    await saveOpenChapter();
+
+    expect(translationsJson(c).pages[0].lines[0].en).toBe('Ah');
+    // Byte for byte the document `exportTextJson` writes, because it is the
+    // same serialiser — two copies of one file format would drift the moment
+    // either was touched.
+    expect(fsx._tree.files.get(`${c.dir}/translations.json`)).toBe(buildTextJson(app.pages));
+  });
+
+  // Every edit made from the project screen goes through `commitPages`, which
+  // used to write chapter.json alone. The derived file then sat there describing
+  // the chapter as it had been before the re-import — for as long as nobody
+  // happened to open the chapter in the editor and trip the autosave.
+  it('follows an edit made while the chapter is closed', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({
+      projectId: p.id,
+      number: 1,
+      title: '',
+      files: [fakeFile('a.png', 1)],
+      translations: [{ lines: [{ n: 1, jp: 'あ', en: 'Old' }] }],
+    });
+    expect(translationsJson(c).pages[0].lines[0].en).toBe('Old');
+
+    await applyTranslations(p.id, c.id, [
+      { lines: [{ n: 1, type: 'dialogue', jp: 'あ', en: 'New' }] },
+    ]);
+
+    expect(app.chapterRef).toBeNull(); // nothing was opened to do it
+    expect(translationsJson(c).pages[0].lines[0].en).toBe('New');
+  });
+
+  it('follows a cleaned page whose raster is a different size', async () => {
+    // The document carries each page's width and height, so a page op that
+    // changes them is a page op this file has to hear about too.
+    const p = await createProject('Series');
+    const c = await withDecoder({ 1: { width: 1000, height: 1400 } }, () =>
+      createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] }),
+    );
+    expect(translationsJson(c).pages[0]).toMatchObject({ width: 1000, height: 1400 });
+
+    await withDecoder({ 5: { width: 2000, height: 2800 } }, () =>
+      replaceCleanedPages(p.id, c.id, [fakeFile('hi.png', 5)]),
+    );
+    expect(translationsJson(c).pages[0]).toMatchObject({ width: 2000, height: 2800 });
+  });
+
+  it('is written beside the chapter it belongs to, never the one just opened', async () => {
+    const p = await createProject('Series');
+    const a = await createChapter({
+      projectId: p.id, number: 1, title: '',
+      files: [fakeFile('a.png', 1)],
+      translations: [{ lines: [{ n: 1, jp: 'あ', en: 'From A' }] }],
+    });
+    const b = await createChapter({
+      projectId: p.id, number: 2, title: '',
+      files: [fakeFile('b.png', 2)],
+      translations: [{ lines: [{ n: 1, jp: 'い', en: 'From B' }] }],
+    });
+    await openChapter(p.id, a.id);
+    await saveOpenChapter();
+    await openChapter(p.id, b.id);
+    await saveOpenChapter();
+    expect(translationsJson(a).pages[0].lines[0].en).toBe('From A');
+    expect(translationsJson(b).pages[0].lines[0].en).toBe('From B');
+  });
+});
+
+// ===========================================================================
+// The project's page layout
+// ===========================================================================
+// Fixed when the project is created and never again — a longstrip project's
+// pages are slices of one continuous drawing, and reading them back as separate
+// pages describes art that does not exist. So what matters is that the flag
+// survives everything that rewrites the record it lives in.
+describe('the layout survives the project.json round trip', () => {
+  const projectJson = (slug) => JSON.parse(fsx._tree.files.get(`/lib/${slug}/project.json`));
+
+  it('defaults to pages, and is written even then', async () => {
+    const p = await createProject('Paged Series');
+    expect(p.layout).toBe('pages');
+    expect(projectJson(p.slug).layout).toBe('pages');
+  });
+
+  it('writes the chosen layout and hands it back on the catalogue record', async () => {
+    const p = await createProject('Webtoon', { layout: 'longstrip' });
+    expect(projectJson(p.slug).layout).toBe('longstrip');
+    expect(p.layout).toBe('longstrip');
+  });
+
+  it('refuses a layout it does not know rather than storing it', async () => {
+    const p = await createProject('Odd', { layout: 'scroll-sideways' });
+    expect(projectJson(p.slug).layout).toBe('pages');
+  });
+
+  it('reads back off disk, and reads a record written before the flag as pages', async () => {
+    await createProject('Webtoon', { layout: 'longstrip' });
+    // A slice 1 project.json: no `layout` key at all.
+    seedProject('legacy', PROJECT('p-legacy', 'Legacy'));
+    await scanLibrary();
+    expect(projectById('p-legacy').layout).toBe('pages');
+    expect(library.projects.find((x) => x.name === 'Webtoon').layout).toBe('longstrip');
+  });
+
+  // `buildChapter` rewrites project.json whole to move the cover, so anything it
+  // does not name is deleted from a file that can never be re-answered.
+  it('is not dropped when a chapter is added to the project', async () => {
+    const p = await createProject('Webtoon', { layout: 'longstrip' });
+    await createChapter({
+      projectId: p.id,
+      number: 1,
+      title: '',
+      files: [fakeFile('a.png', 1)],
+    });
+    expect(projectJson(p.slug).layout).toBe('longstrip');
+    await scanLibrary();
+    expect(projectById(p.id).layout).toBe('longstrip');
+  });
+});
+
+describe('the open chapter carries its project\'s layout', () => {
+  afterEach(() => closeChapter());
+
+  it('is set from the owning project on open and put back on close', async () => {
+    const p = await createProject('Webtoon', { layout: 'longstrip' });
+    const c = await createChapter({
+      projectId: p.id,
+      number: 1,
+      title: '',
+      files: [fakeFile('a.png', 1)],
+    });
+    await openChapter(p.id, c.id);
+    expect(app.projectLayout).toBe('longstrip');
+    closeChapter();
+    expect(app.projectLayout).toBe('pages');
+  });
+
+  // Two projects, opened one after the other: the second must not inherit the
+  // first's layout, the same way it must not inherit its mode.
+  it('is rewritten on every open rather than left standing', async () => {
+    const strip = await createProject('Webtoon', { layout: 'longstrip' });
+    const stripC = await createChapter({ projectId: strip.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    const paged = await createProject('Paged');
+    const pagedC = await createChapter({ projectId: paged.id, number: 1, title: '', files: [fakeFile('b.png', 2)] });
+
+    await openChapter(strip.id, stripC.id);
+    expect(app.projectLayout).toBe('longstrip');
+    await openChapter(paged.id, pagedC.id);
+    expect(app.projectLayout).toBe('pages');
+  });
+});
+
+// A chapter rebuilt from PSD pages requires validated, non-empty file names and
+// deterministically deduplicates duplicate names on disk.
+describe('createChapterFromPages', () => {
+  it('writes chapter with raws and cleaned pages and appears in catalogue', async () => {
+    const p = await createProject('PsdSeries');
+    const c = await createChapterFromPages({
+      projectId: p.id,
+      number: 1,
+      title: 'From PSD',
+      pages: [
+        {
+          rawName: 'p001.png',
+          rawBytes: new Uint8Array([1, 2, 3]),
+          cleanedName: 'p001-cleaned.png',
+          cleanedBytes: new Uint8Array([4, 5, 6]),
+          w: 1000,
+          h: 1500,
+          lines: [{ n: 1, text: 'Hello' }],
+          boxes: [],
+        },
+      ],
+    });
+    expect(c.slug).toBe('001-from-psd');
+    const json = JSON.parse(fsx._tree.files.get(`${c.dir}/chapter.json`));
+    expect(json.pages[0].file).toBe('p001.png');
+    expect(json.pages[0].cleaned).toBe('p001-cleaned.png');
+    expect(fsx._tree.files.get(`${c.dir}/raws/p001.png`)).toEqual(new Uint8Array([1, 2, 3]));
+    expect(fsx._tree.files.get(`${c.dir}/cleaned/p001-cleaned.png`)).toEqual(new Uint8Array([4, 5, 6]));
+  });
+
+  it('rejects pages missing rawName (undefined, null, empty string, or whitespace)', async () => {
+    const p = await createProject('Series');
+    await expect(
+      createChapterFromPages({
+        projectId: p.id,
+        number: 1,
+        title: '',
+        pages: [{ rawName: undefined, rawBytes: new Uint8Array([1]) }],
+      }),
+    ).rejects.toThrow(/file name/i);
+
+    await expect(
+      createChapterFromPages({
+        projectId: p.id,
+        number: 1,
+        title: '',
+        pages: [{ rawName: '', rawBytes: new Uint8Array([1]) }],
+      }),
+    ).rejects.toThrow(/file name/i);
+
+    await expect(
+      createChapterFromPages({
+        projectId: p.id,
+        number: 1,
+        title: '',
+        pages: [{ rawName: '   ', rawBytes: new Uint8Array([1]) }],
+      }),
+    ).rejects.toThrow(/file name/i);
+
+    expect(projectById(p.id).chapters).toHaveLength(0);
+  });
+
+  it('rejects cleaned pages missing cleanedName when cleanedBytes is provided', async () => {
+    const p = await createProject('Series');
+    await expect(
+      createChapterFromPages({
+        projectId: p.id,
+        number: 1,
+        title: '',
+        pages: [
+          {
+            rawName: 'p1.png',
+            rawBytes: new Uint8Array([1]),
+            cleanedName: null,
+            cleanedBytes: new Uint8Array([2]),
+          },
+        ],
+      }),
+    ).rejects.toThrow(/cleaned.*file name/i);
+  });
+
+  it('deduplicates colliding rawNames deterministically across multiple pages', async () => {
+    const p = await createProject('Series');
+    const c = await createChapterFromPages({
+      projectId: p.id,
+      number: 1,
+      title: '',
+      pages: [
+        { rawName: 'page.png', rawBytes: new Uint8Array([1]) },
+        { rawName: 'page.png', rawBytes: new Uint8Array([2]) },
+      ],
+    });
+    const json = JSON.parse(fsx._tree.files.get(`${c.dir}/chapter.json`));
+    expect(json.pages.map((pg) => pg.file)).toEqual(['page.png', 'page-2.png']);
+    expect(fsx._tree.files.get(`${c.dir}/raws/page.png`)).toEqual(new Uint8Array([1]));
+    expect(fsx._tree.files.get(`${c.dir}/raws/page-2.png`)).toEqual(new Uint8Array([2]));
   });
 });

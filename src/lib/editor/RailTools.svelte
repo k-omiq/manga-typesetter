@@ -13,13 +13,20 @@
   import {
     app,
     setTool,
-    openBulk,
-    closeBulk,
     saveSidebar,
     clampSidebarWidth,
     SIDEBAR_MIN,
     SIDEBAR_MAX,
+    isTranslateMode,
   } from '../store.svelte.js';
+
+  // A translate chapter has no reference sidebar — the canvas is already showing
+  // the raw — so the rail keeps only the hand, and the caret that would offer to
+  // bring a sidebar back goes with it. `noSide` rather than `app.sidebarHidden`
+  // everywhere the geometry is concerned: there is nothing to the left of the
+  // rail in either case, so it sits at 0 and the resize is inert.
+  const translate = $derived(isTranslateMode());
+  const noSide = $derived(translate || app.sidebarHidden);
 
   // How far one arrow key moves the edge. Coarse enough to cross the range in a
   // reasonable number of presses, fine enough to land where you meant to.
@@ -40,7 +47,7 @@
   // this never starts from a button — or from the padding between them, which
   // is why the guard sits on the strip rather than on each button.
   function onRailPointerDown(e) {
-    if (app.sidebarHidden) return; // nothing on screen to resize
+    if (noSide) return; // nothing on screen to resize
     e.preventDefault();
     const pid = e.pointerId;
     const startX = e.clientX;
@@ -77,7 +84,7 @@
   // each drag does — the writes are one short string and only happen on a key
   // that actually moved the edge.
   function onRailKeyDown(e) {
-    if (app.sidebarHidden) return;
+    if (noSide) return;
     const w = app.leftWidth;
     if (e.key === 'ArrowLeft') app.leftWidth = clampSidebarWidth(w - KEY_STEP);
     else if (e.key === 'ArrowRight') app.leftWidth = clampSidebarWidth(w + KEY_STEP);
@@ -93,12 +100,6 @@
     saveSidebar();
   }
 
-  // The bulk button is lit while bulk mode is on, so its second press has to be
-  // the way out of it. `openBulk` on an already-open mode would silently empty
-  // the targets the user had picked and reseed the style; `closeBulk` is what
-  // Escape and the panel's own Cancel already do.
-  const toggleBulk = () => (app.bulk.active ? closeBulk() : openBulk());
-
   // The tool strip is not part of the drag surface: a press anywhere inside it,
   // button or padding, belongs to the buttons.
   const keepClick = (e) => e.stopPropagation();
@@ -113,8 +114,8 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="ed-rail"
-  class:hidden={app.sidebarHidden}
-  style="left:{app.sidebarHidden ? 0 : app.leftWidth}px"
+  class:hidden={noSide}
+  style="left:{noSide ? 0 : app.leftWidth}px"
   onpointerdown={onRailPointerDown}
 >
   <!-- The band that advertises the resize — and, being the widget, the thing
@@ -132,46 +133,55 @@
     aria-valuenow={app.leftWidth}
     aria-valuemin={SIDEBAR_MIN}
     aria-valuemax={SIDEBAR_MAX}
-    tabindex={app.sidebarHidden ? -1 : 0}
+    tabindex={noSide ? -1 : 0}
     onkeydown={onRailKeyDown}
   ></div>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="ed-rail-tools" onpointerdown={keepClick}>
+    <!-- All three go together in a translate chapter, and what is left is one
+         button: the hand. The caret is not merely redundant there — pressing it
+         would advertise a sidebar showing the same raw the canvas already is. -->
+    {#if !translate}
+      <button
+        class="caret"
+        onclick={toggleSidebar}
+        aria-label={app.sidebarHidden ? 'Show raw reference' : 'Hide raw reference'}
+        data-tip={app.sidebarHidden ? 'Show raw reference' : 'Hide raw reference'}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d={app.sidebarHidden ? 'M9 5l7 7-7 7' : 'M15 5l-7 7 7 7'} />
+        </svg>
+      </button>
+      <span class="sep"></span>
+      <button
+        class:on={app.tool === 'place'}
+        onclick={() => setTool('place')}
+        aria-label="Place tool"
+        data-tip="Place tool — drop queued lines"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3l7 18 2.5-7.5L20 11z" /></svg>
+      </button>
+      <!-- The Text tool keeps its incidental pan: past 4px of travel the press
+           becomes a scroll and adds nothing, which is what stops a slipped click
+           from leaving a stray empty box on the page. The hand below is the tool
+           for moving around deliberately — with it, no press can ever add a box —
+           and it is what the double-click-for-bulk shortcut vacated. -->
+      <button
+        class:on={app.tool === 'text'}
+        onclick={() => setTool('text')}
+        aria-label="Text tool"
+        data-tip="Text tool — click to add a box, drag to pan"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7V5h16v2" /><path d="M12 5v14" /><path d="M9 19h6" /></svg>
+      </button>
+    {/if}
     <button
-      class="caret"
-      onclick={toggleSidebar}
-      aria-label={app.sidebarHidden ? 'Show raw reference' : 'Hide raw reference'}
-      data-tip={app.sidebarHidden ? 'Show raw reference' : 'Hide raw reference'}
+      class:on={app.tool === 'pan'}
+      onclick={() => setTool('pan')}
+      aria-label="Hand tool"
+      data-tip="Hand tool — drag to move around the page"
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-        <path d={app.sidebarHidden ? 'M9 5l7 7-7 7' : 'M15 5l-7 7 7 7'} />
-      </svg>
-    </button>
-    <span class="sep"></span>
-    <button
-      class:on={app.tool === 'place'}
-      onclick={() => setTool('place')}
-      aria-label="Place tool"
-      data-tip="Place tool — drop queued lines"
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3l7 18 2.5-7.5L20 11z" /></svg>
-    </button>
-    <button
-      class:on={app.tool === 'text'}
-      onclick={() => setTool('text')}
-      ondblclick={openBulk}
-      aria-label="Text tool"
-      data-tip="Text tool — drag to pan, click to add · double-click for bulk style"
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7V5h16v2" /><path d="M12 5v14" /><path d="M9 19h6" /></svg>
-    </button>
-    <button
-      class:on={app.bulk.active}
-      onclick={toggleBulk}
-      aria-label="Bulk style"
-      data-tip="Bulk style — one style, many boxes"
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l9 5-9 5-9-5z" /><path d="M3 14l9 5 9-5" /></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0" /><path d="M14 10V4a2 2 0 0 0-4 0v2" /><path d="M10 10.5V6a2 2 0 0 0-4 0v8" /><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-6-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" /></svg>
     </button>
   </div>
 </div>

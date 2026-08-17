@@ -1,6 +1,0 @@
-# Phase 0 — service skeleton only. ML deps (torch, manga-ocr, comic-text-detector,
-# opencv, MangaTranslator requirements) are added in later phases.
-fastapi>=0.115
-uvicorn[standard]>=0.34
-pydantic>=2.7
-python-multipart>=0.0.9

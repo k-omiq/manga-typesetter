@@ -1,3 +1,15 @@
+<script module>
+  // Module scope, not instance scope, and that is the whole point: this holds
+  // the page-switch seam's unsubscribe across a remount. `initHistory` keeps its
+  // own registration idempotent the same way — release ours, then register — but
+  // a holder living on the component would be null again in the new instance, so
+  // an HMR swap or an `App` remount would register `switchHistoryPage` twice.
+  // The second call would then run `takeStack()` a second time, which by then
+  // returns the *destination* page's stack, and file it under the source page's
+  // key: page A's saved history overwritten with page B's.
+  let releasePageSwitch = null;
+</script>
+
 <script>
   import EditorRoot from './lib/editor/EditorRoot.svelte';
   import FontModal from './lib/FontModal.svelte';
@@ -10,8 +22,9 @@
   import NewChapterDialog from './lib/home/NewChapterDialog.svelte';
   import ChapterSourcesSheet from './lib/home/ChapterSourcesSheet.svelte';
   import { onMount, untrack } from 'svelte';
-  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast, setPageSwitchHook } from './lib/store.svelte.js';
+  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast, setPageSwitchHook, flushSidebar, noteFontsChanged, isLongstrip, isTranslateMode } from './lib/store.svelte.js';
   import { initHistory, undo, redo } from './lib/editor/history.svelte.js';
+  import { flushPanels } from './lib/editor/panels.svelte.js';
   import { switchHistoryPage } from './lib/editor/history-file.svelte.js';
   import { restoreFonts } from './lib/fonts.js';
   import { isTauri } from './lib/importer.js';
@@ -40,7 +53,8 @@
     // history and its page turns to the file that keeps every other page's
     // stack. Done here, once, so nothing in the editor has to import either.
     initHistory();
-    setPageSwitchHook(switchHistoryPage);
+    releasePageSwitch?.();
+    releasePageSwitch = setPageSwitchHook(switchHistoryPage);
     try {
       await initRoot();
     } catch (e) {
@@ -54,10 +68,18 @@
       booted = true;
     }
     restoreFonts();
+    // Every text measurement the app makes before its fonts are there is made
+    // against the fallback family, and the boxes sized from those measurements
+    // stay wrong until something says the fonts have arrived. The exporter has
+    // always awaited this; nothing else did. Not awaited here — a boot must not
+    // wait on a font — and safe to fire whenever it resolves, because the refit
+    // it triggers is grow-only and idempotent. `restoreFonts` covers the user's
+    // own faces by calling the same function as it registers each one.
+    document.fonts?.ready.then(() => noteFontsChanged());
     armQuitFlush();
-    // Probe the Python sidecar (only meaningful under Tauri; no-op in the browser).
+    // Probe the detection engine (only meaningful under Tauri; no-op in the browser).
     checkSidecar().then((h) => {
-      if (h) toast(`Sidecar ready · ${h.device}`);
+      if (h) toast(`Detection ready · ${h.device}`);
     });
   });
 
@@ -88,6 +110,15 @@
       // one in-flight answer instead.
       let inFlight = null;
       const safeToQuit = () => {
+        // The preference tier's own way out. `flushBeforeLeaving` drains the
+        // document and its history; the two preference writers keep 200ms
+        // debounces of their own and nothing drained them, so the last drag of
+        // the rail or of a floating panel was lost to ⌘Q. Synchronous and cheap,
+        // and ahead of the chapter guard because a panel moved and then quit
+        // from the library screen has no chapter to save and would otherwise
+        // flush nothing at all.
+        flushSidebar();
+        flushPanels();
         if (!app.chapterRef) return Promise.resolve(true);
         if (!inFlight) inFlight = flushBeforeLeaving('quit').finally(() => (inFlight = null));
         return inFlight;
@@ -95,7 +126,14 @@
 
       // Route 1: the red close button.
       await w.onCloseRequested(async (e) => {
-        if (!app.chapterRef) return; // nothing pending; let it close
+        if (!app.chapterRef) {
+          // No chapter to save, but a preference write may still be inside its
+          // debounce — and this branch never reaches safeToQuit, which is where
+          // the other route flushes them.
+          flushSidebar();
+          flushPanels();
+          return; // nothing pending; let it close
+        }
         e.preventDefault();
         if (await safeToQuit()) await w.destroy();
       });
@@ -144,10 +182,18 @@
   //
   // Removing the items rather than replacing them is the whole fix. An ordinary
   // MenuItem carrying ⌘Z would consume the key *unconditionally*, including
-  // inside a real text field, leaving that field's own undo to a speculative
-  // document.execCommand('undo') delegation. With no item claiming the key
-  // equivalent, ⌘Z falls through to the web view and both undos work on their
-  // own terms: WebKit's inside a focused editable, onKeydown's everywhere else.
+  // inside a real text field, whereas with no item claiming the key equivalent
+  // ⌘Z reaches the web view as an ordinary DOM keydown and onKeydown's undo()
+  // runs everywhere the editor wants it.
+  //
+  // What the removal also took away, and what the fields had to be given back:
+  // WebKit does *not* undo typing on its own. That predefined item was the only
+  // thing that ever did — macOS has no standard key binding for ⌘Z, so the key
+  // equivalent sent `undo:` down the responder chain and the web view's editor
+  // answered it. Delete the item and a focused text field has no undo at all.
+  // So the two editable surfaces keep their own stacks and answer ⌘Z
+  // themselves, from their own keydown handlers, below this one's early return
+  // — see src/lib/editor/field-undo.svelte.js.
   //
   // Cut/Copy/Paste/Select All stay predefined and untouched — they are audited
   // working, and they are not in the way of anything.
@@ -253,9 +299,36 @@
     if (route.name !== 'editor') return;
     // Before the single-letter tool shortcuts, and the reason they are guarded
     // at all: without this, ⌘Z would read as a bare 'z' on its way past and
-    // ⌘Y would switch tools. The early returns above already leave the
-    // browser's own undo alone inside a field or an inline box edit.
+    // ⌘Y would switch tools. The early returns above are what makes ⌘Z
+    // context-sensitive: inside a field or an inline box edit the key never
+    // gets here, and that field's own handler has already answered it.
     const mod = e.metaKey || e.ctrlKey;
+    const isHistoryKey = mod && (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y');
+    // A translate chapter has no canvas edits, so it has nothing for the
+    // document history to replay — but the stack it inherits is not empty. A
+    // chapter typeset first and reopened to fix the translation still has its
+    // per-page undo stacks on disk, and every entry in them is about boxes:
+    // `place`, `delete`, `move`, `style`. Replayed here they put boxes back onto
+    // a canvas that refuses to create any (`addEmptyBox` and `placeActiveAt`
+    // both return early in this mode), invent free queue rows to go with them,
+    // and mark the chapter unsaved — one keypress undoing the whole point of the
+    // mode's guard rails.
+    //
+    // Refused outright rather than filtered down to the entries that would be
+    // harmless, because there are none: every kind the history implements
+    // mutates boxes. And refused HERE rather than inside `undo`/`redo`, which
+    // this keydown is the only caller of — the two editable surfaces keep undo
+    // stacks of their own and answer ⌘Z from their own handlers, above the
+    // early returns at the top of this function, so the queue's textarea still
+    // undoes typing in a translate chapter exactly as it does everywhere else.
+    //
+    // Said out loud. A shortcut that silently does nothing reads as a broken
+    // app, and the reason is not guessable from the keyboard.
+    if (isHistoryKey && isTranslateMode()) {
+      e.preventDefault();
+      toast('Nothing to undo here — a translate chapter edits the queue, not the canvas');
+      return;
+    }
     if (mod && (e.key === 'z' || e.key === 'Z')) {
       e.preventDefault();
       if (e.shiftKey) redo();
@@ -275,10 +348,22 @@
     // switch tool. Only these two are guarded: the page turns below have always
     // answered to a held modifier, and this is not the task that takes that
     // away.
+    //
+    // In a translate chapter `setTool` refuses everything but the hand, so v and
+    // t are no-ops without a second check here — the one gate covers the rail's
+    // buttons and these keys alike.
     if (!mod && (e.key === 'v' || e.key === 'V')) setTool('place');
     if (!mod && (e.key === 't' || e.key === 'T')) setTool('text');
-    if (e.key === 'ArrowRight' && !e.shiftKey) nextPage();
-    if (e.key === 'ArrowLeft' && !e.shiftKey) prevPage();
+    if (!mod && (e.key === 'h' || e.key === 'H')) setTool('pan');
+    // Not in a longstrip chapter, where the index is derived from the scroll
+    // position: a page turn there moves the queue and the undo stack onto a page
+    // that is not the one under the reader's eyes, and the next scroll event
+    // silently puts it back. There is nothing to turn — the arrow keys are the
+    // scroll container's own, and it keeps them.
+    if (!isLongstrip()) {
+      if (e.key === 'ArrowRight' && !e.shiftKey) nextPage();
+      if (e.key === 'ArrowLeft' && !e.shiftKey) prevPage();
+    }
   }
 </script>
 

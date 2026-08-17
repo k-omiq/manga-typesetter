@@ -25,9 +25,15 @@ tauri = { version = "2.11.2", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
-# http-only client for local sidecar health/proxy calls (no TLS backend pulled in)
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
-# already in the dep tree via tauri/reqwest; declared for the async sleep in the health poll
-tokio = { version = "1", features = ["time"] }
-# OS CSPRNG for the sidecar auth token (already present transitively via tauri)
-getrandom = "0.2"
+# The only outbound requests this app makes are `detect::engine` streaming the
+# ONNX weights down, and every one of those URLs is https (huggingface.co,
+# github.com) — so a TLS backend is unavoidable. rustls rather than native-tls
+# keeps the "no OpenSSL, no system crypto library" spirit of
+# default-features = false. Nothing else is needed: the download reads raw
+# `chunk()`s, so no `json`, and the multipart upload died with the sidecar.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# libproc/rusage bindings for the process-memory report (see src/memory.rs).
+# Already in the dep tree via tauri; declared because this crate calls it.
+libc = "0.2"
+ort = { version = "2.0.0-rc.10", features = ["download-binaries", "coreml"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

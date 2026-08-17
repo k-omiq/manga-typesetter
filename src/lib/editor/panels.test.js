@@ -15,7 +15,9 @@ import {
   resetPanels,
   serializePanels,
   clampAll,
+  flushPanels,
 } from './panels.svelte.js';
+import { PREF_SAVE_MS } from '../store.svelte.js';
 
 const fakeStorage = (initial) => {
   let v = initial;
@@ -69,10 +71,41 @@ describe('clampPanel', () => {
     expect(clampPanel(g, 1000, 800)).toEqual(g);
   });
 
-  it('keeps a hidden panel reachable too', () => {
+  // A hidden panel is drawn as a 34px icon, so 34px is the whole of what has to
+  // stay on screen. Clamped against the panel's 120px strip instead, the stub
+  // could not be put in the right ~86px of the window at all — dropped in the
+  // top-right corner it was yanked back inward, and the drag the user just made
+  // was undone in front of them.
+  it('keeps a hidden panel reachable by its stub, not by the panel it is not showing', () => {
     const c = clampPanel({ x: 5000, y: 5000, w: 320, h: 400, hidden: true }, 1000, 800);
-    expect(c.x).toBeLessThanOrEqual(1000 - 120);
+    expect(c.x).toBe(1000 - 34);
+    expect(c.y).toBe(800 - 34);
     expect(c.hidden).toBe(true);
+  });
+
+  it('leaves a stub parked in the top-right corner alone', () => {
+    const g = { x: 1000 - 34, y: 8, w: 320, h: 400, hidden: true, z: 1 };
+    expect(clampPanel(g, 1000, 800)).toEqual(g);
+  });
+
+  // The distinction is the `hidden` flag and nothing else: the same coordinates
+  // that are legal for a stub are still pulled back in for a visible panel.
+  it('still holds a visible panel to the wider strip at the same coordinates', () => {
+    const at = { x: 1000 - 34, y: 8, w: 320, h: 400, hidden: false, z: 1 };
+    expect(clampPanel(at, 1000, 800).x).toBe(1000 - 120);
+  });
+
+  // Hiding is not a drag, so nothing re-clamps between the two. The next
+  // clampAll — a window resize, or the drag that follows — is what has to hold
+  // the stub to the stub's rule, and the geometry it is handed is whatever the
+  // panel was last at.
+  it('re-clamps a panel to the stub rule once it is hidden', () => {
+    resetPanels(1400, 900);
+    movePanel('queue', 1360, 860);
+    setHidden('queue', true);
+    clampAll(1400, 900);
+    expect(panels.queue.x).toBe(1360); // 1400 - 34, and would have been 1280 before
+    expect(panels.queue.y).toBe(860);
   });
 });
 
@@ -244,6 +277,43 @@ describe('persistence', () => {
     expect(JSON.parse(s.dump()).queue).toMatchObject({ x: 140, y: 160 });
   });
 
+  // The interval is the store's shared preference beat, not a number this module
+  // picked for itself — the sidebar's write coalesces on the same one. What this
+  // pins is the duration: `PREF_SAVE_MS` is 199 and 200 by the time the case
+  // runs, so a module that went back to a hard-coded 200 of its own would pass
+  // it, and only reading the source tells those apart. What it does catch is the
+  // divergence that matters — change the shared constant and a writer still
+  // sitting on the old number fails here.
+  it('writes on the shared preference interval rather than one of its own', () => {
+    const s = fakeStorage(null);
+    loadPanels(s, 1400, 900);
+    movePanel('queue', 10, 12);
+    vi.advanceTimersByTime(PREF_SAVE_MS - 1);
+    expect(s.dump()).toBe(null);
+    vi.advanceTimersByTime(1);
+    expect(JSON.parse(s.dump()).queue).toMatchObject({ x: 10, y: 12 });
+  });
+
+  // `resetPanels` is a Settings action, and Settings opens from the library
+  // screen as readily as from the editor. Nothing in it may need a mounted
+  // panel, a DOM or an open document — and the reset has to reach storage, or
+  // the next editor mount loads the layout the user just threw away straight
+  // back over the top.
+  it('resets to the defaults for the live window and persists them', () => {
+    const s = fakeStorage(
+      JSON.stringify({
+        options: { x: -900, y: -900, w: 240, h: 200, hidden: true, z: 1 },
+        queue: { x: -900, y: -900, w: 240, h: 200, hidden: true, z: 2 },
+      }),
+    );
+    loadPanels(s, 1400, 900);
+    expect(() => resetPanels(1400, 900)).not.toThrow();
+    expect(panels.options).toMatchObject(defaultGeometry(1400).options);
+    expect(panels.queue.hidden).toBe(false);
+    vi.advanceTimersByTime(PREF_SAVE_MS);
+    expect(JSON.parse(s.dump()).options).toMatchObject(defaultGeometry(1400).options);
+  });
+
   it('survives a storage that throws on write', () => {
     loadPanels(
       {
@@ -258,5 +328,49 @@ describe('persistence', () => {
     movePanel('options', 40, 40);
     expect(() => vi.advanceTimersByTime(200)).not.toThrow();
     expect(panels.options.x).toBe(40);
+  });
+});
+
+// The debounce given back on the way out. ⌘Q destroys the window with no unload
+// the page can await, so a panel dragged inside the last PREF_SAVE_MS would be
+// lost — the same hole `flushSidebar` closes one module over.
+describe('flushPanels', () => {
+  beforeEach(() => {
+    resetPanels(1400, 900);
+    vi.clearAllTimers(); // the reset's own write is not what any case here is testing
+  });
+
+  it('writes a pending move immediately instead of losing it', () => {
+    const s = fakeStorage(null);
+    loadPanels(s, 1400, 900);
+    movePanel('queue', 300, 200);
+    expect(s.dump()).toBe(null); // still inside the debounce
+    flushPanels();
+    expect(JSON.parse(s.dump()).queue).toMatchObject({ x: 300, y: 200 });
+  });
+
+  // Draining twice must not write twice: the second call has nothing pending,
+  // and a flush that wrote anyway would put a layout on disk the user never
+  // arranged — the sentinel is what a spurious second write would clobber.
+  it('does nothing on a second flush with nothing pending', () => {
+    const s = fakeStorage(null);
+    loadPanels(s, 1400, 900);
+    movePanel('queue', 300, 200);
+    flushPanels();
+    s.setItem('mt.panels', 'sentinel');
+    flushPanels();
+    expect(s.dump()).toBe('sentinel');
+  });
+
+  // A flush after the timer has already fired must not write a second time:
+  // the sentinel would be overwritten if `saveT` were still standing.
+  it('does nothing once the debounce has already landed', () => {
+    const s = fakeStorage(null);
+    loadPanels(s, 1400, 900);
+    movePanel('queue', 300, 200);
+    vi.advanceTimersByTime(PREF_SAVE_MS);
+    s.setItem('mt.panels', 'sentinel');
+    flushPanels();
+    expect(s.dump()).toBe('sentinel');
   });
 });

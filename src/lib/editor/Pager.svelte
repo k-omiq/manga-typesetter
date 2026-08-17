@@ -38,13 +38,19 @@
   }
 </script>
 
+<!-- `data-tip` on every control, matching the zoom dock beside it: these are two
+     halves of one bottom dock and a tip on one but not the other reads as one of
+     them being broken. The glyphs are ‹ › and a bare number — nothing on them
+     says which page they move to, or that the number is a field at all. The
+     stylesheet already flips these tips upwards for `.pager`, because the dock
+     floats 16px off the window's floor and a tip below it falls off screen. -->
 <div class="pager">
-  <button onclick={prevPage} disabled={app.pageIndex === 0} aria-label="Previous page">‹</button>
+  <button onclick={prevPage} disabled={app.pageIndex === 0} aria-label="Previous page" data-tip="Previous page">‹</button>
   {#if editing}
     <input class="pnum" type="text" bind:value={draft} onblur={commit} onkeydown={onKey} use:focusInput />
   {:else}
-    <button class="pnum" onclick={begin}>{app.pages.length ? app.pageIndex + 1 : 0}</button>
+    <button class="pnum" onclick={begin} data-tip="Jump to page">{app.pages.length ? app.pageIndex + 1 : 0}</button>
   {/if}
   <span class="pof">/ {app.pages.length}</span>
-  <button onclick={nextPage} disabled={app.pageIndex >= app.pages.length - 1} aria-label="Next page">›</button>
+  <button onclick={nextPage} disabled={app.pageIndex >= app.pages.length - 1} aria-label="Next page" data-tip="Next page">›</button>
 </div>

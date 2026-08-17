@@ -10,7 +10,7 @@
 
   let menuEl = $state(null);
 
-  // Both detection items ask the sidecar for work, so both need it up and idle.
+  // Both detection items ask the engine for work, so both need it up and idle.
   // The functions themselves still refuse and toast when there is no raw image
   // to look at; this only keeps the menu from offering work that cannot start.
   const canDetect = $derived(sidecarReady() && !app.detecting);

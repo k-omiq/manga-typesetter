@@ -67,6 +67,22 @@ describe('the file on disk', () => {
   const mod = () => import('./history-file.svelte.js');
   const hist = () => import('./history.svelte.js');
   const disk = () => import('../fsx.js');
+  const store = () => import('../store.svelte.js');
+
+  // A read the test holds open. Everything the user can do while a chapter's
+  // history is still coming off disk happens in that window, and it is the only
+  // way to put an interleave under this module deterministically.
+  const heldRead = async () => {
+    const { fsx, files } = await disk();
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const spy = vi.spyOn(fsx, 'readTextFile').mockImplementation(async (p) => {
+      await gate;
+      if (!files.has(p)) throw new Error('ENOENT');
+      return files.get(p);
+    });
+    return { release: () => release(), restore: () => spy.mockRestore() };
+  };
 
   // Every test starts from a closed chapter, an empty stack and an empty disk —
   // the module keeps all three across a test file.
@@ -225,6 +241,216 @@ describe('the file on disk', () => {
     record(anEntry(8));
     await flushHistory();
     expect(undoCount(files, PATH2, '1')).toBe(1);
+  });
+
+  // A step is an edit as far as the file is concerned. The document's own
+  // autosave runs for the same press; a step that scheduled nothing here left
+  // chapter.json past the undo and history.json still before it, and a crash in
+  // that window brought the app back with a journal that no longer described
+  // the document it addressed.
+  it('writes the journal after an undo, with no page turn to prompt it', async () => {
+    const { __setDir } = await mod();
+    const { record, undo } = await hist();
+    const { loadProjectPages } = await store();
+    const { files } = await disk();
+    vi.useFakeTimers();
+    try {
+      loadProjectPages([
+        {
+          id: 1,
+          w: 800,
+          h: 1200,
+          lines: [],
+          boxes: [{ id: 'b1', lineN: null, text: 'one', x: 0, y: 0, w: 100, h: 40, style: null }],
+        },
+      ]);
+      __setDir(CH1);
+      record(anEntry(7));
+      await vi.advanceTimersByTimeAsync(800);
+      expect(undoCount(files, PATH, '1')).toBe(1);
+      expect(undo()).toBe(true);
+      await vi.advanceTimersByTimeAsync(800);
+      const saved = JSON.parse(files.get(PATH)).pages['1'];
+      // The entry moved to the redo side on disk, not just in memory.
+      expect(saved.undo).toHaveLength(0);
+      expect(saved.redo).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // `openChapter` starts the load and does not wait on it, so everything below
+  // happens while the disk is still answering. All of it is NEWER than what the
+  // disk has to say, and none of it may be overwritten by the read landing.
+  describe('a chapter that is still loading', () => {
+    const seed = async (pages) => {
+      const { files } = await disk();
+      files.set(PATH, JSON.stringify({ version: 1, pages }));
+    };
+
+    // The page the open was called for is not necessarily the page the user is
+    // on by the time the read comes back. Loaded blindly, page 1's stack landed
+    // in memory while page 2 was on screen — every press from then on rewinding
+    // a box the user could not see.
+    it('loads the page the user is on now, not the one it was called for', async () => {
+      await seed({ 1: { undo: [anEntry(1)], redo: [] }, 2: { undo: [anEntry(2)], redo: [] } });
+      const { openHistory, switchHistoryPage } = await mod();
+      const { history, peekStack } = await hist();
+      const read = await heldRead();
+      try {
+        const opening = openHistory(CH1, 1);
+        await switchHistoryPage(1, 2); // the reader turns the page mid-load
+        read.release();
+        await opening;
+        expect(history.pageId).toBe(2);
+        expect(peekStack().undo.map((e) => e.after.x)).toEqual([2]);
+      } finally {
+        read.restore();
+      }
+    });
+
+    // And an edit made in that window is the newest thing there is. It used to
+    // be thrown away by the load landing on top of it — an undo the user had
+    // already earned, gone, with nothing to say it had ever existed.
+    it('keeps an edit made while it was still loading, on top of what came off disk', async () => {
+      await seed({ 1: { undo: [anEntry(1)], redo: [] } });
+      const { openHistory } = await mod();
+      const { record, peekStack } = await hist();
+      const read = await heldRead();
+      try {
+        const opening = openHistory(CH1, 1);
+        record(anEntry(9)); // the reader edits the page while it loads
+        read.release();
+        await opening;
+        // Oldest first: the stored history underneath, this session's edit on
+        // top, and one press of undo takes the edit the user just made.
+        expect(peekStack().undo.map((e) => e.after.x)).toEqual([1, 9]);
+      } finally {
+        read.restore();
+      }
+    });
+
+    // The same page merged into the document rather than the live stack — an
+    // off-screen record filed while the read was in flight.
+    it('keeps an off-screen record made while it was still loading', async () => {
+      await seed({ 2: { undo: [anEntry(1)], redo: [] } });
+      const { openHistory, flushHistory } = await mod();
+      const { record } = await hist();
+      const { files } = await disk();
+      const read = await heldRead();
+      try {
+        const opening = openHistory(CH1, 1);
+        record({ ...anEntry(9), pageId: 2 });
+        read.release();
+        await opening;
+        await flushHistory();
+        expect(JSON.parse(files.get(PATH)).pages['2'].undo.map((e) => e.after.x)).toEqual([1, 9]);
+      } finally {
+        read.restore();
+      }
+    });
+
+    // And a load whose chapter has been closed and opened again underneath it
+    // has nothing left to say. The path is the same on both sides of that, which
+    // is why the guard cannot be a path.
+    it('drops what it read when the chapter was closed and reopened underneath it', async () => {
+      await seed({ 1: { undo: [anEntry(1)], redo: [] } });
+      const { openHistory, closeHistory, __setDir } = await mod();
+      const { record, peekStack } = await hist();
+      const read = await heldRead();
+      try {
+        const opening = openHistory(CH1, 1);
+        await closeHistory();
+        __setDir(CH1); // back into the same chapter — a new session, same path
+        record(anEntry(9));
+        read.release();
+        await opening;
+        expect(peekStack().undo.map((e) => e.after.x)).toEqual([9]);
+      } finally {
+        read.restore();
+      }
+    });
+  });
+
+  // The other half of the same identity problem. `closeChapter` fires the close
+  // and does not wait on it, and the reader's own back button puts them straight
+  // back into the chapter they just left: the close then resumed, found its own
+  // path still in place, and tore down the session that had landed underneath it
+  // — stack wiped and `dir` nulled, so nothing that session recorded ever
+  // reached disk again.
+  it('leaves a reopen of the same chapter alone while its close is still flushing', async () => {
+    const { __setDir, closeHistory, flushHistory } = await mod();
+    const { record, history } = await hist();
+    const { files } = await disk();
+    __setDir(CH1);
+    record(anEntry(1));
+    const closing = closeHistory(); // in flight, deliberately not awaited yet
+    __setDir(CH1); // the same chapter, opened again — see the note above
+    record(anEntry(2));
+    await closing;
+    // The new session still has its stack…
+    expect(history.canUndo).toBe(true);
+    // …and still reaches disk, with its own record and not the closed session's.
+    await flushHistory();
+    expect(JSON.parse(files.get(PATH)).pages['1'].undo.map((e) => e.after.x)).toEqual([2]);
+  });
+
+  // The desync this seam exists to prevent, end to end. Before it, an entry
+  // naming an off-screen page went onto the LIVE stack and then told this module
+  // that page was live — so the next write filed the page on screen's whole
+  // stack under the other page's key. Two pages' undo, gone, in one press of
+  // Apply.
+  it('files an entry naming an off-screen page onto that page, not the live one', async () => {
+    const { __setDir, flushHistory } = await mod();
+    const { record, history, peekStack } = await hist();
+    const { files } = await disk();
+    __setDir(CH1);
+    record(anEntry(1)); // page 1 is the live one, with one entry of its own
+    record({
+      t: 'bulk',
+      pageId: 2,
+      items: [{ boxId: 'b7', pageId: 2, before: { size: 10 }, after: { size: 30 } }],
+    });
+    // The live stack never saw it: `canUndo` is still page 1's own entry, and
+    // one press of undo is still one press.
+    expect(history.canUndo).toBe(true);
+    expect(peekStack().undo).toHaveLength(1);
+    expect(peekStack().undo[0].pageId).toBe(1);
+    await flushHistory();
+    const doc = JSON.parse(files.get(PATH));
+    expect(doc.pages['1'].undo).toHaveLength(1);
+    expect(doc.pages['2'].undo).toHaveLength(1);
+    expect(doc.pages['2'].undo[0].t).toBe('bulk');
+  });
+
+  // Everything the live stack does to a new entry, done to a stored one.
+  it('caps an off-screen stack and forfeits its redo like any other', async () => {
+    const { openHistory, flushHistory } = await mod();
+    const { record, MAX_STEPS } = await hist();
+    const { files } = await disk();
+    // Page 2 comes off disk with a redo branch and no undo — a page the user
+    // undid their way back through and then left.
+    files.set(PATH, JSON.stringify({ version: 1, pages: { 2: { undo: [], redo: [anEntry(1)] } } }));
+    await openHistory(CH1, 1); // page 1 is the live one
+    for (let i = 0; i < MAX_STEPS + 2; i++) {
+      record({ t: 'move', pageId: 2, boxId: 'b7', before: { x: i }, after: { x: i + 1 } });
+    }
+    await flushHistory();
+    const doc = JSON.parse(files.get(PATH));
+    expect(doc.pages['2'].undo).toHaveLength(MAX_STEPS);
+    // The oldest two fell off the bottom, not the newest two off the top.
+    expect(doc.pages['2'].undo[0].before.x).toBe(2);
+    expect(doc.pages['2'].redo).toEqual([]);
+  });
+
+  // A chapter this module is not keeping a document for has nothing to merge
+  // into — the entry stays where it has always been.
+  it('refuses an off-screen entry when no chapter is open', async () => {
+    const { __setDir } = await mod();
+    const { record, peekStack } = await hist();
+    __setDir(null);
+    record({ t: 'move', pageId: 2, boxId: 'b7', before: { x: 0 }, after: { x: 1 } });
+    expect(peekStack().undo).toHaveLength(1);
   });
 
   it('files the live page under its own key when the page turn does not say', async () => {

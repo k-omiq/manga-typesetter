@@ -1,7 +1,0 @@
-# Local dev virtualenv
-.venv/
-
-# PyInstaller build artifacts
-build-sidecar/
-dist-sidecar/
-*.spec

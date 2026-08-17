@@ -1,8 +1,7 @@
 name: CI
 
-# Lightweight gate: frontend build, Rust check/clippy, and a Python import +
-# TestClient smoke test. Deliberately skips the heavy ML model downloads and the
-# `external/` vendor tree — this proves the three surfaces build/import, not that
+# Lightweight gate: frontend build plus Rust check/clippy. Deliberately skips
+# the heavy ML model downloads — this proves the two surfaces build, not that
 # detection runs (that needs the model weights + a real desktop app; see
 # docs/REMAINING_WORK.md P1 #1).
 
@@ -64,26 +63,3 @@ jobs:
         run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: cargo clippy (deny warnings)
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-
-  python:
-    name: Python sidecar (import + TestClient)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: python
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install base sidecar deps (no ML stack, no external/ vendor tree)
-        run: |
-          python -m pip install --upgrade pip
-          # Base service deps only — the ML stack is heavy and lazily imported.
-          # httpx + pytest are the TestClient/runner deps.
-          pip install -r requirements.txt httpx pytest
-      - name: Import check
-        run: python -c "import sidecar.main; print('import sidecar.main OK')"
-      - name: Smoke tests (import, /health, token gate)
-        run: python -m pytest tests/ -q
