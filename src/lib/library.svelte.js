@@ -79,6 +79,12 @@ export async function withinHome(dir) {
       .replace(/\/+$/, '');
   const home = norm(await fsx.homeDir());
   const d = norm(dir);
+  const isWin = /^[a-zA-Z]:/.test(home) || /^[a-zA-Z]:/.test(d);
+  if (isWin) {
+    const h = home.toLowerCase();
+    const target = d.toLowerCase();
+    return target === h || target.startsWith(h + '/');
+  }
   return d === home || d.startsWith(home + '/');
 }
 

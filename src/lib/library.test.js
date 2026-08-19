@@ -342,7 +342,10 @@ describe('withinHome', () => {
     fsx.homeDir = async () => 'C:\\Users\\u';
     try {
       expect(await withinHome('C:\\Users\\u\\Documents\\Manga')).toBe(true);
+      expect(await withinHome('c:\\users\\u\\documents\\manga')).toBe(true);
+      expect(await withinHome('C:\\USERS\\U\\DOCUMENTS\\MANGA')).toBe(true);
       expect(await withinHome('C:\\Users\\u')).toBe(true);
+      expect(await withinHome('c:\\users\\u')).toBe(true);
       expect(await withinHome('C:\\Users\\u2\\Manga')).toBe(false);
       expect(await withinHome('D:\\Manga')).toBe(false);
     } finally {

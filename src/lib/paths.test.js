@@ -25,6 +25,14 @@ describe('slugify', () => {
   it('truncates to 60 characters', () => {
     expect(slugify('a'.repeat(100))).toHaveLength(60);
   });
+
+  it('suffixes DOS reserved device names', () => {
+    expect(slugify('CON')).toBe('con-x');
+    expect(slugify('aux')).toBe('aux-x');
+    expect(slugify('NUL')).toBe('nul-x');
+    expect(slugify('com1')).toBe('com1-x');
+    expect(slugify('lpt9')).toBe('lpt9-x');
+  });
 });
 
 describe('uniqueSlug', () => {

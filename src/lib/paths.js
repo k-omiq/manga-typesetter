@@ -11,7 +11,11 @@ export function slugify(name) {
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '');
-  return (s || 'untitled').slice(0, MAX_SLUG);
+  const slug = (s || 'untitled').slice(0, MAX_SLUG);
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(slug)) {
+    return `${slug}-x`;
+  }
+  return slug;
 }
 
 // Directory names must be unique within their parent. Identity lives in the

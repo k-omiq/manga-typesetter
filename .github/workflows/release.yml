@@ -71,7 +71,8 @@ jobs:
         # dropping the space in "Manga Typesetter" keeps update URLs unencoded-safe.
         run: |
           set -euo pipefail
-          VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          # node, not python3: the windows runner's git-bash has no reliable python3.
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
           OUT="out/${{ matrix.platform }}"
           PREFIX="MangaTypesetter_${VERSION}_${{ matrix.platform }}"

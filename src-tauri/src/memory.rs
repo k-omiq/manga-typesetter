@@ -234,7 +234,7 @@ mod imp {
     use super::MemoryReport;
     /// Memory attribution via responsible PID is macOS-only; unsupported on other platforms.
     pub fn report(_may_claim_session_webkit: bool) -> MemoryReport {
-        MemoryReport { supported: false, total: 0, processes: Vec::new(), incomplete: true }
+        MemoryReport { supported: false, total: 0, processes: Vec::new(), incomplete: false }
     }
 }
 

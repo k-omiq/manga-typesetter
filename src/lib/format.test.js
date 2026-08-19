@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { relativeTime, plural } from './format.js';
+import { relativeTime, plural, modKey } from './format.js';
 
 const NOW = Date.parse('2026-08-12T12:00:00.000Z');
 const at = (ms) => relativeTime(new Date(NOW - ms).toISOString(), NOW);
@@ -74,3 +74,11 @@ describe('relativeTime', () => {
     expect(relativeTime(NOW - 2 * HOUR, NOW)).toBe('2 hours ago');
   });
 });
+
+describe('modKey', () => {
+  it('returns a string for the modifier key symbol or prefix', () => {
+    const key = modKey();
+    expect(key === '⌘' || key === 'Ctrl+').toBe(true);
+  });
+});
+

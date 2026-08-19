@@ -40,3 +40,13 @@ export function relativeTime(when, now = Date.now()) {
   if (d < YEAR) return ago(Math.floor(d / MONTH), 'month');
   return ago(Math.floor(d / YEAR), 'year');
 }
+
+const isMac =
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPad|iPod/i.test(navigator.platform ?? navigator.userAgent ?? '');
+
+// Primary modifier key symbol or prefix: '⌘' on macOS, 'Ctrl+' elsewhere.
+export function modKey() {
+  return isMac ? '⌘' : 'Ctrl+';
+}
+

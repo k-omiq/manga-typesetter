@@ -270,7 +270,10 @@ async fn download(url: &str, path: &Path) -> Result<(), String> {
 
 /// `~/.mangatypesetter/models`, the one directory this module owns.
 pub fn default_models_dir() -> PathBuf {
+    // Windows sets USERPROFILE, not HOME; falling through to "." would drop
+    // model downloads into the install directory, which is not writable.
     let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     home.join(MODELS_SUFFIX[0]).join(MODELS_SUFFIX[1])

@@ -352,7 +352,7 @@
           when you open a long chapter.
         </p>
 
-        {#if mem?.incomplete}
+        {#if mem?.supported && mem?.incomplete}
           <div class="qhint">One or more processes went away while being measured — the total is short.</div>
         {/if}
 

@@ -31,7 +31,16 @@
         { "path": "$HOME/.ssh/**" },
         { "path": "$HOME/.aws/**" },
         { "path": "$HOME/.gnupg/**" },
-        { "path": "$HOME/.config/gh/**" }
+        { "path": "$HOME/.config/gh/**" },
+        { "path": "$HOME/.kube/**" },
+        { "path": "$HOME/.azure/**" },
+        { "path": "$HOME/.config/gcloud/**" },
+        { "path": "$HOME/.netrc" },
+        { "path": "$HOME/.npmrc" },
+        { "path": "$HOME/.zsh_history" },
+        { "path": "$HOME/.bash_history" },
+        { "path": "$HOME/.tauri/**" },
+        { "path": "$HOME/Library/Keychains/**" }
       ]
     }
   ]

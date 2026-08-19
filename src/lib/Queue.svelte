@@ -35,6 +35,7 @@
     caretAfter,
     isAtomicInput,
   } from './editor/field-undo.svelte.js';
+  import { modKey } from './format.js';
 
   const p = $derived(page());
 
@@ -107,7 +108,7 @@
   // Toggle tag on line and restyle attached boxes.
   function toggle(line, name) {
     const { restyled } = toggleTagOnLine(line.n, name, p);
-    if (restyled) toast(`Restyled ${restyled} box${restyled > 1 ? 'es' : ''} on this line · ⌘Z`);
+    if (restyled) toast(`Restyled ${restyled} box${restyled > 1 ? 'es' : ''} on this line · ${modKey()}Z`);
   }
 
   function openCreate(n) {

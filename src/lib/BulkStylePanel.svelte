@@ -10,6 +10,7 @@
     bulkTicked,
   } from './store.svelte.js';
   import { tagsInUse, boxesWithTag } from './tags.svelte.js';
+  import { modKey } from './format.js';
 
   // app.bulk.style is the editable template; null when closed.
   const s = $derived(app.bulk.style);
@@ -302,7 +303,7 @@
           {#if tagHitsAway}
 
             <br />{tagHitsAway} of them {tagHitsAway === 1 ? 'is' : 'are'} on other pages. Undo is per page:
-            {tagPages} pages, one ⌘Z each, on the page itself.
+            {tagPages} pages, one {modKey()}Z each, on the page itself.
           {/if}
         {/if}
         {#if freeCount}
