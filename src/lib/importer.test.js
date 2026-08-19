@@ -5,7 +5,7 @@ import { lineTags } from './tags.svelte.js';
 // Only the tag half of the importer is covered here. The shape-tolerance above
 // it (bare strings, `{text}`, `natural`/`stylised`, the four ways a file can
 // wrap its pages) is exercised end-to-end through `applyTranslations` in
-// library.test.js; what is new — and what a re-import can silently lose — is
+// library.test.js; what is new - and what a re-import can silently lose - is
 // what a file says about tags.
 const firstLine = (lines) => normalizeTranslations({ texts: lines })[0].lines[0];
 

@@ -1,11 +1,5 @@
 <script>
-  // Where a chapter's inputs are managed after creation: which raw each page
-  // is, which cleaned image it typesets on, and the lines a translations file
-  // supplies.
-  //
-  // Everything here writes through library.svelte.js, which refuses outright
-  // while the chapter is open in the editor — editing a chapter's files
-  // underneath the open document is how slice 1 lost data twice.
+  // Chapter source image and translation management sheet.
   import { untrack } from 'svelte';
   import { convertFileSrc } from '@tauri-apps/api/core';
   import {
@@ -22,8 +16,7 @@
   import { plural } from '../format.js';
   import { joinPath } from '../paths.js';
 
-  // `busy` is bindable so the app-level Escape handler can refuse to dismiss
-  // the sheet mid-copy, matching the overlay guard below.
+  // In-flight operations block dismissal.
   let { open = $bindable(), busy = $bindable(false), projectId = null, chapterId = null } = $props();
 
   let sources = $state(null); // { rawsDir, cleanedDir, pages }
@@ -36,12 +29,7 @@
   const cleanedCount = $derived(pages.filter((pg) => pg.cleaned).length);
   const missingCount = $derived(pages.filter((pg) => pg.missing).length);
 
-  // Reload whenever the sheet is opened on a chapter, and drop what it read on
-  // the way out so a later open cannot render the previous chapter's pages.
-  //
-  // Untracked, like the new-chapter dialog's reset: readChapterSources reads the
-  // catalogue, so tracking it would let any catalogue write re-run this and
-  // silently discard a bulk selection the user had staged.
+  // Reset and reload source lists on open.
   $effect(() => {
     if (!open || !projectId || !chapterId) {
       sources = null;
@@ -52,12 +40,7 @@
     untrack(() => reload(pid, cid));
   });
 
-  // Every read takes a ticket, the way scanLibrary does. readChapterSources
-  // costs one existence check per cleaned page, so a long chapter's read
-  // routinely lands after a short one started later — and page ids are
-  // per-chapter integers, so painting chapter A's rows under chapter B's id
-  // would aim Remove at B's page of the same number. Only the newest read may
-  // put its result anywhere.
+  // Ignore superseded asynchronous reads.
   let readSeq = 0;
 
   async function read(pid, cid) {
@@ -75,21 +58,17 @@
     try {
       await read(pid, cid);
     } catch (e) {
-      // A superseded read's failure describes a chapter that is no longer on
-      // screen, and reporting it would blank one that read perfectly well.
+
       if (pid !== projectId || cid !== chapterId) return;
       sources = null;
       error = `Could not read this chapter — ${e?.message ?? e}`;
     }
   }
 
-  // Every mutation runs the same way: block the sheet, do it, say what happened,
-  // then re-read from disk so what is on screen is what is in the record. The
-  // re-read is aimed at the chapter the mutation was aimed at, not at whatever
-  // the props say by the time it lands.
+  // Run mutation and reload chapter sources.
   async function run(pid, cid, fn) {
     if (busy) {
-      // Never drop a requested action in silence — the user picked a file for it.
+
       toast('Still working on the last change — try again in a moment');
       return;
     }
@@ -104,17 +83,14 @@
       try {
         await read(pid, cid);
       } catch {
-        /* the error above already says what went wrong */
+
       }
-      // Released last, so nothing else can start against the state this one is
-      // still re-reading.
+
       busy = false;
     }
   }
 
-  // The picker is Tauri-only, so a click outside the desktop app would otherwise
-  // be a silent unhandled rejection. `label` names the step that failed —
-  // an unreadable translations file must not be reported as a picker failure.
+  // Open native file picker (Tauri only).
   async function picking(label, fn) {
     try {
       await fn();
@@ -130,9 +106,7 @@
       if (picked) pendingBulk = [...picked];
     });
 
-  // Positional, exactly as at creation: the Nth picked file pairs with the Nth
-  // page. Stated in full before the user commits, because a mismatched count is
-  // the one thing this rule cannot survive silently.
+  // Positional pairing of picked files with pages.
   const bulkNotes = $derived.by(() => {
     if (!pendingBulk) return [];
     const n = Math.min(pendingBulk.length, pages.length);
@@ -167,8 +141,7 @@
     const cid = chapterId;
     await run(pid, cid, async () => {
       const { replaced, ignored } = await replaceCleanedPages(pid, cid, files);
-      // Cleared only once it worked. A failed apply keeps the selection rather
-      // than sending the user back to re-pick two hundred files.
+
       pendingBulk = null;
       toast(
         `Set the cleaned image on ${plural(replaced, 'page')}${ignored ? ` · ${ignored} ignored` : ''}`,
@@ -190,10 +163,7 @@
     });
   }
 
-  // Which chapter this is aimed at is captured BEFORE the picker's await, along
-  // with the page it names. Both come from the sheet as it was when the user
-  // clicked; resolving them afterwards would aim the write at whatever the
-  // sheet has become.
+  // Capture target chapter before file picker await.
   const onAddTranslations = () => {
     const pid = projectId;
     const cid = chapterId;
@@ -206,9 +176,7 @@
         const notes = [];
         if (kept) notes.push(`${plural(kept, 'later page')} left unchanged`);
         if (ignored) notes.push(`${plural(ignored, 'page')} past the end ignored`);
-        // A placed box follows its line by number. If the new file numbers its
-        // lines differently, those boxes have nothing to say any more — say so
-        // rather than let the user find blank boxes later.
+        // Warn if new translation renumbers placed lines.
         if (orphaned) notes.push(`${plural(orphaned, 'placed box')} no longer matches a line`);
         toast(
           `Applied ${plural(lines, 'line')} to ${plural(covered, 'page')}${notes.length ? ' — ' + notes.join(' · ') : ''}`,
@@ -243,8 +211,7 @@
 
   const pageNumber = (pg) => pages.indexOf(pg) + 1;
 
-  // The asset protocol serves the library directly, so a 200-page chapter costs
-  // no memory here — the same route ProjectCard's cover already takes.
+  // Load thumbnails via asset protocol.
   const srcFor = (pg) => {
     const dir = pg.cleaned && !pg.missing ? sources.cleanedDir : sources.rawsDir;
     const file = pg.cleaned && !pg.missing ? pg.cleaned : pg.file;

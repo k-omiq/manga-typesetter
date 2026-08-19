@@ -3,7 +3,7 @@ import { planStripCuts, forbiddenBands, boxSpanY, CUT_PAD } from './strip-cuts.j
 
 // One page tall enough to hold several slices, so strip coordinates and page
 // coordinates are the same numbers here and the arithmetic can be read off by
-// eye. Pages are only a source of offsets for this module — what it reasons
+// eye. Pages are only a source of offsets for this module - what it reasons
 // about is boxes and the height of the column.
 const page = (h, boxes = []) => ({ id: 1, w: 800, h, boxes });
 const box = (y, h, extra = {}) => ({ id: 1, x: 100, y, w: 200, h, style: { rotation: 0 }, ...extra });
@@ -70,7 +70,7 @@ describe('planStripCuts', () => {
   });
 
   it('moves a cut DOWN when moving up would leave a runt slice', () => {
-    // The band starts 100px below the previous cut — a tenth of the target — so
+    // The band starts 100px below the previous cut - a tenth of the target - so
     // cutting there would ship a sliver of a file. Below the box instead.
     const pages = [page(3000, [box(150, 800)])];
     const { cuts, warnings } = planStripCuts(pages, 1000, 50);

@@ -1,25 +1,8 @@
-//! Grouping detected text lines into text blocks.
-//!
-//! The two detector heads disagree by construction: the YOLO head proposes
-//! *blocks* (a speech bubble's worth of text) and DBNet proposes *lines*. This
-//! module reconciles them — assigns each line to the block it mostly sits in,
-//! rescues lines that landed in no block at all, invents a line for a block that
-//! caught none, splits blocks whose lines turn out to be two columns of dialogue
-//! that happened to share a bubble, and finally sorts everything into Japanese
-//! reading order.
-//!
-//! Port of `group_output` and its helpers in
-//! `comic_text_detector/utils/textblock.py`. The heuristics are not defensible
-//! from first principles — the split rule compares line gaps against twice the
-//! font size, the merge rule wants a 30-degree cosine — but they are what the
-//! Python pipeline this replaces produced, and every one of them can change how
-//! many blocks a page has.
+//! Groups detected DBNet text lines into YOLO text blocks and sorts them into reading order.
 
 use image::GrayImage;
 
-/// The script the YOLO head assigned to a block. Its class 2 exists in the
-/// original's list but not in the exported head, so `Unknown` here comes only
-/// from lines rescued outside any block.
+/// Script assigned to a text block by the YOLO detector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
     Eng,
@@ -47,12 +30,10 @@ impl Language {
     }
 }
 
-/// A line quad, in page coordinates, ordered top-left → top-right →
-/// bottom-right → bottom-left *of the line's own frame* (so a vertical line's
-/// "top-left" is its top-right on the page).
+/// A line quad in page coordinates, ordered [TL, TR, BR, BL] in the line's local frame.
 pub type Quad = [[i32; 2]; 4];
 
-/// A block of text: one bubble, one caption, one sound effect.
+/// Group of lines representing a speech bubble, caption, or sound effect.
 #[derive(Debug, Clone)]
 pub struct TextBlock {
     pub xyxy: [i32; 4],
@@ -61,11 +42,9 @@ pub struct TextBlock {
     pub vertical: bool,
     pub font_size: f64,
     pub angle: i32,
-    /// Perpendicular distance from each line's centre to the reading origin —
-    /// the page's top-right for vertical text, top-left otherwise. This is what
-    /// orders lines within a block.
+    /// Perpendicular distance from line center to reading origin (TR for vertical, TL otherwise).
     pub distance: Vec<f64>,
-    /// The block's primary direction, summed over its lines.
+    /// Primary writing direction vector summed across lines.
     pub vec: (f64, f64),
     pub norm: f64,
     merged: bool,
@@ -89,9 +68,7 @@ impl TextBlock {
         }
     }
 
-    /// Fit `xyxy` to the block's lines. `with_bbox` keeps the YOLO proposal in
-    /// the union; without it the box is exactly the lines' extent, which is what
-    /// a split sub-block wants since it no longer owns the whole proposal.
+    /// Fits `xyxy` to the block's lines, optionally unioning with original proposal.
     fn adjust_bbox(&mut self, with_bbox: bool) {
         if self.lines.is_empty() {
             return;
@@ -131,8 +108,7 @@ impl TextBlock {
     }
 }
 
-/// numpy's half-to-even rounding, used wherever the original rounds a float to a
-/// pixel count.
+/// Half-to-even rounding matching Python/NumPy.
 pub fn round_half_even(v: f64) -> f64 {
     let r = v.round();
     if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
@@ -142,10 +118,7 @@ pub fn round_half_even(v: f64) -> f64 {
     }
 }
 
-/// Axis-aligned intersection area, or -1 when the boxes are disjoint.
-///
-/// Named `union_area` in the original, which it is not; the name is a bug that
-/// never mattered because only the ratio against a line's own area is used.
+/// Axis-aligned intersection area between two boxes, or -1 when disjoint.
 fn intersect_area(a: [i32; 4], b: [i32; 4]) -> f64 {
     let x1 = a[0].max(b[0]);
     let y1 = a[1].max(b[1]);
@@ -168,12 +141,7 @@ fn quad_bbox(q: &Quad) -> [i32; 4] {
     ]
 }
 
-/// Mean of a mask crop, with numpy's slice semantics — out-of-range ends clamp,
-/// negative ends count from the far edge, and an empty crop is NaN.
-///
-/// The NaN is not a curiosity: `NaN < 0.1` is false, so a block whose box is
-/// degenerate or entirely off-page survives the density gate rather than being
-/// dropped. The original relies on that, whether or not it meant to.
+/// Computes average intensity in a mask crop with clamped boundaries (returns NaN if empty).
 fn crop_mean(mask: &GrayImage, y1: i32, y2: i32, x1: i32, x2: i32) -> f64 {
     let (w, h) = (mask.width() as i32, mask.height() as i32);
     let norm = |v: i32, len: i32| (if v < 0 { len + v } else { v }).clamp(0, len);
@@ -191,11 +159,7 @@ fn crop_mean(mask: &GrayImage, y1: i32, y2: i32, x1: i32, x2: i32) -> f64 {
     total as f64 / ((xb - xa) as f64 * (yb - ya) as f64)
 }
 
-/// Do two convex quads share any point, boundary included?
-///
-/// Separating-axis test rather than a polygon library: the inputs are always
-/// convex (rectangles, or minimum-area quads), and shapely's `intersects` counts
-/// a shared edge as an intersection, which a strict comparison here reproduces.
+/// Separating-axis intersection test for two convex quads.
 fn quads_intersect(a: &Quad, b: &Quad) -> bool {
     let sep = |p: &Quad, q: &Quad| -> bool {
         for i in 0..4 {
@@ -226,14 +190,7 @@ fn quads_intersect(a: &Quad, b: &Quad) -> bool {
     !sep(a, b) && !sep(b, a)
 }
 
-/// Derive a block's orientation, font size, angle and per-line distances from
-/// the geometry of its lines.
-///
-/// Everything comes out of two vectors per line: the one joining the midpoints
-/// of its top and bottom edges, and the one joining the midpoints of its left
-/// and right edges. Summed over the block, whichever is longer is the writing
-/// direction — with a factor of two demanded for non-Japanese text, because a
-/// single short English line is easily taller than it is wide.
+/// Computes block orientation, font size, angle, and line distances from line geometry.
 fn examine_textblk(blk: &mut TextBlock, im_w: i32, sort: bool) {
     let n = blk.lines.len();
     if n == 0 {
@@ -267,8 +224,7 @@ fn examine_textblk(blk: &mut TextBlock, im_w: i32, sort: bool) {
         norm_v > norm_h * 2.0
     };
 
-    // Vertical Japanese is read right to left, so its origin is the page's
-    // top-right corner; horizontal text reads from the top-left.
+    // Vertical Japanese text reads RTL from top-right; horizontal text reads from top-left.
     let (primary, primary_norm, origin, font_size) = if vertical {
         (v, norm_v, (im_w as f64, 0.0), round_half_even(norm_h / n as f64))
     } else {
@@ -276,34 +232,7 @@ fn examine_textblk(blk: &mut TextBlock, im_w: i32, sort: bool) {
     };
 
     let rotation_angle = ((primary.1.atan2(primary.0)) / std::f64::consts::PI * 180.0).trunc() as i32;
-    // The perpendicular distance from the reading origin to each line centre:
-    // `|sin(angle between the line's offset and the writing direction)| * |offset|`.
-    //
-    // Two inputs to that `acos` are outside its domain, and NumPy answers both
-    // with a warning and a NaN — `np.arccos` of anything above 1 is NaN, and a
-    // line centred exactly on the origin makes the quotient `0.0 / 0.0`. The
-    // Python inherits those NaNs; this does not, because they are strictly
-    // worse here than the value they replace. A NaN in `distance` spreads:
-    // `sort_lines` and `merge_textlines` order by it through `total_cmp`, which
-    // sorts NaN above every real number rather than panicking, and
-    // `try_merge_textline`'s `distance > 2.0 * fntsz_avg` is false for NaN, so
-    // a poisoned block silently merges with anything and lands at the end of
-    // the reading order.
-    //
-    // Both out-of-domain cases have the same limit, and it is zero:
-    //
-    //   * a quotient a hair over 1 is a line collinear with the writing
-    //     direction, whose true angle is 0 and whose perpendicular distance is
-    //     therefore `sin(0) * len == 0`;
-    //   * a zero `len` is a line sitting on the origin, at distance 0 from it
-    //     whatever the angle;
-    //   * a zero `primary_norm` is a block with no writing direction at all, so
-    //     there is no axis to be perpendicular to and 0 is the only answer that
-    //     does not invent one.
-    //
-    // Clamping and guarding therefore produces the number the formula is
-    // reaching for in exactly the cases where the floating-point version of it
-    // gives up.
+    // Perpendicular distance clamped to [-1.0, 1.0] before acos to avoid NaN.
     let mut distance = Vec::with_capacity(n);
     for c in &centers {
         let d = (c.0 - origin.0, c.1 - origin.1);
@@ -334,19 +263,13 @@ fn examine_textblk(blk: &mut TextBlock, im_w: i32, sort: bool) {
     }
 }
 
-/// Break a block whose lines are too far apart, or too far out of alignment, to
-/// belong to the same run of text.
-///
-/// Returns whether it split, and the resulting sub-blocks.
+/// Splits a block whose lines have excessive gaps or misalignment.
 fn split_textblk(blk: &TextBlock) -> (bool, Vec<TextBlock>) {
     let font_size = blk.font_size;
     let distance = blk.distance.clone();
     let l0 = blk.lines[0];
 
-    // Re-sorted by distance from the first line's first corner. Note that
-    // `distance` is *not* re-sorted with it: the original indexes the
-    // distance-sorted array with positions from this differently sorted list.
-    // Reproduced deliberately — on well-behaved blocks the two orders coincide.
+    // Re-sorted by distance from the first line's first corner.
     let mut lines = blk.lines.clone();
     let key = |l: &Quad| {
         ((l[0][0] - l0[0][0]) as f64).hypot((l[0][1] - l0[0][1]) as f64)
@@ -458,9 +381,7 @@ fn merge_textlines(mut blks: Vec<TextBlock>) -> Vec<TextBlock> {
     merged_list
 }
 
-/// Order blocks the way a reader would take them: coarse 4x3 grid first, then
-/// position within the cell, with the x axis mirrored when the page is mostly
-/// Japanese because Japanese pages read right to left.
+/// Orders blocks into natural reading sequence using a 4x3 grid.
 fn sort_textblk_list(blks: &mut [TextBlock], im_w: i32, im_h: i32) {
     if blks.is_empty() {
         return;
@@ -468,8 +389,7 @@ fn sort_textblk_list(blks: &mut [TextBlock], im_w: i32, im_h: i32) {
     let num_ja = blks.iter().filter(|b| b.language == Language::Ja).count();
     let flip_lr = num_ja as f64 > blks.len() as f64 / 2.0;
     let im_oriw = im_w as f64;
-    // A landscape scan is a two-page spread; halving the width makes the grid
-    // per-page, and the correction below pushes the second page after the first.
+    // For two-page spreads (landscape), halve width to compute per-page grid.
     let w = if im_w > im_h { im_w as f64 / 2.0 } else { im_w as f64 };
     let h = im_h as f64;
     let (ngy, ngx) = (4.0f64, 3.0f64);
@@ -492,12 +412,7 @@ fn sort_textblk_list(blks: &mut [TextBlock], im_w: i32, im_h: i32) {
     blks.sort_by(|a, b| a.weight.total_cmp(&b.weight));
 }
 
-/// Reconcile YOLO block proposals with DBNet line quads.
-///
-/// `blks` is `(xyxy, class)` per proposal, in the detector's own confidence
-/// order. `lines` is every surviving line quad. `mask` is the page-sized text
-/// segmentation, used only as a density gate: a proposal or a stray line whose
-/// box holds almost no text pixels is a false positive and is dropped.
+/// Reconciles YOLO block proposals with DBNet line quads and sorts them.
 pub fn group_output(
     blks: &[([i32; 4], usize)],
     lines: &[Quad],
@@ -508,11 +423,6 @@ pub fn group_output(
     const BBOX_SCORE_THRESH: f64 = 0.4;
     const MASK_SCORE_THRESH: f64 = 0.1;
 
-    // A page with no width or height has no blocks on it, and saying so here is
-    // the only place it can be said cheaply. Left to run, the English padding
-    // in step 4 reaches `clamp(0.0, (im_w - 1) as f64)` with `im_w == 0` — that
-    // is `clamp(0.0, -1.0)`, which is not a clamp but a panic, taking the whole
-    // detect down from inside a blocking task.
     if im_w <= 0 || im_h <= 0 {
         return Vec::new();
     }
@@ -693,9 +603,7 @@ mod tests {
         assert!(blk.distance[0].is_finite(), "{:?}", blk.distance);
         assert_eq!(blk.distance[0], 0.0);
 
-        // Centred on the writing axis itself, so the quotient is 1 — and only
-        // ever 1 up to float error, where a hair over is outside `acos`'s
-        // domain. The answer is zero perpendicular distance either way.
+        // Centred on writing axis gives 0 perpendicular distance without NaN.
         let mut blk = TextBlock::new([0, -10, 300, 10], Language::Eng);
         blk.lines.push([[0, -10], [300, -10], [300, 10], [0, 10]]);
         examine_textblk(&mut blk, 800, false);
@@ -711,9 +619,7 @@ mod tests {
 
     #[test]
     fn a_page_with_no_area_yields_no_blocks_instead_of_panicking() {
-        // Step 4's English padding clamps to `(im_w - 1) as f64`, and
-        // `clamp(0.0, -1.0)` is a panic rather than a clamp — inside a blocking
-        // task, so it takes the detect down with it.
+        // Zero dimensions must not panic in padding clamp.
         let blks = [([0, 0, 10, 10], 0usize)];
         let lines = [[[0, 0], [10, 0], [10, 5], [0, 5]]];
         assert!(group_output(&blks, &lines, 0, 600, &mask_full(1, 600)).is_empty());
@@ -777,8 +683,7 @@ mod tests {
 
     #[test]
     fn the_block_box_covers_both_its_lines_and_its_proposal() {
-        // A line poking out of the proposal must widen the box, not be clipped
-        // to it — downstream crops the box, and a clipped box loses glyphs.
+        // Block box expands to enclose lines extending outside proposal.
         let blks = [([100, 100, 200, 300], 1usize)];
         let lines = [vline(120, 90, 30, 260)];
         let out = group_output(&blks, &lines, 800, 600, &mask_full(800, 600));

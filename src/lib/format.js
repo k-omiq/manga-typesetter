@@ -16,13 +16,13 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
 // Calendar-inexact on purpose. This is a glance-value under a project name, not
-// an accounting figure — "3 months ago" only has to be true enough to orient.
+// an accounting figure - "3 months ago" only has to be true enough to orient.
 const MONTH = 30 * DAY;
 const YEAR = 365 * DAY;
 
 const ago = (n, unit) => `${plural(n, unit)} ago`;
 
-// Returns '' for anything it cannot read — a missing or malformed timestamp is
+// Returns '' for anything it cannot read - a missing or malformed timestamp is
 // a blank column, never the string "Invalid Date" or "NaN days ago".
 export function relativeTime(when, now = Date.now()) {
   if (when == null || when === '') return '';

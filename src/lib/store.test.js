@@ -256,8 +256,8 @@ describe('the page switch hook', () => {
     setPageSwitchHook((from, to) => seen.push([from, to]));
     try {
       gotoPage(1);
-      gotoPage(1); // already there — nothing to hand over
-      gotoPage(9); // out of range — refused before anything moves
+      gotoPage(1); // already there - nothing to hand over
+      gotoPage(9); // out of range - refused before anything moves
       gotoPage(0);
       expect(seen).toEqual([
         [1, 2],
@@ -269,7 +269,7 @@ describe('the page switch hook', () => {
   });
 
   // An entry still inside a settle window belongs to the page being left, and
-  // the live stack is the only place it can be pushed — `recordEdit` has no
+  // the live stack is the only place it can be pushed - `recordEdit` has no
   // page awareness of its own. A settle that ran a step later would land on the
   // page being arrived at, and the next write would file that page's entries
   // under this one's key.
@@ -289,7 +289,7 @@ describe('the page switch hook', () => {
 // One slot each is fine right up until a second listener wants the same seam:
 // the second registration displaced the first silently, so a panel that
 // coalesces its edits would have taken the Inspector's settle away and neither
-// of them would have said a word — the Inspector's edits would simply have
+// of them would have said a word - the Inspector's edits would simply have
 // stopped being recorded. The page-switch seam stands in for all four; they are
 // one implementation.
 describe('the hook seams take more than one subscriber', () => {
@@ -347,7 +347,7 @@ describe('the hook seams take more than one subscriber', () => {
     }
   });
 
-  // A component's teardown can run twice — a release that removed "one entry"
+  // A component's teardown can run twice - a release that removed "one entry"
   // each time would eat a subscriber that had nothing to do with it.
   it('does nothing on a second release', () => {
     loadProjectPages(twoPages());
@@ -368,7 +368,7 @@ describe('the hook seams take more than one subscriber', () => {
   // registration in src/ holds its unsubscribe and calls that instead. Kept
   // because the suites lean on it to stop a hook registered for one case leaking
   // into the next, and pinned here because the behaviour is a hazard worth
-  // knowing about — `setSaver(null)` unhooks every autosave in the app.
+  // knowing about - `setSaver(null)` unhooks every autosave in the app.
   it('clears the seam outright when handed something that is not a function', () => {
     loadProjectPages(twoPages());
     const seen = [];
@@ -398,7 +398,7 @@ describe('the hook seams take more than one subscriber', () => {
 });
 
 // Pre-existing: the page turn ran `clearPending`, which threw the in-flight
-// gesture away rather than settling it — so the record standing for what the
+// gesture away rather than settling it - so the record standing for what the
 // user had just typed was never written, and turning the page mid-edit cost them
 // an undo step. The ordering is the load-bearing half: the record has to be
 // pushed while the page being left still owns the live stack, a step ahead of
@@ -446,7 +446,7 @@ describe('a page turn ends the inline edit it interrupts', () => {
 
   // Nothing is left pending on the page behind: a second turn must not write the
   // same entry again, and the box must not still look like a gesture in progress
-  // — that is what used to suppress the record of its own deletion.
+  // - that is what used to suppress the record of its own deletion.
   it('leaves nothing behind to settle a second time', () => {
     loadProjectPages(twoPages());
     const log = [];
@@ -466,7 +466,7 @@ describe('a page turn ends the inline edit it interrupts', () => {
 });
 
 // `settleText` used to clear the before-text on the way in, which made a second
-// settle record nothing — by forgetting rather than by having nothing left to
+// settle record nothing - by forgetting rather than by having nothing left to
 // say. Any caller that settled while the session continued then disabled
 // recording for the rest of it, because `endEdit`'s guard is
 // `before !== undefined`. The live path was a failed save on the way out of the
@@ -518,7 +518,7 @@ describe('a settle in the middle of a live edit session', () => {
     }
   });
 
-  // Three settles, three runs of typing, three entries — each one starting where
+  // Three settles, three runs of typing, three entries - each one starting where
   // the last left off, with no gap and no overlap.
   it('leaves no gap between one settled run and the next', () => {
     const log = [];
@@ -587,7 +587,7 @@ describe('a settle in the middle of a live edit session', () => {
 // runs, so a writer that quietly went back to a hard-coded 200 passes. Nothing
 // short of reading the source can tell those apart. What is actually pinned is
 // that the two tiers stay ordered, and that each writer fires on the number its
-// tier holds today — so changing that number cannot silently leave one writer
+// tier holds today - so changing that number cannot silently leave one writer
 // behind on the old one.
 describe('the persistence intervals', () => {
   it('keeps a preference well ahead of a document write', () => {
@@ -667,7 +667,7 @@ describe('the persistence intervals', () => {
 });
 
 // The read itself runs once at module load, in an environment with no
-// `localStorage` at all — so the tests take the vetting the read delegates to,
+// `localStorage` at all - so the tests take the vetting the read delegates to,
 // which is where anything can actually be wrong.
 describe('sidebar geometry persistence', () => {
   it('clamps a width to the range the rail can drag to', () => {
@@ -701,7 +701,7 @@ describe('sidebar geometry persistence', () => {
     expect(sidebarFromJSON(null)).toEqual({});
   });
 
-  // Debounced now, so the write happens on the timer rather than in the call —
+  // Debounced now, so the write happens on the timer rather than in the call -
   // the environment with no storage at all has to survive both halves.
   it('saves without a storage to save to', () => {
     vi.useFakeTimers();
@@ -761,8 +761,8 @@ describe('sidebar geometry persistence', () => {
 
 // There is no manual save in this app, so the indicator is the user's only
 // standing signal that their work is not reaching the disk. The debounce is not
-// the risky path: `flushSave` is, because it runs on the way out — leaving the
-// editor, quitting, opening another chapter — and it cancels the debounce as it
+// the risky path: `flushSave` is, because it runs on the way out - leaving the
+// editor, quitting, opening another chapter - and it cancels the debounce as it
 // goes, so a rejection here leaves nothing scheduled to raise the flag later.
 describe('the save indicator on the flush path', () => {
   beforeEach(() => {
@@ -796,7 +796,7 @@ describe('the save indicator on the flush path', () => {
     expect(app.saveFailed).toBe(false);
   });
 
-  // No chapter open is not a failed save — there was nothing to write.
+  // No chapter open is not a failed save - there was nothing to write.
   it('does not raise the failed state when there is nothing to flush', async () => {
     setSaver(() => Promise.reject(new Error('never called')));
     app.chapterRef = null;
@@ -938,7 +938,7 @@ describe('the bulk edit mask', () => {
   // the style's own leaves is what makes "every Inspector text option" a fact
   // rather than a claim: a field added to `defaultStyle` and forgotten here
   // fails this. Geometry cannot appear because x/y/w/h live on the box, not the
-  // style — which is also why they stay the Inspector's.
+  // style - which is also why they stay the Inspector's.
   it('covers every leaf of the style, and nothing that is not one', () => {
     const leaves = Object.entries(defaultStyle()).flatMap(([k, v]) =>
       v && typeof v === 'object' ? Object.keys(v).map((f) => `${k}.${f}`) : [k],
@@ -1096,7 +1096,7 @@ describe('the bulk edit mask', () => {
 
 // The tag-driven half: one press of Enter restyles every box carrying a tag,
 // without the user clicking one of them. Scope is the array of pages handed
-// over and nothing else — there is no scope enum anywhere in this path.
+// over and nothing else - there is no scope enum anywhere in this path.
 describe('a tag-scoped bulk edit', () => {
   const styled = (id, lineN) => ({ id, lineN, text: null, x: 0, y: 0, w: 10, h: 10 });
   const chapter = () => [
@@ -1155,7 +1155,7 @@ describe('a tag-scoped bulk edit', () => {
   // One entry per page, and no entry naming boxes on a page other than its own.
   // Undo is per page: a single entry filed against the page on screen would
   // rewind boxes on pages keeping stacks of their own, whose before/after still
-  // described the world before this apply — their next undo would then restore a
+  // described the world before this apply - their next undo would then restore a
   // style they had not been in since. So a chapter-wide apply is one press of
   // undo per page, taken on that page.
   it('records one entry per page, not one per box and not one for the chapter', () => {
@@ -1196,7 +1196,7 @@ describe('a tag-scoped bulk edit', () => {
 
   // Reviewer-verified drift: the merge into `lastStyle` sat outside the guard,
   // so an apply that matched nothing still moved the style every later placed
-  // box inherits — to a value the user could not account for, because it had
+  // box inherits - to a value the user could not account for, because it had
   // never been applied to anything they could see.
   it('leaves the inherited style alone when the tag reached no box', () => {
     setBulkProp('roughen.amount', true);
@@ -1272,7 +1272,7 @@ describe('applying a tag to a line whose box is already placed', () => {
   const sfx = (extra = {}) => [
     { name: 'sfx', font: 'Bangers', outline: '#ff0000', outlineWidth: 6, ...extra },
   ];
-  // The box this call placed, not the line's first — a line can end up with two.
+  // The box this call placed, not the line's first - a line can end up with two.
   const placeLine = (n) => {
     activateLine(n);
     placeActiveAt(100, 100);
@@ -1313,7 +1313,7 @@ describe('applying a tag to a line whose box is already placed', () => {
   // The rule for a box the user has styled by hand: the tag wins over the three
   // fields a tag can define, and touches nothing else. Manual styling winning
   // would make an apply do nothing on precisely the boxes the user has been
-  // working on, which is the complaint this answers — and it is one undo press
+  // working on, which is the complaint this answers - and it is one undo press
   // away either way.
   it('overrides a font the user set by hand, and leaves everything else alone', () => {
     seedTags(sfx());
@@ -1445,7 +1445,7 @@ describe('applying a tag to a line whose box is already placed', () => {
 //
 // `.page-frame` is `p.w * zoom` by `p.h * zoom` and `.page-img` inside it is
 // `width:100%; height:100%`, so these two numbers are not a note about the file
-// — they are the space the art is drawn into and the space every box is
+// - they are the space the art is drawn into and the space every box is
 // positioned in. Nothing letterboxes: when they disagree with the image, the
 // art is stretched and the zoom readout is a percentage of pixels that do not
 // exist. Everything below is that one invariant.
@@ -1474,8 +1474,8 @@ describe('the page coordinate space', () => {
     expect(hasPageSpace(null)).toBe(false);
   });
 
-  // `createChapter` writes `w:0,h:0` for every page it copies — it never
-  // decodes the images — so this is the state 23 of the 28 pages in the
+  // `createChapter` writes `w:0,h:0` for every page it copies - it never
+  // decodes the images - so this is the state 23 of the 28 pages in the
   // author's own library are saved in. Loading must not turn it into a size:
   // PAGE_W/PAGE_H there is an invented coordinate space, and the first real
   // measurement would then look like a space *changing* and drag every box
@@ -1532,7 +1532,7 @@ describe('the page coordinate space', () => {
 
   // There is one `<img>` in the canvas and `src` changes under it on every page
   // turn, so a decode can finish after the user has moved on. Addressed by the
-  // page on screen, that measurement lands on the wrong page — and on a chapter
+  // page on screen, that measurement lands on the wrong page - and on a chapter
   // with a double-page spread in it, that page is then drawn stretched for
   // good, and saved that way. The object URL belongs to exactly one page.
   it('lands a late decode on the page whose image it was', () => {
@@ -1592,7 +1592,7 @@ describe('applying a detection result', () => {
 
   // The canvas draws `p.cleaned ?? p.raw`; detection runs on `p.raw`. Writing
   // the detector's size over a measured page is what stretched the cleaned art
-  // into the raw's box — and the zoom percentage with it.
+  // into the raw's box - and the zoom percentage with it.
   it('never overwrites a page that has been measured', () => {
     loadProjectPages([{ id: 1, w: 2000, h: 2000, lines: [], boxes: [] }]);
     applyDetection(result());
@@ -1635,8 +1635,8 @@ describe('applying a detection result', () => {
     expect([app.pages[1].w, app.pages[1].h]).toEqual([1000, 2000]);
   });
 
-  // Re-detecting a page is an ordinary thing to do — a better model, a cleaned
-  // raster, a page that came out wrong the first time — and it used to throw
+  // Re-detecting a page is an ordinary thing to do - a better model, a cleaned
+  // raster, a page that came out wrong the first time - and it used to throw
   // away every translation on that page, with no undo entry and no warning.
   it('keeps the English on a line the detector found again unchanged', () => {
     loadProjectPages([
@@ -1647,7 +1647,7 @@ describe('applying a detection result', () => {
   });
 
   // Same number, different sentence. The detector renumbers from 1 in reading
-  // order on every run, so the number alone does not say it is the same line —
+  // order on every run, so the number alone does not say it is the same line -
   // one bubble found that was missed before shifts every number after it.
   // Carrying the old English across would put a confident, wrong translation in
   // the queue, which is strictly worse than an empty row the user can see is
@@ -1661,7 +1661,7 @@ describe('applying a detection result', () => {
     expect(page().lines[0].en).toBe('');
   });
 
-  // Queue-side markup takes the looser rule — by number alone, which is what the
+  // Queue-side markup takes the looser rule - by number alone, which is what the
   // JSON re-import path already does to the same wholesale replacement. One
   // click to re-apply and one to take off, so the cost of guessing wrong is not
   // the cost of guessing wrong about a translation.
@@ -1679,8 +1679,8 @@ describe('applying a detection result', () => {
     expect(lineTags(page().lines[0])).toEqual(['sfx']);
   });
 
-  // The detector never saw these rows and cannot renumber them — its numbers
-  // start at 1 — so it has no opinion about them at all.
+  // The detector never saw these rows and cannot renumber them - its numbers
+  // start at 1 - so it has no opinion about them at all.
   it('carries the rows the user typed, and the boxes that made them', () => {
     loadProjectPages([{ id: 1, w: 1000, h: 2000, lines: [], boxes: [] }]);
     const id = addEmptyBox(100, 100);
@@ -1695,8 +1695,8 @@ describe('applying a detection result', () => {
     expect(page().boxes.map((b) => b.id)).toEqual([id]);
   });
 
-  // The typeset boxes do go — every one is bound to a number the detector has
-  // just reassigned — and the two ids pointing into them have to go with them.
+  // The typeset boxes do go - every one is bound to a number the detector has
+  // just reassigned - and the two ids pointing into them have to go with them.
   it('wipes the typeset boxes and takes the selection and the caret with them', () => {
     loadProjectPages([
       { id: 1, w: 1000, h: 2000, lines: [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }], boxes: [] },
@@ -1709,7 +1709,7 @@ describe('applying a detection result', () => {
     applyDetection(result());
     expect(page().boxes).toHaveLength(0);
     // Dangling, `selectedId` names a box nothing can find, and `editingId` is
-    // read by App.svelte as "the user is typing" — every global shortcut in the
+    // read by App.svelte as "the user is typing" - every global shortcut in the
     // app stays dead behind it.
     expect(app.selectedId).toBe(null);
     expect(app.editingId).toBe(null);
@@ -1721,7 +1721,7 @@ describe('applying a detection result', () => {
 // is the guard: under node there is no canvas, so `autoFitBox` must decline
 // rather than size a box from the stand-in metric every measurement falls back
 // to. `loadProjectPages` refits every page it loads, so without that guard every
-// test run — and every headless consumer — would silently rewrite the geometry
+// test run - and every headless consumer - would silently rewrite the geometry
 // in the document it just opened.
 describe('auto-height declines when there is nothing to measure with', () => {
   it('leaves a loaded box exactly as the file had it', () => {
@@ -1743,7 +1743,7 @@ describe('auto-height declines when there is nothing to measure with', () => {
 // ===========================================================================
 // Placement follows the bubble
 // ===========================================================================
-// A placed box used to be 220x92 whatever it landed on — a size chosen for a
+// A placed box used to be 220x92 whatever it landed on - a size chosen for a
 // page nobody had seen. `p.detect.boxes` already holds, per line, the rect the
 // Japanese occupied, in page coordinates; that is the size and the position the
 // English wants, less a margin so the text is not pressed against the outline.
@@ -1808,7 +1808,7 @@ describe('bubble-aware placement', () => {
   // it was worse than a no-op: `clamp(cx - w/2, 0, Math.max(0, 0 - w))` is a
   // range of exactly zero, so every placement on a page the canvas had not
   // measured yet landed on the origin and the bubble the detector found was
-  // thrown away. A whole chapter can be in that state — a page is only measured
+  // thrown away. A whole chapter can be in that state - a page is only measured
   // when it is looked at.
   it('does not clamp a placement against a page nobody has measured', () => {
     expect(placementRect({ w: 0, h: 0 }, [100, 100, 300, 400], 0, 0)).toEqual({
@@ -1844,7 +1844,7 @@ describe('bubble-aware placement', () => {
 // Free-typed boxes join the text queue
 // ===========================================================================
 // A box made with the Text tool used to be canvas-only: `lineN: null`, no queue
-// row, and — since tags live on lines — no way to tag it, no way for a
+// row, and - since tags live on lines - no way to tag it, no way for a
 // tag-scoped bulk edit to reach it, and no showing in the "N / M placed" count.
 // It now brings a line of its own with it. What pins that, below, is the four
 // things that can go wrong with such a line: its number colliding with the
@@ -1928,7 +1928,7 @@ describe('a free-typed box brings a queue line with it', () => {
     const before = page().lines.filter((l) => isPlaced(page(), l.n)).length;
     expect(before).toBe(0);
     addEmptyBox(100, 100);
-    // Both halves of "N / M placed" move together — the line is counted, and it
+    // Both halves of "N / M placed" move together - the line is counted, and it
     // is counted as placed, because the box is what created it.
     expect(page().lines.length).toBe(2);
     expect(page().lines.filter((l) => isPlaced(page(), l.n)).length).toBe(1);
@@ -2010,7 +2010,7 @@ describe('deleting a free-typed box takes its line with it', () => {
   // `activeLineN` really is the number that is about to leave the document.
   // `placeActiveAt` looks the active line up by number, so a stale one there
   // makes every later click on the canvas a silent no-op with no way out but
-  // clicking another queue row — which is not a thing anybody knows to try.
+  // clicking another queue row - which is not a thing anybody knows to try.
   it('re-arms the queue when the line it was pointing at goes', () => {
     const id = addEmptyBox(100, 100);
     endEdit('typed');
@@ -2022,7 +2022,7 @@ describe('deleting a free-typed box takes its line with it', () => {
     expect(page().lines.some((l) => l.n === page().activeLineN)).toBe(true);
   });
 
-  // A delete can arrive from outside the box being typed into — the Inspector's
+  // A delete can arrive from outside the box being typed into - the Inspector's
   // button, the keyboard while the pointer is elsewhere. App.svelte reads
   // `editingId` as "the user is typing" and returns before any shortcut is
   // reached, so a caret left on a box that no longer exists kills every global
@@ -2057,7 +2057,7 @@ describe('ending an inline edit that changed nothing', () => {
   // A queue-placed box owns no text: `b.text` is null on purpose, so `boxText`
   // resolves through the line and the queue's textarea keeps reaching the
   // canvas. `editBefore` is that same null, while the editable hands back the
-  // string it was *displaying* — the line's. Compared as they stand, an
+  // string it was *displaying* - the line's. Compared as they stand, an
   // untouched blur reads as "null became 'Hello'", writes that string onto the
   // box as an override and detaches it from its line for good.
   it('leaves a queue-placed box reading its line, and records nothing', () => {
@@ -2100,7 +2100,7 @@ describe('ending an inline edit that changed nothing', () => {
   });
 });
 
-// The button at the foot of the queue has no page coordinates to hand over —
+// The button at the foot of the queue has no page coordinates to hand over -
 // it lives in a panel floating over a canvas that may be zoomed into any
 // corner. The page's own centre is off-screen at that zoom, and a box the user
 // cannot see is a box they cannot type into.
@@ -2110,7 +2110,7 @@ describe('visiblePageCenter', () => {
 
   it('centres on the visible part of the page, not on the page', () => {
     // The frame is drawn at 2x from (-500,-1000), so the page's own centre sits
-    // at client (500, 1000) — outside a viewport that only shows the top-left.
+    // at client (500, 1000) - outside a viewport that only shows the top-left.
     const got = visiblePageCenter(p, rect(0, 0, 400, 400), rect(-500, -1000, 1500, 3000), 2);
     expect(got).toEqual({ x: 350, y: 600 });
   });
@@ -2130,7 +2130,7 @@ describe('visiblePageCenter', () => {
     expect(visiblePageCenter(p, rect(0, 0, 400, 400), rect(900, 900, 1900, 2900), 1)).toEqual({ x: 500, y: 1000 });
   });
 
-  // A page that has never been measured has w/h of 0 — see `hasPageSpace`.
+  // A page that has never been measured has w/h of 0 - see `hasPageSpace`.
   it('uses the default page size for a page with no space yet', () => {
     expect(visiblePageCenter({ w: 0, h: 0 }, null, null, 1)).toEqual({ x: PAGE_W / 2, y: PAGE_H / 2 });
   });
@@ -2140,7 +2140,7 @@ describe('visiblePageCenter', () => {
 // `app.chapterMode` mirrors the open chapter's `mode` field. Everything the
 // editor hides in translate mode is a `{#if}` over one derived boolean, which is
 // not worth a DOM test; what IS worth testing is the two things that are not
-// presentational — the tool the mode allows, and the fact that no code path can
+// presentational - the tool the mode allows, and the fact that no code path can
 // still add a box.
 describe('translate mode', () => {
   const withLines = (lines) => [{ id: 1, w: 800, h: 1200, lines, boxes: [] }];
@@ -2240,7 +2240,7 @@ describe('translate mode', () => {
 });
 
 // The translate workspace's progress badge. Derived from the lines, never
-// stored — see `translatedCount`.
+// stored - see `translatedCount`.
 describe('the translated count', () => {
   it('counts a line as done once it has English on it', () => {
     expect(isTranslated({ n: 1, en: 'Ah' })).toBe(true);
@@ -2283,7 +2283,7 @@ describe('the raw reference zoom', () => {
   });
 
   // Fit is the floor, so the press that means "smaller than this" has nowhere
-  // to go. It used to read Fit as 1x and step down to 0.8 — the sidebar visibly
+  // to go. It used to read Fit as 1x and step down to 0.8 - the sidebar visibly
   // shrinking below the fit it was already at, and jumping back to Fit on the
   // press after.
   it('stays at Fit when zoomed out from Fit', () => {
@@ -2326,7 +2326,7 @@ describe('the raw reference zoom', () => {
 // A longstrip project draws every page of the chapter as one scrolling column,
 // so the page under the pointer is no longer the page the index is on. These
 // cover the flag itself and the two entry points that had to stop assuming
-// otherwise — the store half of it; the canvas resolves the frame.
+// otherwise - the store half of it; the canvas resolves the frame.
 describe('the project layout flag', () => {
   afterEach(() => {
     app.projectLayout = 'pages';
@@ -2389,7 +2389,7 @@ describe('editing a page other than the one the index is on', () => {
     placeActiveAt(100, 100, app.pages[1]);
     expect(app.pages[1].boxes[0].lineN).toBe(1);
     // Its only line is placed now, so its queue parks on the last one rather
-    // than on nothing — and its box is what proves the placement landed there.
+    // than on nothing - and its box is what proves the placement landed there.
     expect(isPlaced(app.pages[1], 1)).toBe(true);
     // Page one is untouched: its line is still waiting to be placed.
     expect(isPlaced(app.pages[0], 1)).toBe(false);

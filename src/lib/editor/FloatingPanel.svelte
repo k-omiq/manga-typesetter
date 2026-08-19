@@ -1,6 +1,6 @@
 <script>
   // One floating editor window: a titled, draggable, resizable, hideable frame
-  // around whatever the caller renders. It owns pointer work only — every rule
+  // around whatever the caller renders. It owns pointer work only - every rule
   // about where a panel may end up lives in panels.svelte.js, which is tested
   // without a browser.
   import { panels, movePanel, resizePanel, setHidden, raisePanel, clampAll } from './panels.svelte.js';
@@ -16,7 +16,7 @@
   const LAYER = 50;
 
   // How long the collapse/expand plays, matched to the `.42s` baked into the
-  // `fp-expand`/`fp-collapse` keyframes in styles.css — the two numbers have
+  // `fp-expand`/`fp-collapse` keyframes in styles.css - the two numbers have
   // to agree and there is nowhere shared to read one from, so a change to
   // either is a prompt to change the other. Noticeably slower than the old
   // instant swap on purpose: the brief wants the panel's contents visibly
@@ -28,8 +28,8 @@
   // leak as a cancelled pointer wearing different clothes: the listeners live
   // on `document`, nothing guarantees a further pointer event once the
   // component is gone, and they would go on writing geometry. A set rather
-  // than a single controller because two pointers can be down at once — the
-  // grip and the header both pressed before either releases — and a lone slot
+  // than a single controller because two pointers can be down at once - the
+  // grip and the header both pressed before either releases - and a lone slot
   // would let the second gesture overwrite the first one's net.
   const live = new Set();
   $effect(() => () => {
@@ -39,21 +39,21 @@
 
   // The stub and the panel are two different elements, and the instant
   // `g.hidden` flips Svelte would unmount whichever is showing and mount the
-  // other on the same tick — nothing left in the DOM long enough to play an
+  // other on the same tick - nothing left in the DOM long enough to play an
   // exit. So the two are rendered from two independent conditions rather than
   // as the branches of one `{#if}`: the element being left stays mounted for
   // one animation wearing `fp-exit`, which swaps its entrance keyframe for the
   // collapse that mirrors it (see styles.css), while the element being entered
   // mounts immediately and grows out of the same corner. They overlap.
   //
-  // Running them in series instead — which is what the earlier single flag
-  // trailing `g.hidden` produced — cost 2 × GATHER_MS for a hide→show round
+  // Running them in series instead - which is what the earlier single flag
+  // trailing `g.hidden` produced - cost 2 × GATHER_MS for a hide→show round
   // trip, and for the first half of it the icon the user is reaching for did
   // not exist yet. Overlapped, the round trip is one GATHER_MS and the stub is
   // in the DOM, at full size, from the frame the Hide button is pressed. (Full
   // size because the growth is on `.stub-ink` inside the button, not on the
   // button: a `scale(.08)` hit target is 2.7px of button, which is not a
-  // control.) The deliberate, visible gather the brief asks for is untouched —
+  // control.) The deliberate, visible gather the brief asks for is untouched -
   // it is the same 420ms curve, just no longer queued behind itself.
   //
   // `prefersReducedMotion` collapses the wait to nothing, matching the CSS
@@ -80,8 +80,8 @@
       exitingPanel = false;
       exitingStub = false;
     }, ms);
-    // Cleared automatically before the next run of this effect — a second
-    // hide/show before the timer fires — and on unmount. The same guarantee
+    // Cleared automatically before the next run of this effect - a second
+    // hide/show before the timer fires - and on unmount. The same guarantee
     // `live` gives the pointer gestures below, for a timer instead of a
     // listener.
     return () => clearTimeout(t);
@@ -101,7 +101,7 @@
     const o = { x: g.x, y: g.y, w: g.w, h: g.h };
     e.currentTarget.setPointerCapture?.(pid);
     const move = (ev) => {
-      // A second pointer — another touch, or a pen alongside the mouse — would
+      // A second pointer - another touch, or a pen alongside the mouse - would
       // otherwise arm its own drag and the two closures would fight over the
       // same panel.
       if (ev.pointerId !== pid) return;
@@ -123,7 +123,7 @@
       // Clamped on drop, not per frame: clamping under a held pointer fights the
       // cursor, the panel lagging behind the hand that is dragging it. Waiting
       // for the release keeps the gesture honest and still guarantees the
-      // invariant — no drag can leave a panel, or its collapsed stub, outside
+      // invariant - no drag can leave a panel, or its collapsed stub, outside
       // the window where the user cannot reach it again.
       clampAll(window.innerWidth, window.innerHeight);
     };
@@ -133,14 +133,14 @@
     document.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
-  // The stub's own drag. A press stays ambiguous until it travels — under 4px
+  // The stub's own drag. A press stays ambiguous until it travels - under 4px
   // it is still the click that restores the panel, and only past that does it
   // become a drag that must not also restore on release. RailTools' rail edge
   // does exactly this split for the same reason. Geometrically a stub is just
   // a panel with `hidden: true`: clampPanel reads that flag and keeps the
   // stub's own 34px footprint on screen rather than the panel's KEEP_X strip,
   // so this reuses movePanel/clampAll rather than inventing a parallel notion
-  // of stub position — and a stub dropped in the top-right corner stays in the
+  // of stub position - and a stub dropped in the top-right corner stays in the
   // corner.
   let stubDragging = false; // set by a real drag's release, read once by the click that follows it
   function dragStub(e) {
@@ -170,8 +170,8 @@
       if (!dragging) return;
       clampAll(window.innerWidth, window.innerHeight);
       // Armed only for a gesture that will actually produce the click this
-      // flag exists to swallow. A pointercancel — an OS gesture claiming the
-      // pointer, a lost capture — fires no click, so a flag set here would
+      // flag exists to swallow. A pointercancel - an OS gesture claiming the
+      // pointer, a lost capture - fires no click, so a flag set here would
       // still be set on the next activation and eat it: Enter or Space on the
       // still-focused button would do nothing, and only the second press would
       // work. Mouse users never saw it because `dragStub` clears the flag on
@@ -185,8 +185,8 @@
   }
 
   function restoreStub() {
-    // The click that follows a drag's pointerup — the button's own, not one
-    // this file dispatches — is exactly the thing that must not also restore
+    // The click that follows a drag's pointerup - the button's own, not one
+    // this file dispatches - is exactly the thing that must not also restore
     // the panel. `stubDragging` is set once, by that drag's `end`, and this
     // is its only reader.
     if (stubDragging) {
@@ -229,7 +229,7 @@
      on top: both carry the same z-index, and the outgoing element is inert
      anyway (`.fp-exit` takes pointer events off it — see styles.css). -->
 {#if showStub}
-  <!-- The minimised state is an icon, not a text pill — `title` still carries
+  <!-- The minimised state is an icon, not a text pill - `title` still carries
        the name, as the tooltip and the accessible name, so the control stays
        identifiable without a visible label. The glyph is keyed off `id` rather
        than a new prop: the only two panels that exist are the two ids

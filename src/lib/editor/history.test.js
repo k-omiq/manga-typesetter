@@ -108,7 +108,7 @@ describe('command records', () => {
 
   // An entry belongs to one page, and a bulk entry is no exception. It used to
   // resolve each item through the item's own page id so that a chapter-wide tag
-  // apply could be undone from wherever it was pressed — which meant an entry on
+  // apply could be undone from wherever it was pressed - which meant an entry on
   // page A's stack mutating boxes on page B while B kept a stack of its own
   // whose before/after still described the world before the apply. B's next undo
   // then restored a style it had not been in since. The writer splits such an
@@ -143,7 +143,7 @@ describe('command records', () => {
     expect(app.pages[1].boxes[0].style.size).toBe(30);
   });
 
-  // And the page being gone is a different failure from the boxes being gone —
+  // And the page being gone is a different failure from the boxes being gone -
   // the user is told which.
   it('says the page is gone rather than blaming the boxes', () => {
     loadProjectPages(twoPageDoc());
@@ -191,7 +191,7 @@ describe('the queue moves with the record', () => {
   });
 });
 
-// A new free-typed box is one gesture — created, typed into, committed. It
+// A new free-typed box is one gesture - created, typed into, committed. It
 // costs one undo press, or none at all when the user types nothing.
 describe('one gesture, one step', () => {
   it('undoes a typed-into new box, text and all, in one press', () => {
@@ -203,7 +203,7 @@ describe('one gesture, one step', () => {
     expect(history.canUndo).toBe(false);
     redo();
     expect(page().boxes.map((b) => b.id)).toContain(id);
-    // The text is on the box's queue line, not on the box — a free-typed box is
+    // The text is on the box's queue line, not on the box - a free-typed box is
     // line-backed like any other now (see `setBoxText`), and the redo has to
     // bring the line back with it or the box returns rendering nothing.
     const back = page().boxes.find((b) => b.id === id);
@@ -220,7 +220,7 @@ describe('one gesture, one step', () => {
 
   // The ordinary way to leave a box: click another one, or the canvas. Both
   // null `editingId` on pointerdown, so the blur that follows reaches `endEdit`
-  // with nothing to end — the gesture has to be settled from those paths too,
+  // with nothing to end - the gesture has to be settled from those paths too,
   // or the box stays pending forever and its eventual delete goes unrecorded.
   it('records a new box left by clicking another one', () => {
     const id = addEmptyBox(300, 300);
@@ -251,7 +251,7 @@ describe('one gesture, one step', () => {
     endEdit('hi', '');
     resetHistory();
     beginEdit(id);
-    endEdit('  ', 'hi'); // whitespace only — the store drops the box
+    endEdit('  ', 'hi'); // whitespace only - the store drops the box
     expect(page().boxes.length).toBe(2);
     expect(history.canUndo).toBe(true);
     undo();
@@ -292,7 +292,7 @@ describe('a free-typed box and its line move together', () => {
   });
 
   // An entry about a queue-placed box carries no line at all, so the ordinary
-  // path is untouched — an imported line must survive its box either way.
+  // path is untouched - an imported line must survive its box either way.
   it('leaves an imported line alone', () => {
     placeActiveAt(400, 400);
     const id = page().boxes.at(-1).id;
@@ -324,7 +324,7 @@ describe('a free-typed box and its line move together', () => {
 // free-typed box the user was still in. The pair has to land in the order the
 // user made them. The settle used to ride on the `selectBox` at the bottom of
 // `placeActiveAt`, which put the older edit onto the stack on top of the newer
-// one — so the first press of undo rewound the box the user had finished with
+// one - so the first press of undo rewound the box the user had finished with
 // while the one the click had just placed stayed put.
 describe('a placement that ends another edit records the pair in order', () => {
   it('records the edit it ended before the placement it made', () => {
@@ -377,7 +377,7 @@ describe('a page turn mid-gesture keeps its step', () => {
 });
 
 // The editable writes `box.text` on every keystroke, so what the history needs
-// from an inline edit is not the text — the document already has it — but one
+// from an inline edit is not the text - the document already has it - but one
 // entry per session, written by whatever ends the session.
 describe('one inline edit, one step', () => {
   it('records an edit ended by clicking another box, where the blur is too late', () => {
@@ -436,7 +436,7 @@ describe('selection follows the step', () => {
   // Two things have to hold at once here, and they pull in opposite directions.
   // The gesture still in progress has to be settled BEFORE the step, or the
   // press rewinds the move underneath it while the box the user was still typing
-  // into stands — the newest edit is the one they meant, which is the whole
+  // into stands - the newest edit is the one they meant, which is the whole
   // reason `undo` settles first. And the record must not reach the stack DURING
   // the step, where it would clear the redo entry the step had just pushed and
   // leave the press with no way back; `applying` is what covers that, and it has
@@ -504,7 +504,7 @@ describe('failure', () => {
   it('refuses an entry whose box is gone, drops it, and carries on', () => {
     record({ t: 'move', pageId: 1, boxId: 'b1', before: { x: 0, y: 0 }, after: { x: 5, y: 5 } });
     record({ t: 'move', pageId: 1, boxId: 'ghost', before: { x: 0, y: 0 }, after: { x: 9, y: 9 } });
-    undo(); // the ghost — refused and dropped
+    undo(); // the ghost - refused and dropped
     expect(app.toast.msg).toMatch(/gone/i);
     expect(history.canUndo).toBe(true);
     undo(); // the real one still works
@@ -538,7 +538,7 @@ describe('per-page stacks', () => {
     const other = () => ({ t: 'move', pageId: 2, boxId: 'b9', before: { x: 0 }, after: { x: 1 } });
 
     // Every entry with a page id is offered, because this module cannot tell
-    // which page is live — the history file can, and answering is its whole job.
+    // which page is live - the history file can, and answering is its whole job.
     it('goes to the sink instead of the live stack', () => {
       const taken = [];
       const off = setOffscreenSink((pageId, entry) => {
@@ -578,7 +578,7 @@ describe('per-page stacks', () => {
     it('stays on the live stack when the sink refuses it', () => {
       // What a build with no history file does, and what the file itself answers
       // for a chapter it has no document for: nobody else can keep this, so the
-      // live stack does — which is what it did before the seam existed.
+      // live stack does - which is what it did before the seam existed.
       const off = setOffscreenSink(() => false);
       try {
         record(other());
@@ -591,7 +591,7 @@ describe('per-page stacks', () => {
 });
 
 // The next task writes these entries to a file as JSON, so anything a mutation
-// site records has to survive the round trip unchanged — no proxies, no
+// site records has to survive the round trip unchanged - no proxies, no
 // functions, no class instances hiding in a record.
 describe('plain data', () => {
   it('keeps every recorded entry JSON-clean', () => {
@@ -628,7 +628,7 @@ describe('plain data', () => {
 // A step moves the stack, and the stack is what the history file writes. The
 // document's own autosave runs for the same press, so a step that told the file
 // nothing left the two to reach disk 800ms apart describing different numbers of
-// edits — chapter.json past the undo, history.json still before it. A crash in
+// edits - chapter.json past the undo, history.json still before it. A crash in
 // between and the next press replays an entry against a document it was never
 // recorded against.
 describe('a step schedules the journal', () => {
@@ -658,7 +658,7 @@ describe('a step schedules the journal', () => {
   });
 
   // A step that cannot apply drops its entry, so the stack has changed there
-  // too — left unwritten, the file would keep offering an entry this build has
+  // too - left unwritten, the file would keep offering an entry this build has
   // already refused once.
   it('tells it about an entry it had to drop as well', () => {
     withSink(() => {
@@ -680,8 +680,8 @@ describe('a step schedules the journal', () => {
 
   // The page whose stack this is, not the page the entry names. They are the
   // same for every entry the live stack should be holding, and when they are
-  // not — an entry for a page that has since gone, which is exactly the kind
-  // that lands in the failure branch — handing the file that dead page's id
+  // not - an entry for a page that has since gone, which is exactly the kind
+  // that lands in the failure branch - handing the file that dead page's id
   // would file the live page's whole stack under it.
   it('names the live page even when the entry names one that is gone', () => {
     withSink(() => {
@@ -699,7 +699,7 @@ describe('a step schedules the journal', () => {
 // lands inside the window in which the change has been applied and not yet
 // recorded. Stepping over it would rewind the entry beneath it, leave the
 // unwanted change standing, and then let the settle clear the redo the step had
-// just pushed — no way forward and no way back.
+// just pushed - no way forward and no way back.
 describe('a step closes an open settle window first', () => {
   const settlesTo99 = () =>
     record({ t: 'move', pageId: 1, boxId: 'b1', before: { x: 10, y: 10 }, after: { x: 99, y: 99 } });

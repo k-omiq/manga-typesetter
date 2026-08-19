@@ -1,61 +1,26 @@
-//! Turning detected text blocks into the crops manga-ocr reads.
+//! Generates manga-ocr input crops from detected text blocks.
 //!
-//! Two paths, exactly as `detect.py` has them:
-//!
-//! - **Block mode** (the default) hands the OCR one axis-aligned crop covering
-//!   the whole block. manga-ocr was trained on whole multi-line regions, so a
-//!   whole-bubble crop reads more coherently than stitched per-line pieces.
-//! - **The per-line fallback** is mokuro's original pipeline: each line quad is
-//!   perspective-warped to a fixed 64 px text height, over-long lines are cut at
-//!   the columns where the text mask is thinnest, and vertical text is rotated
-//!   upright. Block mode falls back to it for rotated blocks and for blocks whose
-//!   whole-block crop would be destroyed by the processor's 224x224 resize.
-//!
-//! ## Colour convention
-//!
-//! The page arrives here as true RGB, because the `image` crate decodes it that
-//! way. The Python sidecar decoded with `cv2.IMREAD_COLOR`, which yields **BGR**,
-//! and then passed that raw buffer to `Image.fromarray`, which read it as RGB.
-//! PIL's luma weights therefore landed on the channels in the opposite order.
-//!
-//! Everything in this module works in true RGB — which is also what `cv2.imwrite`
-//! wrote into the golden crop PNGs, so a crop produced here can be diffed against
-//! the fixture byte for byte. The swap happens once, in [`Raster::as_python_saw_it`],
-//! at the single point where a crop is handed to the OCR engine. `ocr.rs`'s own
-//! golden test documents the same swap from the other end.
-//!
-//! ## Fidelity
-//!
-//! The warp is not "a bilinear resample"; it is OpenCV's, reproduced down to the
-//! fixed-point arithmetic — 5-bit sub-pixel steps, 15-bit tap weights, and the
-//! `(v + 16384) >> 15` cast. `cvops.rs` explains why that rigor is not optional
-//! upstream of a threshold; here the threshold is a beam search, which is even
-//! less predictable under a one-count perturbation than a comparison against 0.6.
+//! Prefers whole-block crops, falling back to per-line perspective warps for rotated
+//! or extreme-aspect blocks. Reproduces OpenCV's fixed-point perspective warp bit-for-bit
+//! (5-bit subpixel steps, 15-bit taps) to prevent beam search drift.
 
 use image::{DynamicImage, GrayImage, RgbImage};
 
 use super::textblock::{round_half_even, Language};
 use super::textdetector::TextBlockOut;
 
-/// The ViT processor squashes every crop to this square, so a crop is only
-/// legible if its glyphs survive the resize.
+/// ViT processor square input size (224x224).
 const PROCESSOR_INPUT: f64 = 224.0;
-/// Whole-block crops flatter than this on either axis are rejected: the square
-/// resize would crush one axis into illegibility.
+/// Rejection threshold for extreme aspect ratio whole-block crops.
 const BLOCK_MAX_RATIO: f64 = 16.0;
-/// Effective glyph size, in processor pixels, a whole-block crop must reach.
+/// Minimum effective glyph size in processor pixels for whole-block crops.
 const BLOCK_MIN_GLYPH: f64 = 20.0;
 /// The height every per-line crop is warped to.
 pub const TEXT_HEIGHT: usize = 64;
 /// Half-width, in text heights, of the window a chunk boundary may move within.
 const ANCHOR_WINDOW: usize = 2;
 
-/// An interleaved 8-bit raster: `h` rows of `w * cn` bytes.
-///
-/// This is `cv::Mat`'s layout, which is what the ported warp, rotate and split
-/// operate on. `image`'s typed buffers would mean a separate implementation per
-/// channel count for no gain — the page and the text mask go through exactly the
-/// same code.
+/// Interleaved 8-bit raster (`h` rows of `w * cn` bytes), matching `cv::Mat` layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Raster {
     pub w: usize,
@@ -91,14 +56,7 @@ impl Raster {
         self.w == 0 || self.h == 0
     }
 
-    /// The crop as an image, with red and blue swapped.
-    ///
-    /// See the module's colour note: this is the byte order the Python path's
-    /// `Image.fromarray` handed to PIL, and therefore the order manga-ocr's
-    /// grayscale conversion actually weighted. Feeding true RGB instead moves
-    /// 0.299 and 0.114 onto the wrong channels, which is a no-op on a perfectly
-    /// grey scan and a real difference on one with screentone or JPEG colour
-    /// ringing left in it.
+    /// Returns the crop with red and blue swapped, matching the BGR-as-RGB order Python fed to PIL.
     pub fn as_python_saw_it(&self) -> DynamicImage {
         assert_eq!(self.cn, 3, "only colour crops go to the OCR");
         let mut out = self.data.clone();
@@ -136,7 +94,7 @@ impl Raster {
         out
     }
 
-    /// A column range, as `np.split(..., axis=1)` produces.
+    /// A column range, matching `np.split(..., axis=1)`.
     fn columns(&self, x0: usize, x1: usize) -> Raster {
         let x0 = x0.min(self.w);
         let x1 = x1.clamp(x0, self.w);
@@ -155,33 +113,12 @@ impl Raster {
 // The homography
 // ---------------------------------------------------------------------------
 
-/// `cv2.findHomography(src, dst, cv2.RANSAC, 5.0)` for exactly four points.
+/// Direct 4-point homography DLT solve matching `cv2.findHomography(src, dst, 0)`.
 ///
-/// RANSAC is a red herring. OpenCV forces `method = 0` when the correspondence
-/// has exactly four points — there is nothing to sample from and nothing to call
-/// an outlier — and it then skips the Levenberg-Marquardt refinement, which is
-/// gated on `npoints > 4`. What is left is one direct DLT solve, which is what
-/// this is.
-///
-/// Two details are load-bearing and neither is obvious from the Python:
-///
-/// - `findHomography` converts **both** point sets to `CV_32F` before doing
-///   anything, so the `float64` source quad the caller built is rounded to
-///   single precision first. Skipping that shifts the result in the sixth
-///   digit, which is enough to move a sub-pixel tap.
-/// - The solve happens in Hartley-normalised coordinates (centroid at the
-///   origin, mean absolute deviation of 1 per axis) and is denormalised
-///   afterwards. Solving the raw system instead is numerically much worse on a
-///   quad whose coordinates are around 1000.
-///
-/// OpenCV finds the null vector by eigen-decomposing `LᵀL`; this solves the
-/// equivalent 8x8 system with `h₈` pinned to 1. For four points the null space
-/// is exactly one-dimensional, so the two agree to rounding — and `h₈` cannot
-/// be zero for a correspondence between two non-degenerate convex quads.
-///
-/// Returns `None` for a degenerate quad, where OpenCV returns an empty matrix.
+/// Converts points to `f32` first and solves in Hartley-normalized coordinates
+/// to reproduce OpenCV's numerical precision. Returns `None` for degenerate quads.
 pub fn find_homography_4(src: [[f64; 2]; 4], dst: [[f64; 2]; 4]) -> Option<[f64; 9]> {
-    // The `CV_32F` round-trip, before any arithmetic.
+    // Initial round-trip to f32 matching OpenCV's CV_32F conversion.
     let big = |p: [[f64; 2]; 4]| p.map(|q| [q[0] as f32 as f64, q[1] as f32 as f64]);
     let (m_src, m_dst) = (big(src), big(dst));
 
@@ -206,8 +143,7 @@ pub fn find_homography_4(src: [[f64; 2]; 4], dst: [[f64; 2]; 4]) -> Option<[f64;
             s_dst[k] += (m_dst[i][k] - c_dst[k]).abs();
         }
     }
-    // OpenCV's own degeneracy test: a quad collapsed onto a horizontal or
-    // vertical line has no scale on one axis and cannot define a homography.
+    // Degeneracy check matching OpenCV.
     if s_src.iter().chain(s_dst.iter()).any(|v| v.abs() < f64::EPSILON) {
         return None;
     }
@@ -216,7 +152,7 @@ pub fn find_homography_4(src: [[f64; 2]; 4], dst: [[f64; 2]; 4]) -> Option<[f64;
         s_dst[k] = n / s_dst[k];
     }
 
-    // Eight rows: two per correspondence, with h8 = 1 moved to the right side.
+    // 8x8 system with h8 = 1.
     let mut a = [[0.0f64; 8]; 8];
     let mut b = [0.0f64; 8];
     for i in 0..4 {
@@ -288,7 +224,7 @@ fn solve8(a: &mut [[f64; 8]; 8], b: &mut [f64; 8]) -> Option<[f64; 8]> {
     Some(x)
 }
 
-/// `cv2.invert(m)` for a 3x3 — OpenCV's analytic adjugate path, in its order.
+/// Analytic 3x3 matrix inverse matching OpenCV's adjugate path.
 fn invert3(m: &[f64; 9]) -> Option<[f64; 9]> {
     let d = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6])
         + m[2] * (m[3] * m[7] - m[4] * m[6]);
@@ -319,28 +255,10 @@ const INTER_TAB_SIZE: i32 = 1 << INTER_BITS;
 /// Tap weights are 15-bit fixed point, summing to `1 << 15` per pixel.
 const INTER_REMAP_COEF_BITS: i32 = 15;
 
-/// `cv2.warpPerspective(src, m, (dw, dh))` — `INTER_LINEAR`, `BORDER_CONSTANT` 0.
+/// Fixed-point perspective warp matching OpenCV's `warpPerspective` (`INTER_LINEAR`, constant 0 border).
 ///
-/// `m` maps *source* to *destination*, as `findHomography` returned it; the
-/// forward flags are the defaults, so the first thing OpenCV does is invert it
-/// and then inverse-map every destination pixel. That inversion is reproduced
-/// through OpenCV's analytic 3x3 rather than a general solver, because the two
-/// differ in the last bits and the result is quantised immediately afterwards.
-///
-/// Then, per destination pixel: the source position is scaled by 32, rounded
-/// half-to-even to an integer, split into an integer pixel (`>> 5`) and a
-/// 5-bit fraction, and the fraction indexes a table of four 15-bit weights.
-/// The four taps are accumulated in `i32` and cast back with `(v + 16384) >> 15`.
-/// A float bilinear differs from this by a count or two per pixel.
-///
-/// The destination is walked in OpenCV's blocks, not row by row. That looks like
-/// an irrelevant implementation detail and is not: the source position is
-/// accumulated as `(M[0]*x_block + M[1]*y + M[2]) + M[0]*x_offset`, and floating
-/// point addition is not associative, so a different block width is a different
-/// rounding. OpenCV also splits the row range across threads for large outputs,
-/// but every crop this module produces is under the 65536-pixel threshold at
-/// which `parallel_for_` uses more than one stripe, so the range here is always
-/// the whole image.
+/// Inverts `m` analytically, evaluates in 32x32 blocks to preserve non-associative float addition order,
+/// samples via 5-bit subpixel steps with 15-bit tap weights, and rounds via `(v + 16384) >> 15`.
 pub fn warp_perspective(src: &Raster, m: &[f64; 9], dw: usize, dh: usize) -> Raster {
     let mut dst = Raster::zeroed(dw, dh, src.cn);
     if dw == 0 || dh == 0 || src.is_empty() {
@@ -397,14 +315,12 @@ pub fn warp_perspective(src: &Raster, m: &[f64; 9], dw: usize, dh: usize) -> Ras
                             dst.data[d + k] = fixed_pt_cast(v);
                         }
                     } else if sx >= src.w as i64 || sx + 1 < 0 || sy >= src.h as i64 || sy + 1 < 0 {
-                        // Entirely outside: the constant border, which is 0.
+                        // Constant border value (0).
                         for k in 0..cn {
                             dst.data[d + k] = 0;
                         }
                     } else {
-                        // Straddling the edge: each tap that falls outside
-                        // contributes the border value rather than being clamped
-                        // to the nearest pixel.
+                        // Straddling edge: out-of-bounds taps use border value 0.
                         let tap = |sx: i64, sy: i64, k: usize| -> i32 {
                             if sx < 0 || sy < 0 || sx >= src.w as i64 || sy >= src.h as i64 {
                                 0
@@ -429,15 +345,7 @@ pub fn warp_perspective(src: &Raster, m: &[f64; 9], dw: usize, dh: usize) -> Ras
     dst
 }
 
-/// The four entries of OpenCV's `BilinearTab_i` for one sub-pixel cell.
-///
-/// `initInterTab2D` builds the table by multiplying two linear 1-D tables and
-/// rounding to 15-bit fixed point, then patches any cell whose four weights do
-/// not sum to `1 << 15`. The patch never fires for bilinear: both fractions are
-/// exact multiples of 1/32, so every product is an exact multiple of 1/1024 and
-/// the four scaled weights are integers summing to exactly 32768. (That matters
-/// beyond tidiness — the patch loop as written indexes past the end of a 2x2
-/// cell, so a bilinear table that needed it would be reading its neighbour.)
+/// 4-tap bilinear interpolation weights for one sub-pixel cell (15-bit fixed point).
 fn bilinear_taps(alpha: usize) -> [i32; 4] {
     let i = (alpha >> 5) as i32; // y fraction, 0..31
     let j = (alpha & 31) as i32; // x fraction, 0..31
@@ -455,8 +363,7 @@ fn fixed_pt_cast(v: i32) -> u8 {
     r.clamp(0, 255) as u8
 }
 
-/// `cvRound`: nearest integer, ties to even — the default FPU rounding mode,
-/// which is what `saturate_cast<int>(double)` compiles to.
+/// Nearest integer with ties to even, matching OpenCV's `cvRound` / FPU rounding.
 fn cv_round(v: f64) -> i32 {
     let r = v.round();
     let r = if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 { r - v.signum() } else { r };
@@ -467,14 +374,7 @@ fn cv_round(v: f64) -> i32 {
 // Whole-block crops
 // ---------------------------------------------------------------------------
 
-/// One crop covering the whole text block, or `None` to use the per-line path.
-///
-/// manga-ocr reads whole blocks in their natural orientation, vertical text
-/// included, so nothing is rotated here. The three rejections are all about what
-/// the crop becomes after the processor's fixed 224x224 resize: a rotated block
-/// would need an axis-aligned box that drags in neighbouring art, an extreme
-/// aspect ratio crushes one axis, and a dense small-print block ends up with
-/// sub-legible glyphs that send the beam search into a repetition loop.
+/// Extracts a single whole-block crop, or `None` if rotated or too extreme for 224x224 resize.
 pub fn block_crop(img: &Raster, blk: &TextBlockOut) -> Option<Raster> {
     if blk.angle != 0 {
         return None;
@@ -482,20 +382,13 @@ pub fn block_crop(img: &Raster, blk: &TextBlockOut) -> Option<Raster> {
     let (im_w, im_h) = (img.w as i32, img.h as i32);
     let [rx1, ry1, rx2, ry2] = blk.xyxy;
 
-    // Breathing margin. eng and horizontal-unknown blocks get loose boxes from
-    // the detector, so they are widened by font_size/3 exactly as the per-line
-    // path does. Everything else stays deliberately tight — generous padding
-    // drags a neighbouring bubble into the crop — and is sized from the box
-    // rather than from font_size, which for a single-line horizontal block
-    // reports the whole line height.
+    // English and horizontal-unknown blocks use font_size/3 padding; others use box-derived padding.
     let pad = if blk.language == Language::Eng
         || (blk.language == Language::Unknown && !blk.vertical)
     {
         round_half_even(blk.font_size / 3.0) as i32
     } else {
-        // Python floor-divides; below 2 the clamp makes the difference from
-        // Rust's truncating division unobservable, and above 2 both operands
-        // are positive so the two agree.
+        // Padded box margin clamped to 2..8 px.
         (((rx2 - rx1).min(ry2 - ry1)) / 16).clamp(2, 8)
     };
     let x1 = (rx1 - pad).max(0);
@@ -528,16 +421,7 @@ pub fn block_crop(img: &Raster, blk: &TextBlockOut) -> Option<Raster> {
 // Per-line crops
 // ---------------------------------------------------------------------------
 
-/// `TextBlock.get_transformed_region`: one line quad, rectified to `textheight`.
-///
-/// The quad is mapped onto a `w-1` / `h-1` rectangle — not `w` / `h`, which is
-/// the original's own off-by-one and would otherwise shift the sampling by half
-/// a pixel at this scale. Vertical text is warped into a tall strip and then
-/// rotated 90 degrees counter-clockwise, which is what makes the chunk splitter
-/// downstream see a wide horizontal band whichever way the text runs.
-///
-/// Returns `None` where the target size would be degenerate; the original would
-/// raise inside `cv2.warpPerspective` there.
+/// Rectifies one line quad to fixed `textheight` (64 px), rotating vertical text 90 deg CCW.
 pub fn transformed_region(
     img: &Raster,
     blk: &TextBlockOut,
@@ -583,8 +467,7 @@ pub fn transformed_region(
     } else {
         (round_half_even(textheight as f64 / ratio), textheight as f64)
     };
-    // `w` and `h` come out of a division that a collapsed quad makes NaN or
-    // zero, and either would be a zero-area warp.
+    // Reject degenerate/zero-area quads.
     if w < 1.0 || h < 1.0 || w.is_nan() || h.is_nan() {
         return None;
     }
@@ -613,18 +496,9 @@ fn gaussian_window(m: usize, std: f64) -> Vec<f64> {
         .collect()
 }
 
-/// `np.convolve(a, k, "same")`.
-///
-/// numpy swaps its arguments so the longer array is the signal, then correlates
-/// against the reversed kernel and keeps `len(a)` samples starting `(len(k)-1)/2`
-/// into the full convolution. For the even 128-tap kernel here that offset is 63,
-/// i.e. the window sits half a tap left of centre — the asymmetry is numpy's and
-/// it shifts every cut point by half a text height if it is not reproduced.
+/// `np.convolve(a, k, "same")`, preserving numpy's half-tap left offset for even kernels.
 fn convolve_same(a: &[f64], k: &[f64]) -> Vec<f64> {
     if a.len() < k.len() {
-        // numpy would swap the roles and return `k.len()` samples. Unreachable
-        // here: a line is only split when it is wider than 8 text heights, and
-        // the kernel is 2 text heights long.
         return convolve_same(k, a);
     }
     let n2 = k.len() as i64;
@@ -643,22 +517,7 @@ fn convolve_same(a: &[f64], k: &[f64]) -> Vec<f64> {
         .collect()
 }
 
-/// `_split_into_chunks`: cut an over-long line where the text mask is thinnest.
-///
-/// A line whose rectified crop is more than `max_ratio` text-heights long is too
-/// elongated for the processor's square resize, so it is cut into equal-ish
-/// pieces. The cuts do not land on the equal divisions: each one is allowed to
-/// slide within a window of two text heights to the column of lowest ink
-/// density, so a cut falls between characters rather than through one.
-///
-/// **The mask is not the mask Python used.** The original passes `mask_refined`,
-/// the inpainting-refined segmentation; this app does not inpaint and never
-/// ported the refinement, so what arrives here is the detector's raw `seg` head.
-/// The two differ in the thin fringe of pixels refinement adds or removes around
-/// each glyph, which perturbs the density curve but not the position of its
-/// valleys — the valleys are the gaps *between* characters, where both masks are
-/// near zero. The golden fixture cannot confirm that: none of its 40 lines is
-/// long enough to be split at all.
+/// Cuts an over-long line where the text mask ink density is thinnest within a 2-textheight window.
 fn split_into_chunks(
     img: &Raster,
     mask: &Raster,
@@ -699,9 +558,7 @@ fn split_into_chunks(
     let mut density = convolve_same(&col_sum, &k);
     let peak = density.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if peak <= 0.0 {
-        // An empty line mask. Normalising by zero would make every value NaN,
-        // every `argmin` collapse to its window start, and the cut points
-        // duplicate — producing zero-width crops. Nothing to split.
+        // Empty line mask fallback.
         return vec![line_crop];
     }
     for v in density.iter_mut() {
@@ -711,7 +568,7 @@ fn split_into_chunks(
     let win = (anchor_window * textheight) as i64;
     let mut cuts: Vec<usize> = Vec::with_capacity(num_chunks - 1);
     for i in 1..num_chunks {
-        // `np.linspace(0, w, num_chunks + 1)[1:-1]`, truncated to an int.
+        // Target cut anchors.
         let anchor = (w as f64 * i as f64 / num_chunks as f64) as i64;
         let n0 = (anchor - win / 2).clamp(0, w as i64) as usize;
         let n1 = (anchor + win / 2).clamp(0, w as i64) as usize;
@@ -738,13 +595,7 @@ fn split_into_chunks(
     out
 }
 
-/// Every crop one block contributes to the page's OCR queue, in order.
-///
-/// `lines_mode` is `MT_OCR_MODE=lines`: it skips the whole-block attempt and
-/// always takes the per-line path. Block mode still lands there for any block
-/// `block_crop` rejects, so the two are not alternatives so much as a default
-/// and its fallback — and the response shape is the same either way, because a
-/// block's text is its crops' text joined in this order.
+/// Returns all OCR crops for a text block (whole-block crop or per-line fallback chunks).
 pub fn gather_crops(
     img: &Raster,
     mask: &Raster,
@@ -761,10 +612,7 @@ pub fn gather_crops(
     for idx in 0..blk.lines.len() {
         for chunk in split_into_chunks(img, mask, blk, idx, TEXT_HEIGHT, max_ratio, ANCHOR_WINDOW) {
             let chunk = if blk.vertical { chunk.rotate90_cw() } else { chunk };
-            // A zero-width chunk can only come from two cut points colliding,
-            // which the peak guard above already rules out. Python would raise
-            // inside `Image.fromarray`; dropping it keeps a pathological page
-            // from taking the whole analyse down.
+            // Skip degenerate empty chunks.
             if !chunk.is_empty() {
                 out.push(chunk);
             }
@@ -1069,10 +917,7 @@ mod tests {
 
     #[test]
     fn a_line_over_the_ratio_is_cut_at_the_thinnest_column() {
-        // A 40 x 1400 vertical line rectifies to 64 x ~2240, which is 35 text
-        // heights — over the vertical limit of 16, so it wants three chunks.
-        // The mask is inked everywhere except two narrow bands, and the cuts
-        // must find them rather than land on the equal divisions.
+        // A 40 x 1400 vertical line rectifies to 64 x ~2240 (35 text heights, over 16 limit -> 3 chunks).
         let img = gradient(600, 1600);
         let mut mask = Raster::zeroed(600, 1600, 1);
         for y in 100..1500 {
@@ -1154,8 +999,7 @@ mod tests {
 
     // ---- golden comparison against the Python sidecar ----
 
-    /// One crop of `line-ocr-golden.json`: where it came from, the PNG the
-    /// Python path wrote, and what its manga-ocr returned for it.
+    /// One crop of `line-ocr-golden.json`.
     #[derive(serde::Deserialize)]
     struct GoldenCrop {
         block: usize,
@@ -1171,26 +1015,7 @@ mod tests {
         crops: Vec<GoldenCrop>,
     }
 
-    /// Reproduce the whole per-line path on a real page and diff it two ways.
-    ///
-    /// The fixture was captured with `MT_OCR_MODE=lines`, so it exercises the
-    /// path block mode only falls back to — every line quad warped, chunked and
-    /// rotated. It is checked at both ends:
-    ///
-    /// - **Pixels.** Every crop is compared against the PNG `cv2.imwrite` wrote.
-    ///   This is the real test of the warp: an exact match means the homography,
-    ///   the inverse map, the 5-bit sub-pixel quantisation and the 15-bit taps
-    ///   all agree with OpenCV, which no amount of OCR agreement would prove.
-    /// - **Text.** Every crop is then read, because pixels agreeing is not the
-    ///   point; the point is that the same Japanese comes out.
-    ///
-    /// The `(block, line, chunk)` structure is asserted too, which is what would
-    /// catch a chunk splitter that cut in a different place — see the mask note
-    /// on `split_into_chunks`. As it happens this page never splits: its longest
-    /// line rectifies to 399 px, six text heights, well inside the vertical
-    /// limit of sixteen. So the splitter's fidelity is pinned by unit tests
-    /// above and not by this fixture, and the raw-versus-refined mask question
-    /// does not arise here.
+    /// Verifies line crops match Python sidecar pixel-for-pixel and OCR output matches.
     #[test]
     fn line_crops_match_the_python_sidecar_pixel_for_pixel_and_word_for_word() {
         use super::super::ocr::OcrEngine;

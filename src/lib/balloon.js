@@ -1,15 +1,15 @@
 // ===== Balloon interior recovery =====
 //
 // A text box placed on a bubble is currently sized from the detector's text
-// block — the rectangle the *Japanese* occupied. That rectangle is wrong twice
+// block - the rectangle the *Japanese* occupied. That rectangle is wrong twice
 // over. The Japanese in most balloons is set vertically, so the block is a tall
 // narrow column exactly where the English wants a wide short one; and a bounding
 // box says nothing about the balloon's shape, so English laid out inside it runs
 // into the curve of an oval near the top and the bottom, which is the one place
 // a letterer's eye goes first.
 //
-// The detector cannot help — `/analyze` reports `box`, `vertical` and
-// `font_size` and nothing about the balloon — but the page can. A manga balloon
+// The detector cannot help - `/analyze` reports `box`, `vertical` and
+// `font_size` and nothing about the balloon - but the page can. A manga balloon
 // is a solid light interior inside a dark outline, which is the one piece of
 // structure that is true of nearly every bubble ever drawn, and a flood fill
 // from inside the text block recovers it with no model, no network call and no
@@ -17,11 +17,11 @@
 //
 // The module is deliberately split in two.
 //
-//   the pixel half   `fillInterior` — the only function here that touches an
+//   the pixel half   `fillInterior` - the only function here that touches an
 //                    image. It takes an `ImageData`-shaped object, so the caller
 //                    decides where the pixels came from (the canvas, an
 //                    offscreen decode of `p.cleaned ?? p.raw`, a test fixture).
-//   the geometry     everything else — profile, classify, fit, per-line widths,
+//   the geometry     everything else - profile, classify, fit, per-line widths,
 //                    inscribed rect. Pure arithmetic on plain objects, testable
 //                    under node with no canvas anywhere near it, and cheap
 //                    enough that the line-breaker can call `interiorLineWidths`
@@ -30,8 +30,8 @@
 // What crosses the boundary between them is a mask; what crosses out of the
 // module is a handful of numbers. That matters: the fitted shape is stored on
 // the box, written into `chapter.json` and carried through the PSD's embedded
-// project, so it has to be plain JSON — `{ kind:'ellipse', cx, cy, rx, ry }` or
-// `{ kind:'rect', x, y, w, h }` — and never a mask.
+// project, so it has to be plain JSON - `{ kind:'ellipse', cx, cy, rx, ry }` or
+// `{ kind:'rect', x, y, w, h }` - and never a mask.
 
 // The knobs, and what each one is trading off. Every one of them is overridable
 // per call, because a page of tiny four-panel gag strips and a page of splash
@@ -40,7 +40,7 @@ export const BALLOON_DEFAULTS = {
   // ---- the flood fill ----
   // How far past the detected block the fill is allowed to look, as a multiple
   // of the block's LONGER side. A fill that escapes through a gap in an outline
-  // — an open tail, art touching the bubble — would otherwise run away across
+  // - an open tail, art touching the bubble - would otherwise run away across
   // the whole page, and a full-page scan is both slow and useless: the answer it
   // returns is not a balloon. The longer side rather than each axis separately
   // because a vertical Japanese column is tall and narrow and the balloon around
@@ -93,8 +93,8 @@ const r2 = (v) => Math.round(v * 100) / 100;
 
 // ---------- luminance and the threshold ----------
 
-// Rec. 601 luma, in integers. The pages are scans of black ink on white paper —
-// greyscale in all but the file header — so the exact primaries do not matter;
+// Rec. 601 luma, in integers. The pages are scans of black ink on white paper -
+// greyscale in all but the file header - so the exact primaries do not matter;
 // what matters is that this is one multiply-add per channel and it runs over a
 // window that can be a megapixel.
 //
@@ -107,7 +107,7 @@ const lumaOf = (data, i) =>
 
 // Otsu's method: the threshold that maximises the variance *between* the two
 // classes it splits the histogram into. That is the whole story behind the
-// number — it is not a constant someone tuned on three pages, it is the split
+// number - it is not a constant someone tuned on three pages, it is the split
 // this window's own pixels are most cleanly separable at, so a grey newsprint
 // scan and a crisp digital release each get their own.
 //
@@ -119,7 +119,7 @@ const lumaOf = (data, i) =>
 // The bounds in `BALLOON_DEFAULTS` are the answer to Otsu's one failure mode: a
 // window containing only paper (a balloon far larger than the search window, a
 // blank margin) has no two classes to separate, so the method dutifully splits
-// paper noise and returns something like 250 — at which point most of the paper
+// paper noise and returns something like 250 - at which point most of the paper
 // counts as ink and the fill fragments on nothing. Capping at 224 says a pixel
 // that is plainly paper is always interior; flooring at 64 says a pixel that is
 // plainly ink never is. Between the two the histogram decides.
@@ -141,8 +141,8 @@ export function interiorThreshold(hist, total, opts = {}) {
     sumB += i * hist[i];
     const between = wB * wF * (sumB / wB - (sum - sumB) / wF) ** 2;
     // The middle of the plateau, not its first step. A histogram with a clean
-    // empty valley between ink and paper — which is what a digital release or a
-    // synthetic fixture has — scores identically at every level in that valley,
+    // empty valley between ink and paper - which is what a digital release or a
+    // synthetic fixture has - scores identically at every level in that valley,
     // and taking the first one puts the cut hard against the ink where the
     // antialiased edge of every stroke reads as paper. The midpoint is the
     // furthest the cut can be from both classes, which is the whole idea.
@@ -178,7 +178,7 @@ function blockBounds(block, W, H) {
 // is the answer to the seed problem, and the seed problem is the one that
 // decides whether any of the rest works.
 //
-// The obvious seed — the centre of the detected block — is the worst possible
+// The obvious seed - the centre of the detected block - is the worst possible
 // one: the block is drawn tight around the Japanese, so its centre is *on* a
 // glyph, and a glyph is ink. Seeding there fills nothing. Seeding into the white
 // between two strokes is barely better, because a counter (the enclosed white of
@@ -187,7 +187,7 @@ function blockBounds(block, W, H) {
 //
 // So every candidate is a direction rather than a point: start on or just past
 // an edge of the block and walk away from the text until the first light pixel.
-// Walking outward from inside is what makes the answer safe — the first light
+// Walking outward from inside is what makes the answer safe - the first light
 // pixel found while leaving the glyphs is balloon paper, because the balloon
 // wall has not been crossed yet and the wall is dark.
 function probeLight(light, ww, wh, x, y, dx, dy) {
@@ -259,7 +259,7 @@ function spanFill(light, label, tag, ww, wh, seed) {
 // Everything dark that the interior encloses is part of the interior. The
 // Japanese glyphs are the reason: they sit in the middle of the balloon, the
 // fill flows around them, and a profile taken through them would report the
-// widest *gap between glyphs* as the balloon's width — a number some tens of
+// widest *gap between glyphs* as the balloon's width - a number some tens of
 // percent too small, and lopsided at that, which is exactly the sort of quiet
 // wrongness that produces a confident fit to the wrong ellipse.
 //
@@ -309,10 +309,10 @@ function fillEnclosed(mask, ww, wh) {
 //   `image`  anything `ImageData`-shaped: `{ width, height, data }` with `data`
 //            an RGBA byte array. Tests build one by hand; the app hands over a
 //            real `ImageData` from a canvas it already has.
-//   `block`  the detector's text block, `[x1,y1,x2,y2]` in page coordinates —
+//   `block`  the detector's text block, `[x1,y1,x2,y2]` in page coordinates -
 //            the same rect `detectedRectFor` returns.
 //
-// Returns the filled region, or null when there is nothing worth calling one —
+// Returns the filled region, or null when there is nothing worth calling one -
 // no pixels, no block, or nothing bigger than the text the seed started from:
 //
 //   { x, y, w, h,   the search window in page coordinates; `mask` is indexed
@@ -320,11 +320,11 @@ function fillEnclosed(mask, ww, wh) {
 //     mask,         Uint8Array, 1 = interior
 //     bounds,       tight { x, y, w, h } of the filled pixels, page coordinates
 //     count,        interior pixel count
-//     escaped,      the fill reached the window border — see `spanFill`
+//     escaped,      the fill reached the window border - see `spanFill`
 //     threshold,    the luminance cut Otsu chose for this window
 //     seed }        the candidate the winning fill started from, page coordinates
 //
-// Several seeds are tried and the best fill wins — big enough to be a balloon
+// Several seeds are tried and the best fill wins - big enough to be a balloon
 // first, bounded by an outline second, largest third. The seeds share one label
 // buffer, so a candidate that lands in a region an earlier seed already filled
 // costs a single array read rather than a second traversal, and the whole sweep
@@ -381,7 +381,7 @@ export function fillInterior(image, block, opts = {}) {
   //   viable    is it big enough to be the balloon around this text at all? A
   //             seed that ends up inside the counter of a 口 fills a couple of
   //             hundred pixels and, left to rank on "did not escape", would beat
-  //             the real interior and be fitted — confidently — to a 12px box.
+  //             the real interior and be fitted - confidently - to a 12px box.
   //             That is worse than no answer, so a region below the floor is not
   //             a candidate at all and a page with no viable region returns null.
   //   escaped   did an outline bound it? Only ever asked of viable regions,
@@ -409,7 +409,7 @@ export function fillInterior(image, block, opts = {}) {
   const mask = new Uint8Array(ww * wh);
   for (let i = 0; i < mask.length; i++) mask[i] = label[i] === best.tag ? 1 : 0;
   // Never on a fill that got out. "Enclosed" is defined by what the window's
-  // border can reach, and an escaped region can hold the entire border — at
+  // border can reach, and an escaped region can hold the entire border - at
   // which point nothing is outside, every remaining pixel counts as a hole, and
   // the mask becomes the whole window. The caller is going to fall back anyway,
   // so the honest thing to hand back is the region that actually leaked.
@@ -462,8 +462,8 @@ export function fillInterior(image, block, opts = {}) {
 // the bubble. The widest run is the one the text can actually sit in.
 //
 // A row inside the region's vertical extent with no run at all is a hole. It
-// cannot happen to a single 4-connected fill — reaching row n+1 from row n
-// requires a pixel in both — so it means the mask came from somewhere else: a
+// cannot happen to a single 4-connected fill - reaching row n+1 from row n
+// requires a pixel in both - so it means the mask came from somewhere else: a
 // union of fills, a hand-built fixture, a future caller. It is counted rather
 // than silently skipped, and the classifier refuses a profile with too many of
 // them, because a region that is not vertically connected is not one balloon.
@@ -536,7 +536,7 @@ function rowPoints(profile) {
 // One scoring rule for both shapes, so a rectangle and an ellipse can be
 // compared at all: per row, the mean of the two edge misses, divided by the
 // shape's half-width. Normalising by the *shape's* half-width rather than the
-// row's is deliberate — near the top of an ellipse the local half-width goes to
+// row's is deliberate - near the top of an ellipse the local half-width goes to
 // zero, and a per-row normalisation would turn a one-pixel rasterisation
 // difference there into an error of 1.0 and reject every oval ever drawn.
 //
@@ -563,8 +563,8 @@ function evaluate(shape, pts, o) {
     let pr;
     let inside;
     if (shape.kind === 'ellipse') {
-      // Half a row of slack, so the extreme row of a rasterised ellipse — whose
-      // centre line sits a hair outside the true curve — is still part of the
+      // Half a row of slack, so the extreme row of a rasterised ellipse - whose
+      // centre line sits a hair outside the true curve - is still part of the
       // body rather than being mistaken for a tail.
       inside = Math.abs(p.y - shape.cy) <= shape.ry + 0.5;
       const dy = clamp((p.y - shape.cy) / shape.ry, -1, 1);
@@ -652,14 +652,14 @@ function fitRect(pts, o) {
 //
 //   hw(y)² = rx² − (rx²/ry²)·(y − cy)²
 //
-// which in `u = y − y0` is `A + B·u + C·u²` — three unknowns, one 3×3 normal
+// which in `u = y − y0` is `A + B·u + C·u²` - three unknowns, one 3×3 normal
 // system, no iteration and no starting guess. Recovering the ellipse from the
 // coefficients needs `C < 0`, which is precisely the statement that the profile
 // is widest somewhere in the middle rather than at an end.
 //
 // The catch is that regressing on hw² weights the wide rows far more heavily
-// than the narrow ones. That is usually a virtue — the rows near the top of a
-// balloon are the ones a tail or a rasterisation stair-step distorts — but it
+// than the narrow ones. That is usually a virtue - the rows near the top of a
+// balloon are the ones a tail or a rasterisation stair-step distorts - but it
 // does mean the fit can drift on a short profile, which is why it is only ever a
 // candidate here and never the answer on its own.
 function lsEllipse(pts) {
@@ -710,7 +710,7 @@ function lsEllipse(pts) {
 // The other candidate, and the one that is exact for a clean oval: the region's
 // own vertical extent is the minor axis, its widest row is the major, and its
 // median row centre is the centre. It is trivially right on a bubble and
-// trivially wrong on a bubble with a tail, where the extent runs down the tail —
+// trivially wrong on a bubble with a tail, where the extent runs down the tail -
 // which is the whole reason there are two candidates and a residual to choose
 // between them.
 function extentEllipse(pts) {
@@ -731,7 +731,7 @@ function extentEllipse(pts) {
 // Both candidates, each refined by refitting on its own inliers, and the honest
 // score decides. This mirrors the way `typeset.js` handles its hourglass rule:
 // the aggressive search only ever *proposes* a candidate, and the plain
-// comparison is what accepts one — so a refit that dodges the tail by making a
+// comparison is what accepts one - so a refit that dodges the tail by making a
 // mess of the body loses on its own merit.
 function fitEllipse(pts, o) {
   let best = null;
@@ -750,7 +750,7 @@ function fitEllipse(pts, o) {
 
 // Classify, fit, and say how much of it to believe.
 //
-// Returns a plain object every time — there is no throwing path and no null
+// Returns a plain object every time - there is no throwing path and no null
 // return, because "this is not a balloon" is an answer the caller has to handle
 // anyway and it may as well arrive in the same shape as the others:
 //
@@ -763,8 +763,8 @@ function fitEllipse(pts, o) {
 //
 // A fill that escaped is refused before anything is fitted. It is worth being
 // blunt about why: an escaped fill is not a bad measurement of a balloon, it is
-// a good measurement of something else — the paper around the bubble, a whole
-// panel, the gutter — and it will very often fit a beautiful rectangle. Fitting
+// a good measurement of something else - the paper around the bubble, a whole
+// panel, the gutter - and it will very often fit a beautiful rectangle. Fitting
 // it and reporting a high confidence would be the single worst failure this
 // module could have, because the caller's fallback would never fire.
 export function fitBalloonShape(profile, opts = {}) {
@@ -809,8 +809,8 @@ export function fitBalloonShape(profile, opts = {}) {
   };
 
   // The rectangle is tried first, and only behind its gate. An ellipse fitted to
-  // a profile of constant width is degenerate — `C` goes to zero and the recovered
-  // `ry` to infinity — so the shape whose rows do not vary must be claimed by the
+  // a profile of constant width is degenerate - `C` goes to zero and the recovered
+  // `ry` to infinity - so the shape whose rows do not vary must be claimed by the
   // shape that expects them not to.
   const rect = fitRect(pts, o);
   if (rect && rect.gate && accepted(rect.ev, o)) return finish(rect);
@@ -828,7 +828,7 @@ export function fitBalloonShape(profile, opts = {}) {
 
 // The gap between the text and the outline. A fraction of the shape's shorter
 // side so a small SFX label is not eaten by a margin sized for a splash page,
-// bounded at both ends so it is never invisible and never dominant — and, by
+// bounded at both ends so it is never invisible and never dominant - and, by
 // construction, the same numbers `placementRect` already uses, so a narration
 // box laid out through this module gets the same inset it gets today.
 export function safetyInset(shape, opts = {}) {
@@ -852,7 +852,7 @@ export function shapeBounds(shape) {
 // The shape, inset by the safety margin. Shrinking an ellipse by subtracting the
 // inset from each semi-axis is not a true offset curve, but it gives exactly the
 // inset of clearance at the four extreme points and slightly more in between,
-// which errs the safe way, and it keeps the result an ellipse — which every
+// which errs the safe way, and it keeps the result an ellipse - which every
 // other function here needs it to be.
 function insetShape(shape, o) {
   const inset = Number.isFinite(o.inset) ? o.inset : safetyInset(shape, o);
@@ -874,15 +874,15 @@ function insetShape(shape, o) {
   };
 }
 
-// The largest rectangle that fits inside the shape — what placement should size
+// The largest rectangle that fits inside the shape - what placement should size
 // the text box to.
 //
 // For an ellipse of semi-axes a and b the answer is a√2 × b√2: about 70.7% of
 // the bounding box on each axis, with the rectangle's corners sitting exactly on
 // the curve. That is the number the current code is missing. Insetting the
 // detector's rect by 8% of its shorter side, capped at 14px, leaves a rectangle
-// at something like 95% of the bounding box — nearly a third wider than an oval
-// can actually hold — and the corners of that rectangle are outside the balloon.
+// at something like 95% of the bounding box - nearly a third wider than an oval
+// can actually hold - and the corners of that rectangle are outside the balloon.
 export function inscribedRect(shape, opts = {}) {
   if (!shape) return null;
   const o = { ...BALLOON_DEFAULTS, ...opts };
@@ -898,7 +898,7 @@ export function inscribedRect(shape, opts = {}) {
 // 'bottom', as everywhere else in the app).
 //
 // This is the function the line-breaker calls, once per candidate line count,
-// inside its own search — so it is pure, synchronous, allocation-light, O(lines)
+// inside its own search - so it is pure, synchronous, allocation-light, O(lines)
 // and has nothing to do with a canvas or the DOM.
 //
 // The one subtlety is which width a line gets. A line is a band of height
@@ -906,8 +906,8 @@ export function inscribedRect(shape, opts = {}) {
 // answers differ: the width at the band's centre is wider than the width at
 // whichever of its edges is further from the middle of the balloon. Taking the
 // centre's width is the mistake that looks right in a diagram and puts the
-// tallest glyphs of the top line — the capitals and the ascenders, which live at
-// the very top of the band — straight through the outline. So each line gets the
+// tallest glyphs of the top line - the capitals and the ascenders, which live at
+// the very top of the band - straight through the outline. So each line gets the
 // narrowest interior width across the whole band it occupies, which for an
 // ellipse is the width at the band edge furthest from the centre line.
 //
@@ -917,8 +917,8 @@ export function inscribedRect(shape, opts = {}) {
 // single width the breaker has always been given.
 //
 // The widths are the balloon's, not the text box's. A caller laying out inside a
-// box still owes the box its own padding — `BOX_PAD` on each edge, the 2px both
-// the editor and the exporter lay out inside — exactly as it does today when it
+// box still owes the box its own padding - `BOX_PAD` on each edge, the 2px both
+// the editor and the exporter lay out inside - exactly as it does today when it
 // hands the breaker `box.w - 4`.
 export function interiorLineWidths(shape, lineHeight, lineCount, valign = 'middle', opts = {}) {
   const n = Number.isFinite(+lineCount) ? Math.max(0, Math.floor(+lineCount)) : 0;
@@ -935,7 +935,7 @@ export function interiorLineWidths(shape, lineHeight, lineCount, valign = 'middl
   else top = s.cy - blockH / 2;
   // A block that fits is nudged back inside; a block that does not fit is left
   // centred, and its outermost lines simply come back narrow. Pretending
-  // otherwise — clamping a block taller than the balloon to the balloon — would
+  // otherwise - clamping a block taller than the balloon to the balloon - would
   // hand the breaker widths for a layout that cannot exist.
   if (blockH <= 2 * s.ry) top = clamp(top, s.cy - s.ry, s.cy + s.ry - blockH);
 

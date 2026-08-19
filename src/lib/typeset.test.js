@@ -73,7 +73,7 @@ describe('balanceLines — the block reads as a square or an oval', () => {
   // cannot buy a line at all.
   it('rejects a pinch with the interior-shortfall term switched off', () => {
     // `pinch: 0`, so nothing inside the dynamic program prefers a short line at
-    // the end — and the profile term alone still moves it there.
+    // the end - and the profile term alone still moves it there.
     const text = 'DDDDD EEEEEE JJJJJJJ FFF BBB FFF FFF CC';
     const blind = balanceLines(text, 13, chars, { pinch: 0, pinchHard: 0, hourglass: 0 });
     expect(dip(blind, 13)).toBeGreaterThan(0.12);
@@ -99,7 +99,7 @@ describe('balanceLines — the block reads as a square or an oval', () => {
   it('cannot buy a line at any weight', () => {
     // The line count is decided by raggedness and `lineCost` alone. Cranking the
     // profile penalty to absurdity may change where a block breaks and must
-    // never change how many pieces it breaks into — which is exactly what a
+    // never change how many pieces it breaks into - which is exactly what a
     // cross-candidate penalty did, and why it had to be kept small.
     const texts = [
       'STOP ALWAYS WHY NEVER HELP NEVER A NEVER I NEVER',
@@ -120,7 +120,7 @@ describe('balanceLines — the block reads as a square or an oval', () => {
   it('lets an hourglass stand when the text admits nothing else', () => {
     // Two unbreakable words that cannot share a line with anything, and a scrap
     // between them. There is no non-pinched breaking, and the rule degrades to a
-    // penalty rather than refusing to answer — which is the whole reason it is a
+    // penalty rather than refusing to answer - which is the whole reason it is a
     // penalty and not a rejection.
     const lines = balanceLines('WWWWWWWWWWWW ab cd WWWWWWWWWWWW', 13, chars);
     expect(lines).toEqual(['WWWWWWWWWWWW', 'ab cd', 'WWWWWWWWWWWW']);
@@ -170,7 +170,7 @@ describe('balanceLines — a short word is never left alone', () => {
   it('gives way for the one word that cannot be placed, and no others', () => {
     // "A", between two words too long to share a line with it, is a genuine
     // orphan no breaking of this text can avoid. It used to take the rule down
-    // with it for the whole paragraph — the relaxed pass dropped the constraint
+    // with it for the whole paragraph - the relaxed pass dropped the constraint
     // rather than pricing it, so "I" was stranded on a line of its own although
     // "I DIE" fits and obeys the rule. Priced, only the impossible one survives.
     //
@@ -201,7 +201,7 @@ describe('balanceLines — a word is only broken when nothing else will do', () 
 
   it('carries a word to the next line whole when it fits there', () => {
     // `WONDERFUL` is nine units in a ten-unit box, so it fits on a line of its
-    // own and is therefore never offered a break point at all — the gate is
+    // own and is therefore never offered a break point at all - the gate is
     // about fitting, not about length.
     expect(balanceLines('THE WONDERFUL THING', 10, chars)).toEqual([
       'THE',
@@ -235,8 +235,8 @@ describe('balanceLines — the user’s text is never touched', () => {
   });
 
   it('preserves interior spacing exactly, because a line is a slice', () => {
-    // Nothing is re-joined from a word list — every line is `text.slice(a, b)`
-    // between two word boundaries — so a double space the user typed survives.
+    // Nothing is re-joined from a word list - every line is `text.slice(a, b)`
+    // between two word boundaries - so a double space the user typed survives.
     expect(balanceLines('HELLO   THERE FRIEND OF MINE', 14, chars)).toEqual([
       'HELLO   THERE',
       'FRIEND OF MINE',
@@ -265,7 +265,7 @@ describe('balanceLines — determinism', () => {
   });
 
   it('breaks a tie toward fewer lines', () => {
-    // Two lines is never beaten by three when the cost is otherwise equal —
+    // Two lines is never beaten by three when the cost is otherwise equal -
     // `lineCost` is what makes that true, and it is what stops a perfectly
     // balanced tower of one-word lines from winning on raggedness alone.
     const lines = balanceLines('ALPHA BRAVO', 12, chars);
@@ -359,7 +359,7 @@ describe('balanceLines — one width per line', () => {
     const allow = w(lines.length);
     expect(lines).toEqual(['THE WORLD IS', 'ENDING AND NOBODY', 'CARES AT ALL']);
     expect(spread(fills(lines, allow))).toBeLessThan(0.1);
-    // Narrow, wide, narrow in absolute terms — the beehive the rules ask for.
+    // Narrow, wide, narrow in absolute terms - the beehive the rules ask for.
     expect(lines[1].length).toBeGreaterThan(lines[0].length);
     expect(lines[1].length).toBeGreaterThan(lines[2].length);
   });
@@ -414,7 +414,7 @@ describe('balanceLines — one width per line', () => {
     // than from a number that would put every line over the edge.
     expect(balanceLines(text, () => [NaN, 20], chars)).toEqual(balanceLines(text, 20, chars));
     // And nothing anywhere throws, divides by zero, or returns a NaN line. The
-    // widths these produce are degenerate, so the breaking is too — but every
+    // widths these produce are degenerate, so the breaking is too - but every
     // character the user typed still comes back, in order.
     const strip = (s) => s.replace(/[-\s]/g, '');
     for (const bad of [() => [], () => [0, -4], () => null, () => [Infinity], () => 12]) {
@@ -439,7 +439,7 @@ describe('balanceLines — one width per line', () => {
 // to refuse to do at all.
 
 // Every line is a slice of the input, and the hyphen is the one character the
-// module may add — so dropping a single trailing hyphen from any line has to
+// module may add - so dropping a single trailing hyphen from any line has to
 // leave a substring of what the user typed. That is the statement `box.text` and
 // the queue line depend on.
 const isSlice = (line, text) => text.includes(line) || text.includes(line.slice(0, -1));
@@ -497,7 +497,7 @@ describe('balanceLines — hyphenation, priced as a last resort', () => {
         for (let i = 0; i < lines.length; i++) {
           const frag = lines[i].endsWith('-') && i < lines.length - 1 ? lines[i].slice(0, -1) : lines[i];
           // Two letters on every fragment the block carries, three on the one
-          // that ends the word — the tail rule is also the anti-stub rule for
+          // that ends the word - the tail rule is also the anti-stub rule for
           // the end of a paragraph, since the last word's tail IS the last line.
           expect(letters(frag)).toBeGreaterThanOrEqual(
             i === lines.length - 1 ? TYPESET_DEFAULTS.minHyphenTail : TYPESET_DEFAULTS.minHyphenHead,
@@ -549,14 +549,14 @@ describe('balanceLines — hyphenation, priced as a last resort', () => {
   it('takes two in a row anyway when the text admits nothing else', () => {
     // The reference block is exactly this case: every line of `MURAMATA-SAN!` in
     // a five-unit balloon has to end in a hyphen, so the rule is a price and not
-    // a prohibition — the same shape the orphan rule has.
+    // a prohibition - the same shape the orphan rule has.
     expect(balanceLines('MURAMATA-SAN!', 5, chars)).toEqual(['MURA-', 'MATA-', 'SAN!']);
   });
 
   it('loses to an equally good block without one', () => {
     // `TERRIBLE` is one unit over a seven-unit box, and splitting it would give
     // a tidier block: (3, 6, 7) against (3, 8, 3). The tidier block is not
-    // chosen, because the hyphen costs more than the tidying is worth — and
+    // chosen, because the hyphen costs more than the tidying is worth - and
     // zeroing that one price is all it takes to flip the answer, which is how
     // the claim is shown to be about the price and not about anything else.
     const text = 'SAY TERRIBLE NOW';
@@ -578,7 +578,7 @@ describe('balanceLines — hyphenation, priced as a last resort', () => {
 
   it('leaves a sound effect alone', () => {
     // Every one of these is plain A-Z, so the pattern set will cheerfully offer
-    // points inside it — `KRRSH-` / `HHHH-` / `HHHHH` is what came out before
+    // points inside it - `KRRSH-` / `HHHH-` / `HHHHH` is what came out before
     // the vowel rule. A syllable has a vowel in it; these pieces do not.
     for (const sfx of [
       'KRRSHHHHHHHHHH', 'SHHHHHHHHHHHH', 'GRRRRRRRRRRRR', 'THHHHHHHHHHHH', 'MMMMMMMMMMMM',
@@ -624,7 +624,7 @@ describe('balanceLines — hyphenation, priced as a last resort', () => {
       for (let w = 4; w <= 20; w += 2) {
         const lines = balanceLines(text, w, chars);
         for (const l of lines) expect(isSlice(l, text)).toBe(true);
-        // Nothing dropped, nothing added, nothing reordered — hyphens and
+        // Nothing dropped, nothing added, nothing reordered - hyphens and
         // whitespace aside, the characters are the characters.
         const strip = (s) => s.replace(/[-\s]/g, '');
         expect(strip(lines.join(''))).toBe(strip(text));
@@ -676,7 +676,7 @@ describe('balanceLines — hyphenation, priced as a last resort', () => {
 // (`layoutBox` in exporter.js) ask this one function, with the box's own style
 // size and content width, which is what makes them break in the same places.
 // Under node there is no canvas, so `lineWidth` falls back to a stand-in metric
-// — enough to prove which branch is taken, which is what is under test here.
+// - enough to prove which branch is taken, which is what is under test here.
 describe('layoutLines — one answer for the editor and the export', () => {
   const style = { font: 'Comic Neue', size: 20, bold: false, italic: false, lineHeight: 1.1, letterSpacing: 0, align: 'center', uppercase: false };
 
@@ -707,7 +707,7 @@ describe('layoutLines — one answer for the editor and the export', () => {
 
   // The seam the balloon fitter will plug into. `layoutLines` grew a fifth
   // argument rather than a new function, because the whole value of this being
-  // one function is that the editor and the exporter cannot drift apart — and a
+  // one function is that the editor and the exporter cannot drift apart - and a
   // second entry point is exactly how they would.
   it('passes a per-line width through to the breaker', () => {
     // The node fallback metric is 0.55 * size per character, so these are

@@ -1,22 +1,6 @@
-//! The whole `/analyze` route, in one function.
+//! Page analysis pipeline combining text detection, panel detection, OCR, and reading order sorting.
 //!
-//! This is `detect.analyze` and `main._analyze_image` from the Python sidecar
-//! joined together: decode the page, run the text detector, run the panel
-//! detector, gather every OCR crop across the page, read them, stitch the text
-//! back per block, sort into Japanese reading order, guess dialogue from SFX,
-//! and emit the response the webview already knows how to render.
-//!
-//! The two passes over crops are not an optimisation, they are the original's
-//! structure and worth keeping: gathering first means the OCR sees one flat list
-//! and the per-block bookkeeping is a single count per block. A block whose
-//! whole-block crop was rejected contributes several crops instead of one, and
-//! its text is their text concatenated — which is why the response shape does
-//! not reveal which path a block took.
-//!
-//! The colour convention is `crops.rs`'s: the page is decoded to true RGB, the
-//! detector reads it as the BGR its weights were trained through (see
-//! `textdetector::preprocess`), and the crops are swapped back at the moment
-//! they reach the OCR.
+//! Flattens OCR crops into a single pass, stitches text back to blocks, and sorts into Japanese reading order.
 
 use image::{DynamicImage, GenericImageView};
 use ort::session::Session;
@@ -56,20 +40,12 @@ pub struct AnalyzeResponse {
     pub panels: Vec<[i32; 4]>,
 }
 
-/// Decode an uploaded page.
-///
-/// `cv2.imdecode(..., IMREAD_COLOR)` on the Python side, which drops any alpha
-/// channel and yields three 8-bit channels. `to_rgb8` does the same job, in the
-/// opposite channel order; see the module note.
+/// Decode an uploaded page, dropping any alpha channel to RGB.
 pub fn decode_image(bytes: &[u8]) -> Result<DynamicImage, String> {
     image::load_from_memory(bytes).map_err(|e| format!("could not decode image: {e}"))
 }
 
-/// Panel boxes for the page, or an empty list.
-///
-/// Best-effort on purpose, exactly as `detect_panels` is: a panel failure costs
-/// the reading order its macro layout and it falls back to a spatial sort, which
-/// is a degraded page rather than a failed one.
+/// Panel boxes for the page, or empty on failure (falling back to spatial sort).
 fn detect_panels(session: &mut Session, img: &DynamicImage) -> Vec<[i32; 4]> {
     match panels::detect(session, img, panels::FRAME_CLASS) {
         Ok(found) => found
@@ -86,11 +62,7 @@ fn detect_panels(session: &mut Session, img: &DynamicImage) -> Vec<[i32; 4]> {
     }
 }
 
-/// Detect, read and order one page.
-///
-/// `ocr` is `None` when the caller asked for detection only; every block then
-/// comes back with an empty `jp`, and the boxes, ordering and types are
-/// unaffected — they never depended on the text.
+/// Detect, read, and order text and panels on one page.
 pub fn analyze(
     img: &DynamicImage,
     detector: &mut TextDetector,
@@ -108,7 +80,7 @@ pub fn analyze(
     let page = Raster::from_rgb(&img.to_rgb8());
     let mask_raster = Raster::from_gray(&mask);
 
-    // Pass one: every crop on the page, flat, with a count per block.
+    // Pass 1: gather all crops flat with per-block counts.
     let mut texts: Vec<String> = Vec::new();
     let mut counts: Vec<usize> = Vec::with_capacity(blk_list.len());
     if let Some(engine) = ocr {
@@ -121,9 +93,7 @@ pub fn analyze(
             counts.push(c.len());
             queue.extend(c);
         }
-        // Pass two: read them. One at a time, because that is the arithmetic
-        // the golden fixtures were captured through — `_OCR_BATCH` defaults to
-        // 1 on the Python side for the same reason.
+        // Pass 2: OCR each crop individually to match golden fixtures.
         for crop in &queue {
             match engine.ocr(&crop.as_python_saw_it()) {
                 Ok(text) => texts.push(text),
@@ -135,7 +105,7 @@ pub fn analyze(
         }
     }
 
-    // Pass three: stitch the text back onto the blocks.
+    // Pass 3: stitch recognized text back onto blocks.
     let mut blocks: Vec<Block> = Vec::with_capacity(blk_list.len());
     let mut cursor = 0usize;
     for (i, blk) in blk_list.iter().enumerate() {
@@ -155,14 +125,8 @@ pub fn analyze(
 }
 
 /// Put detected blocks in reading order, label them, and number them.
-///
-/// Split out from [`analyze`] because it is the half that depends on the panel
-/// boxes and nothing else: given the same blocks and the same panels it is a
-/// pure function, which is what lets the golden test check ordering
-/// independently of how the panels were found.
 pub fn order_and_type(blocks: &[Block], panels: &[[i32; 4]]) -> Vec<AnalyzeLine> {
-    // An empty panel list means "no panels", not "zero panels" — the sort falls
-    // back to a page-wide spatial band sort. `detect.py` spells this `or None`.
+    // Empty panels fall back to page-wide spatial band sort.
     let panel_ref = if panels.is_empty() { None } else { Some(panels) };
     let mut ordered = sort_bubbles_by_reading_order(blocks, ReadingDirection::Rtl, panel_ref);
     assign_types(&mut ordered);
@@ -239,16 +203,7 @@ mod tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/analyze-golden")
     }
 
-    /// Run the pipeline over the fixture pages and diff every field.
-    ///
-    /// This is the cutover gate. Everything else in `detect/` pins one stage
-    /// against one behaviour; this asserts that the composition of all of them
-    /// is the same program the Python sidecar was, on real scans, field for
-    /// field — the same blocks in the same reading order with the same text,
-    /// the same types, the same panels.
-    ///
-    /// Returns the number of pages it actually compared, or `None` when the
-    /// models or fixtures are missing.
+    /// Runs the pipeline over fixture pages and asserts exact match with sidecar output.
     fn run_e2e_golden(pages: &[usize]) -> Option<usize> {
         let Some(models) = models_dir() else {
             eprintln!("skipping e2e golden: HOME not set");
@@ -308,30 +263,12 @@ mod tests {
                     got.img_width, got.img_height, page.img_width, page.img_height
                 ));
             }
-            // Panels, box for box and in order. This used to be a 0.95-IoU
-            // one-to-one match, because `panels.rs` letterboxed the page to a
-            // 640 square while Ultralytics letterboxes to the nearest stride-32
-            // rectangle (these pages enter the network at 640x480), and the
-            // resulting pixel-or-three of drift also reshuffled the confidence
-            // order. Both are fixed, and the fixture's own numbers are now
-            // reproduced exactly — so this asserts equality, which is the only
-            // form of the assertion that would have caught the drift.
+            // Assert exact panel match with golden fixture.
             if got.panels != page.panels {
                 say(format!("panels {:?}, expected {:?}", got.panels, page.panels));
             }
 
-            // The lines are asserted twice, and the split is deliberate.
-            //
-            // First: **content**, matched to the fixture by bounding box rather
-            // than by position. Matching by box rather than by index means a
-            // single ordering difference reports itself once, as an ordering
-            // difference, instead of as a cascade of mismatched text.
-            //
-            // Second: **order**, as shipped — `got.lines` against `page.lines`,
-            // element for element, with our own panels feeding the sort. That
-            // ordering is the whole reason the panel detector exists, and it is
-            // the composition of every stage: blocks from the text detector,
-            // panels from the YOLO, the topological sort over both.
+            // Verify line content and reading order separately for clearer failure reporting.
             if got.lines.len() != page.lines.len() {
                 say(format!("{} lines, expected {}", got.lines.len(), page.lines.len()));
             }
@@ -346,8 +283,7 @@ mod tests {
                 if g.line_type != e.line_type {
                     say(format!("line at {:?}: type {:?}, expected {:?}", e.r#box, g.line_type, e.line_type));
                 }
-                // The fixture holds the font size as Python's JSON encoder
-                // printed it, so compare at f32 print precision.
+                // Compare font size at f32 print precision.
                 if (g.font_size - e.font_size).abs() > 1e-4 {
                     say(format!(
                         "line at {:?}: font_size {}, expected {}",
@@ -382,11 +318,7 @@ mod tests {
 
     #[test]
     fn analyze_matches_the_python_sidecar_on_every_golden_page() {
-        // All three pages run by default. Beam-search OCR over 34 blocks was
-        // the reason to expect this would need gating behind `#[ignore]`, and it
-        // does not: the whole fixture is about 30 seconds in a debug build,
-        // which is worth paying every run for the only test that checks the
-        // replacement is the same program as the thing it replaces.
+        // Runs all fixture pages (takes ~30s in debug build).
         run_e2e_golden(&[0, 1, 2]);
     }
 }

@@ -1,29 +1,9 @@
-//! The handful of OpenCV raster operations the text detector's post-processing
-//! depends on, reimplemented bit-for-bit.
+//! Bit-for-bit OpenCV raster operations for text detector post-processing.
 //!
-//! Why bit-for-bit rather than "close enough": every one of these sits upstream
-//! of a hard threshold. The bilinear resize feeds the network, so a different
-//! interpolation is a different image and therefore a different prediction. The
-//! contour tracer decides how many text lines exist at all. The polygon fill
-//! decides each line's score, which is compared against 0.6 — and on a real page
-//! the closest call measured was 0.567 against 0.651, a 3% band. An
-//! approximation anywhere here does not degrade gracefully; it adds or drops a
-//! whole line, which then adds or drops a whole text block.
-//!
-//! Each function was written against the OpenCV source it replaces and then
-//! diffed against `cv2` over thousands of random inputs plus the real 1024x1024
-//! probability maps from three manga pages. Where a rule looks arbitrary it is
-//! because OpenCV's is.
+//! Re-implements OpenCV's fixed-point linear resize, Suzuki-Abe border following (`findContours`),
+//! Bresenham scanline polygon fill (`fillPoly`), and contour mean scoring (`box_score_fast`).
 
-/// `cv2.resize(..., INTER_LINEAR)` for 8-bit images, 1 or 3 channels.
-///
-/// OpenCV's linear resize is fixed-point, not float: the two tap weights are
-/// quantised to 1/2048ths and the vertical pass reassembles them with a
-/// deliberately lossy shift sequence. Reproducing the shifts matters — a
-/// straightforward float bilinear differs by a count or two per pixel, and this
-/// function prepares the network's input.
-///
-/// `src` is `sh * sw * cn` bytes, interleaved. The output is `dh * dw * cn`.
+/// `cv2.resize(..., INTER_LINEAR)` for 8-bit images using OpenCV's 11-bit fixed-point arithmetic.
 pub fn resize_linear_u8(src: &[u8], sw: usize, sh: usize, cn: usize, dw: usize, dh: usize) -> Vec<u8> {
     assert_eq!(src.len(), sw * sh * cn);
     if sw == dw && sh == dh {
@@ -32,9 +12,7 @@ pub fn resize_linear_u8(src: &[u8], sw: usize, sh: usize, cn: usize, dw: usize, 
     let (xo, xa) = axis_taps(dw, sw);
     let (yo, ya) = axis_taps(dh, sh);
 
-    // The horizontal pass is shared between the (up to two) destination rows
-    // that sample the same source row, so it is computed once per source row and
-    // kept in a two-slot cache that slides down the image.
+    // Shared horizontal row cache (up to two destination rows).
     let hrow = |sy: usize, out: &mut Vec<i64>| {
         let s = &src[sy * sw * cn..(sy + 1) * sw * cn];
         for d in 0..dw {
@@ -74,11 +52,7 @@ pub fn resize_linear_u8(src: &[u8], sw: usize, sh: usize, cn: usize, dw: usize, 
     dst
 }
 
-/// Per-output-pixel source index and the two 11-bit tap weights.
-///
-/// The sample position is `(d + 0.5) * scale - 0.5` — pixel *centres*, not
-/// corners. Getting that half-pixel wrong shifts the whole image by half a
-/// sample, which is invisible by eye and fatal to a golden comparison.
+/// Computes source indices and 11-bit tap weights for pixel centres: `(d + 0.5) * scale - 0.5`.
 fn axis_taps(dsize: usize, ssize: usize) -> (Vec<usize>, Vec<(i64, i64)>) {
     const COEF_SCALE: f32 = 2048.0;
     let scale = ssize as f64 / dsize as f64;
@@ -108,16 +82,7 @@ fn axis_taps(dsize: usize, ssize: usize) -> (Vec<usize>, Vec<(i64, i64)>) {
 /// One traced border, in image coordinates.
 pub type Contour = Vec<(i32, i32)>;
 
-/// `cv2.findContours(bitmap, RETR_LIST, CHAIN_APPROX_SIMPLE)`.
-///
-/// Suzuki-Abe border following, transcribed from OpenCV's `icvFetchContour` down
-/// to its in-place marking scheme: a traced pixel is stamped either `2` or a
-/// negative sentinel depending on whether its right-hand neighbour was
-/// background, and that distinction is the only thing stopping the raster scan
-/// from re-detecting the same hole border on the next column.
-///
-/// Returns outer and hole borders alike (that is what `RETR_LIST` means), in
-/// OpenCV's order — which is the reverse of the order they are found in.
+/// `cv2.findContours(bitmap, RETR_LIST, CHAIN_APPROX_SIMPLE)` via Suzuki-Abe border following.
 pub fn find_contours(bitmap: &[bool], w: usize, h: usize) -> Vec<Contour> {
     // Direction index 0 is +x, counting counter-clockwise on screen (y down).
     const DX: [i32; 8] = [1, 1, 0, -1, -1, -1, 0, 1];
@@ -125,8 +90,7 @@ pub fn find_contours(bitmap: &[bool], w: usize, h: usize) -> Vec<Contour> {
     const NBD: i16 = 2;
     const MARK: i16 = -126; // (schar)(NBD | -128)
 
-    // OpenCV's `findContours` pads by one and offsets the result back, so that
-    // foreground touching the image edge is still bounded by background.
+    // Pad by 1 to bound edge-touching foreground by background.
     let (bw, bh) = (w + 2, h + 2);
     let mut f = vec![0i16; bw * bh];
     for y in 0..h {
@@ -137,8 +101,7 @@ pub fn find_contours(bitmap: &[bool], w: usize, h: usize) -> Vec<Contour> {
         }
     }
 
-    // Neighbour offsets as flat indices, duplicated to 16 so the scan below can
-    // run past the end without wrapping arithmetic — OpenCV does the same.
+    // 16 flat neighbour offsets.
     let mut deltas = [0isize; 16];
     for i in 0..16 {
         deltas[i] = DX[i & 7] as isize + DY[i & 7] as isize * bw as isize;
@@ -191,7 +154,7 @@ fn fetch_contour(
     }
 
     if s == s_end {
-        // An isolated pixel: no neighbour to walk to, so the border is itself.
+        // Isolated pixel.
         f[i0] = mark;
         return vec![pt];
     }
@@ -211,18 +174,14 @@ fn fetch_contour(
         }
         s &= 7;
 
-        // OpenCV's "check right bound", written there as an unsigned compare of
-        // `s - 1` against `s_end`: it is true exactly when the sweep passed
-        // direction 0, i.e. when this pixel's right-hand neighbour is background.
+        // Right-bound check: true when right neighbour is background.
         if s >= 1 && s <= s_start {
             f[i3] = mark;
         } else if f[i3] == 1 {
             f[i3] = nbd;
         }
 
-        // CHAIN_APPROX_SIMPLE: emit a point only where the walk turns, which
-        // keeps every corner and drops the interiors of straight runs. Both the
-        // convex hull and the polygon fill are unchanged by that.
+        // CHAIN_APPROX_SIMPLE: emit points only where the boundary turns.
         if s != prev_s {
             out.push(pt);
             prev_s = s;
@@ -239,12 +198,7 @@ fn fetch_contour(
     out
 }
 
-/// `cv::Line` with `LINE_8`: a Bresenham walk, drawn left-to-right.
-///
-/// The left-to-right normalisation is not cosmetic. OpenCV's `LineIterator` is
-/// constructed with `leftToRight = true` from `fillPoly`, so a segment traced
-/// right-to-left produces the *same* pixels rather than the mirror-image
-/// tie-breaks an unnormalised Bresenham would give.
+/// Left-to-right Bresenham line drawer matching OpenCV's `LINE_8` / `LineIterator`.
 fn line8(mask: &mut [u8], w: usize, h: usize, p0: (i32, i32), p1: (i32, i32)) {
     let (a, b) = if p1.0 < p0.0 { (p1, p0) } else { (p0, p1) };
     let mut dx = b.0 - a.0;
@@ -272,13 +226,7 @@ fn line8(mask: &mut [u8], w: usize, h: usize, p0: (i32, i32), p1: (i32, i32)) {
 const XY_SHIFT: i64 = 16;
 const XY_ONE: i64 = 1 << XY_SHIFT;
 
-/// `cv2.fillPoly` for one closed polygon with integer vertices.
-///
-/// Two passes, as in OpenCV: the outline is stroked with `LINE_8` and the
-/// interior is filled by even-odd scanline. Both are needed — the scanline pass
-/// alone leaves the boundary ragged, because its span is `ceil(x_left)` to
-/// `floor(x_right)` in 16.16 fixed point and so stops short of partially covered
-/// edge pixels.
+/// `cv2.fillPoly` for one closed polygon (outline stroked with LINE_8, interior filled via scanline).
 pub fn fill_poly(mask: &mut [u8], w: usize, h: usize, poly: &[(i32, i32)]) {
     if poly.is_empty() {
         return;
@@ -291,8 +239,7 @@ pub fn fill_poly(mask: &mut [u8], w: usize, h: usize, poly: &[(i32, i32)]) {
         if prev.1 != cur.1 {
             let xp = (prev.0 as i64) << XY_SHIFT;
             let xc = (cur.0 as i64) << XY_SHIFT;
-            // C integer division: truncates toward zero, and the sign works out
-            // the same whichever endpoint is on top.
+            // Integer division truncating toward zero.
             let d = (xc - xp) / (cur.1 - prev.1) as i64;
             if prev.1 < cur.1 {
                 edges.push((prev.1, cur.1, xp, d));
@@ -331,13 +278,7 @@ pub fn fill_poly(mask: &mut [u8], w: usize, h: usize, poly: &[(i32, i32)]) {
     }
 }
 
-/// `box_score_fast`: the mean of `pred` over the pixels a contour encloses.
-///
-/// DBNet's shrink map is thresholded at 0.3 to find candidate regions but scored
-/// on the raw probabilities, so a blob that is barely over the threshold
-/// everywhere scores low and is dropped. The mean is taken over the *contour*,
-/// not over its bounding box — a diagonal line of text would otherwise be scored
-/// mostly on the white space around it.
+/// Computes the mean probability of `pred` over the pixels enclosed by `contour`.
 pub fn box_score_fast(pred: &[f32], pw: usize, ph: usize, contour: &[(i32, i32)]) -> f32 {
     if contour.is_empty() {
         return 0.0;
@@ -437,9 +378,7 @@ mod tests {
 
     #[test]
     fn find_contours_finds_a_hole_as_its_own_border() {
-        // RETR_LIST returns holes too. They matter here only in that they must
-        // not be *missed* — a missed hole border means the outer border was
-        // traced wrong.
+        // RETR_LIST returns holes too, ensuring hole borders are properly detected.
         let (b, w, h) = bm(&[
             ".......",
             ".#####.",

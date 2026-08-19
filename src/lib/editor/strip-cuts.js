@@ -3,14 +3,14 @@
 // The pages a webtoon arrives as are not the pages it ships as. The source
 // slices are whatever the raw came cut into; the delivered slices are whatever
 // the target site wants (a few thousand pixels of height each), and the two have
-// nothing to do with one another. So the exporter re-cuts the column — and the
+// nothing to do with one another. So the exporter re-cuts the column - and the
 // only thing it must never do is cut through lettering. A seam through art is
 // invisible; a seam through a speech balloon's text is the one defect a reader
 // cannot un-see, and it cannot be fixed downstream.
 //
 // This file is that decision and nothing else: no canvas, no store, no images.
 // It takes the geometry of the chapter and returns the y positions to cut at, in
-// strip pixels, which is the space `stripOffsets(pages)` answers in at zoom 1 —
+// strip pixels, which is the space `stripOffsets(pages)` answers in at zoom 1 -
 // the same space the stitched export canvas works in.
 
 import { stripOffsets } from './strip.js';
@@ -18,12 +18,12 @@ import { stripOffsets } from './strip.js';
 // How much clear space a cut must leave above and below any lettering. A cut
 // that grazes a box's edge is as bad as one through it: the glyph outlines,
 // shadows and roughening all overflow the box rect (see `layoutBox` in
-// exporter.js), and this module cannot measure text — it has no fonts and no
+// exporter.js), and this module cannot measure text - it has no fonts and no
 // DOM. The pad is the allowance for that overflow as much as it is breathing
 // room, which is why it is generous rather than tight.
 export const CUT_PAD = 48;
 
-// A slice may run short of the target — the cut moved up to clear a box — but
+// A slice may run short of the target - the cut moved up to clear a box - but
 // not to nothing, and it may run long, but not so long the site rejects it.
 // Both are expressed against the target rather than in pixels so they scale with
 // whatever the user asked for.
@@ -66,7 +66,7 @@ export function boxSpanY(box) {
 // Merging is what makes the walk below finite: against disjoint bands, stepping
 // past a band's bottom edge lands in clear space by construction, so a cut needs
 // at most one move rather than a loop of them. Two balloons a few pixels apart
-// are one band here, and correctly so — the gap between them is not somewhere a
+// are one band here, and correctly so - the gap between them is not somewhere a
 // cut can go.
 export function forbiddenBands(pages, pad = CUT_PAD) {
   const { tops } = stripOffsets(pages);
@@ -89,7 +89,7 @@ export function forbiddenBands(pages, pad = CUT_PAD) {
 
 // The band a y falls strictly inside. Strictly, because a cut sitting exactly on
 // a band edge is already the answer "clear by exactly one pad" and needs no
-// move — moving it would be a move to where it already is.
+// move - moving it would be a move to where it already is.
 function bandAt(bands, y) {
   for (const b of bands) {
     if (y <= b.top) return null; // sorted: nothing further down can contain y
@@ -101,7 +101,7 @@ function bandAt(bands, y) {
 // Plan the whole chapter's cuts.
 //
 // Returns `{ cuts, warnings }` where `cuts` is the boundaries of the output
-// files — `[0, y1, y2, …, total]`, so slice n is `cuts[n]..cuts[n+1]` and there
+// files - `[0, y1, y2, …, total]`, so slice n is `cuts[n]..cuts[n+1]` and there
 // is one fewer file than there are numbers. A chapter with no height at all
 // returns no cuts rather than a zero-height slice.
 //
@@ -110,17 +110,17 @@ function bandAt(bands, y) {
 // cut MOVES, and which way it moves is the whole policy:
 //
 //   · UP to the band's top, by preference. Up shortens the current slice and
-//     lengthens the next, which is the harmless direction — the reader sees the
+//     lengthens the next, which is the harmless direction - the reader sees the
 //     same column either way and no file grows.
 //   · DOWN past the band's bottom when up would leave a runt: a cut less than
 //     MIN_SLICE_RATIO of the target below the previous one is a sliver of a
 //     file, and a site that pages by image would show it as a flash.
 //   · Neither, when the bands are dense enough that up is a runt and down is
 //     past MAX_SLICE_RATIO of the target. Then the cut goes to whichever band
-//     edge is nearer the ideal — the least-bad file size, still not through
+//     edge is nearer the ideal - the least-bad file size, still not through
 //     lettering.
 //   · Through the lettering, only when the band is taller than the widest slice
-//     allowed AND its top is already at or above the previous cut — i.e. the
+//     allowed AND its top is already at or above the previous cut - i.e. the
 //     previous cut is itself that band's top and there is nowhere left to
 //     retreat to. One 3000px box against a 1000px target does that, and so does
 //     a run of boxes packed close enough to fuse into 3000px of band: either way
@@ -143,7 +143,7 @@ export function planStripCuts(pages, targetHeight, pad = CUT_PAD) {
 
   // Whole pixels, always. Two consecutive slices are drawn from the same page
   // at `tops[i] - y0`, and a fractional y0 would resample the art differently on
-  // each side of the seam — the one place in this app where a half-pixel is
+  // each side of the seam - the one place in this app where a half-pixel is
   // visible as a line across the page. The `prev + 1` floor is not cosmetic: it
   // is what guarantees the walk terminates when a rounded cut would otherwise
   // land back on the one before it.
@@ -179,7 +179,7 @@ export function planStripCuts(pages, targetHeight, pad = CUT_PAD) {
       push(ideal - up <= down - ideal ? up : down);
     } else {
       // The band already started at or above the previous cut and does not end
-      // within a legal slice — the lettering here is taller than any file may
+      // within a legal slice - the lettering here is taller than any file may
       // be. Nothing clears it.
       warnings.push({ y: Math.round(ideal), reason: 'lettering-taller-than-slice' });
       push(ideal);

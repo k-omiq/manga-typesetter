@@ -1,8 +1,8 @@
 // Real user-font loading: FontFace registration + IndexedDB persistence.
 //
 // A font here is a family group, not a file. Scanlation cannot use faux bold or
-// faux italic — a synthesised slant next to real lettering is immediately
-// visible, and a smeared 700 of a brush face looks like a mistake — so a family
+// faux italic - a synthesised slant next to real lettering is immediately
+// visible, and a smeared 700 of a brush face looks like a mistake - so a family
 // holds up to four real faces (regular, bold, italic, boldItalic) and each one
 // is handed to the browser with the CSS descriptors that describe it:
 //
@@ -14,7 +14,7 @@
 // `font-weight:700`, and the browser picks the real 700 face when one has been
 // registered and synthesises only when none has. Inventing per-face family
 // names ("Manga Temple Bold") would instead have meant teaching every one of
-// those call sites — and every style.font string already saved to disk — about
+// those call sites - and every style.font string already saved to disk - about
 // names that did not exist when the document was written.
 import { app, toast, noteFontsChanged } from './store.svelte.js';
 import { FACE_SLOTS, emptyFaces } from './data.js';
@@ -32,7 +32,7 @@ export const SLOT_LABEL = {
   boldItalic: 'Bold Italic',
 };
 
-// ---- pure helpers (no IndexedDB, no DOM — see fonts.test.js) ----
+// ---- pure helpers (no IndexedDB, no DOM - see fonts.test.js) ----
 
 // Parse the real PostScript name (nameID 6) out of font file bytes (TrueType,
 // OpenType/CFF, or TTC collection). Photoshop identifies installed fonts by
@@ -162,7 +162,7 @@ export function parsePostScriptName(buf) {
 
       if (platformID === 3 || platformID === 0) {
         // UTF-16BE name records with odd byte length decode with a trailing replacement char (\uFFFD),
-        // breaking PostScript matching — truncate to even length before decoding.
+        // breaking PostScript matching - truncate to even length before decoding.
         const evenLen = slice.length - (slice.length % 2);
         const evenSlice = evenLen === slice.length ? slice : slice.subarray(0, evenLen);
         try {
@@ -332,14 +332,14 @@ function findGroup(fontName) {
 // Not the same question as "is there a face for this exact slot", which is what
 // this used to answer and why it was wrong: CSS matches a family per axis, not
 // per combination. A family with regular + bold and no italics, asked for bold
-// italic, gets the real bold face with only the slant synthesised — reporting
+// italic, gets the real bold face with only the slant synthesised - reporting
 // "no boldItalic face, so both are faux" would tell Photoshop to smear a weight
 // the renderer here never smeared.
 //
 // The order below is CSS font matching's order, narrowed to the two axes this
 // app has: slant first (an italic request prefers any italic face), then weight
 // within what is left. `fauxBold` is true only when bold was asked for and the
-// chosen face is not a bold one — a family that owns ONLY a bold face renders
+// chosen face is not a bold one - a family that owns ONLY a bold face renders
 // its regular as that bold face, heavier than asked but not synthesised, and
 // the export has to name the face that was really used or Photoshop redraws a
 // regular the app never showed.
@@ -373,14 +373,14 @@ const recordKey = (name, slot) => `${name}::${slot}`;
 
 // v1 stored one record per font, keyed by name. v2 stores one per face, keyed
 // by `name::slot`. An object store's keyPath cannot be changed in place, so the
-// upgrade reads the old rows, drops the store and rebuilds it — which is safe
+// upgrade reads the old rows, drops the store and rebuilds it - which is safe
 // only because it all happens inside the one versionchange transaction, where
 // the getAll callback still runs before the transaction commits.
 //
 // Every v1 record becomes the regular face of a family named exactly what it
 // was named before. Re-inferring the family from the filename here would be
-// tidier — a user's old "MangaTemple Bold" entry really is the bold face of
-// "MangaTemple" — but it would rename fonts underneath documents that already
+// tidier - a user's old "MangaTemple Bold" entry really is the bold face of
+// "MangaTemple" - but it would rename fonts underneath documents that already
 // reference them by name, which is a worse outcome than one legacy family that
 // happens to look bold.
 //
@@ -389,7 +389,7 @@ const recordKey = (name, slot) => `${name}::${slot}`;
 // never changed and became a hang the moment it did: an open at a new version
 // waits for every other connection to the same database to close, and a
 // connection nobody holds a reference to cannot be closed. `onversionchange`
-// is the other half — it fires on THIS connection when another context wants
+// is the other half - it fires on THIS connection when another context wants
 // to upgrade, and closing there is what lets that other one proceed instead of
 // blocking on us.
 //
@@ -437,7 +437,7 @@ function openDB() {
     req.onerror = () => reject(req.error);
   });
   // A failed open must not be the answer for the rest of the session: the two
-  // reasons it fails — blocked by another window, and an upgrade that aborted —
+  // reasons it fails - blocked by another window, and an upgrade that aborted -
   // are both things the user can clear without reloading.
   dbPromise.catch(() => {
     dbPromise = null;
@@ -549,7 +549,7 @@ export async function _restoreFontRecords(records) {
     const slot = FACE_SLOTS.includes(rec.slot) ? rec.slot : 'regular';
     // The same guard `addFontFile` applies. A record predating the built-in of
     // that name would otherwise put a second entry with the same name in both
-    // font menus, and `findGroup` — built-ins first — would then answer for the
+    // font menus, and `findGroup` - built-ins first - would then answer for the
     // wrong one.
     if (app.fonts.builtin.some((f) => f.name === rec.name)) continue;
 
@@ -570,7 +570,7 @@ export async function _restoreFontRecords(records) {
   // these arrive was laid out and measured against the fallback family, so its
   // shaped line breaks and its fitted box heights are answers to the wrong
   // metrics until something re-asks. Boxes on pages nobody has opened are
-  // included — the export reaches those too. See `noteFontsChanged`.
+  // included - the export reaches those too. See `noteFontsChanged`.
   if (records.length) noteFontsChanged();
 }
 
@@ -582,8 +582,8 @@ export async function restoreFonts() {
     records = await dbGetAll();
   } catch (e) {
     // Said out loud rather than swallowed. The library coming up empty is
-    // indistinguishable from having no fonts, and the two reasons this throws —
-    // another window holding the database open, and an upgrade that aborted —
+    // indistinguishable from having no fonts, and the two reasons this throws -
+    // another window holding the database open, and an upgrade that aborted -
     // are both things the user can act on once they know.
     toast(`Font library unavailable — ${e?.message || e}`);
     return;
@@ -626,8 +626,8 @@ export async function addFontFile(file, target = null) {
   try {
     await dbPut({ key: recordKey(family, slot), name: family, slot, file: file.name, data: buf });
   } catch (e) {
-    // The face is loaded and usable for this session — it is the persistence
-    // that failed — so this is a warning and not a rejection. Reported
+    // The face is loaded and usable for this session - it is the persistence
+    // that failed - so this is a warning and not a rejection. Reported
     // separately from the load failure above because the two ask the user for
     // completely different things.
     toast(`"${family}" loaded but could not be saved — ${e?.message || e}`);
@@ -638,9 +638,9 @@ export async function addFontFile(file, target = null) {
 // The drop/browse entry point. One toast for the whole drop rather than one per
 // file, since the point of grouping is that four files are one font.
 export async function addFontFiles(files) {
-  // Faces, not files. Two files can infer the same family and slot —
+  // Faces, not files. Two files can infer the same family and slot -
   // `Wildwords.ttf` beside `Wildwords-Regular.ttf` is a common foundry pairing
-  // — and the second overwrites the first, so counting files claimed a face the
+  // - and the second overwrites the first, so counting files claimed a face the
   // library card underneath would not show.
   const added = new Map();
   for (const f of [...files]) {
@@ -656,7 +656,7 @@ export async function addFontFiles(files) {
   }
 }
 
-// Drop a single face. The family goes with it when that was its last one —
+// Drop a single face. The family goes with it when that was its last one -
 // an entry with no real face at all would offer the letterer a font that
 // renders as nothing but the fallback.
 export async function removeFontFace(name, slot) {

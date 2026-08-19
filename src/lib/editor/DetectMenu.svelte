@@ -1,5 +1,5 @@
 <script>
-  // Detection has two scopes and one artefact — more than a pill can hold, so
+  // Detection has two scopes and one artefact - more than a pill can hold, so
   // the pill opens this instead. Per-page detection has never had a UI before;
   // it was whole-chapter or nothing, which is a long wait to fix one page.
   import { app, toast } from '../store.svelte.js';
@@ -19,7 +19,7 @@
   const canSaveJson = $derived(app.pages.some((p) => p?.detect));
 
   // Escape and choosing an item both hand the keyboard back to the pill that
-  // opened the menu — otherwise focus falls to the document and the next Tab
+  // opened the menu - otherwise focus falls to the document and the next Tab
   // starts over from the top of the page, which is a long way from here.
   // Dismissal by pointer does not: the pointer has already said where it wants
   // to be.
@@ -39,7 +39,7 @@
     close({ restoreFocus: true });
   }
 
-  // The menu is opened from a pill, so the keyboard has to arrive with it —
+  // The menu is opened from a pill, so the keyboard has to arrive with it -
   // landing on the first item the user can actually use. Roving arrow-key
   // movement between three items is not worth its own state machine: Tab
   // already walks them in order and Escape gets out.
@@ -66,7 +66,7 @@
 
   // Closed first, then run: detection takes minutes, and a menu hanging open
   // over the canvas for all of it is not a menu any more. Focus goes back to
-  // the pill for the same reason Escape sends it there — the item that had it
+  // the pill for the same reason Escape sends it there - the item that had it
   // is about to leave the DOM.
   function run(fn) {
     close({ restoreFocus: true });
@@ -74,13 +74,13 @@
   }
 
   // The chapter's detected text as one document, through the exporter's single
-  // serialiser — the same file the export dialog's JSON format writes, so the
+  // serialiser - the same file the export dialog's JSON format writes, so the
   // two can never drift. Scope is the whole chapter: choosing between scopes is
   // what that dialog is for, and the detection JSON is a chapter-level artefact.
   //
   // app.exporting is held here rather than inside exportTextJson, exactly as
   // exportImages holds it, so the export pill greys out while the save dialog
-  // is up. The catch mirrors exportImages' too — nothing else is left to
+  // is up. The catch mirrors exportImages' too - nothing else is left to
   // report a rejected native write.
   async function saveDetectionJson() {
     close({ restoreFocus: true });

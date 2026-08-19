@@ -5,15 +5,15 @@
 //
 // This reverses the earlier decision, which was explicit-only with deliberately
 // no prefers-color-scheme fallback so the app could never change appearance
-// underfoot. In review that read as the app ignoring the machine it runs on —
+// underfoot. In review that read as the app ignoring the machine it runs on -
 // a desktop window that stays light while everything around it goes dark at
-// sunset looks broken, not stable — and the two explicit modes are still there
+// sunset looks broken, not stable - and the two explicit modes are still there
 // for anyone who wants it pinned. `mode` is what the user chose; `resolved` is
 // what is actually on screen, which is what the Settings control needs to show
 // both of at once.
 
 // Mirrored, along with the light/dark/system resolution below, by the inline
-// pre-paint script in index.html — which puts [data-theme] on the root before
+// pre-paint script in index.html - which puts [data-theme] on the root before
 // the first frame, because this module cannot run until the bundle has loaded
 // and by then the wrong theme has already been painted. Change either the key
 // or the rule and the other has to move with it, or the app flashes again.
@@ -25,7 +25,7 @@ export const theme = $state({ mode: 'system', resolved: 'light' });
 // "no restart": a mid-session switch in System Settings re-runs `apply` and the
 // app follows within the frame. Creating the query per call would leak a
 // listener per theme change, and dropping the listener would mean the app only
-// picked the system up at launch — which is the behaviour being replaced.
+// picked the system up at launch - which is the behaviour being replaced.
 const mq =
   typeof window !== 'undefined' && window.matchMedia
     ? window.matchMedia('(prefers-color-scheme: dark)')
@@ -45,7 +45,7 @@ export function setTheme(mode) {
   try {
     localStorage.setItem(KEY, theme.mode);
   } catch {
-    /* ignore — a missing preference just means following the system next launch */
+    /* ignore - a missing preference just means following the system next launch */
   }
 }
 
@@ -56,8 +56,8 @@ export function initTheme() {
   } catch {
     /* ignore */
   }
-  // Only 'light' and 'dark' are choices someone made; anything else — including
-  // no stored value at all, and including a value written by an older build —
+  // Only 'light' and 'dark' are choices someone made; anything else - including
+  // no stored value at all, and including a value written by an older build -
   // falls through to the system.
   setTheme(saved);
   // Fires only while the preference is 'system'; `apply` reads `theme.mode`

@@ -1,28 +1,8 @@
-//! The arithmetic every ONNX vision model here needs, with no model attached.
-//!
-//! Split out because it is the part that can be tested without a 100 MB
-//! download and without a session: letterboxing, the inverse mapping back to
-//! page coordinates, IoU and non-maximum suppression are ordinary geometry, and
-//! they are also where a port like this actually goes wrong. A box that is off
-//! by the padding offset still looks like a plausible box.
+//! Vision geometry helpers: letterboxing, inverse coordinate mapping, IoU, and NMS.
 
-/// How an image was fitted into the model input, and everything needed to map a
-/// prediction back out of it.
+/// Letterbox parameters for fitting images into vision model inputs and mapping predictions back.
 ///
-/// This is Ultralytics' `LetterBox` in prediction mode, and the shape it
-/// produces is the thing most easily got wrong: **not a square**. `Model.predict`
-/// sets `rect=True` (`ultralytics/engine/model.py:524`), which makes the
-/// predictor build `LetterBox(auto=True, stride=32)`
-/// (`ultralytics/engine/predictor.py:197-203`), and `auto=True` reduces the
-/// padding modulo the stride (`ultralytics/data/augment.py:1721-1722`). A
-/// 1080×1535 page therefore enters the network at 480×640, not 640×640 — the
-/// export's height and width are dynamic, so the graph accepts it — and every
-/// coordinate the network predicts is relative to that rectangle.
-///
-/// The page is scaled by a single ratio — the same on both axes, or the aspect
-/// would skew and every predicted box with it — and the leftover is split
-/// evenly. `pad_x`/`pad_y` are the *leading* pad only, which is what an inverse
-/// mapping subtracts.
+/// Implements Ultralytics' `LetterBox(auto=True, stride=32)` stride-aligned padding.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Letterbox {
     /// Scale applied to the source before padding (`r` in Ultralytics).
@@ -39,37 +19,22 @@ pub struct Letterbox {
     pub net_h: u32,
 }
 
-/// Python's `round`: half to even. Ultralytics computes every letterbox
-/// dimension with it, and `f64::round` disagrees on exact halves.
+/// Half-to-even rounding matching Python/Ultralytics.
 fn round_py(v: f64) -> f64 {
     super::textblock::round_half_even(v)
 }
 
 impl Letterbox {
-    /// Fit `src_w × src_h` into a stride-aligned rectangle no larger than
-    /// `size × size`, centred.
-    ///
-    /// A transcription of `LetterBox.get_params`
-    /// (`ultralytics/data/augment.py:1697-1744`) at the settings the predictor
-    /// uses: `new_shape=(size, size)`, `auto=True`, `scale_fill=False`,
-    /// `scaleup=True`, `center=True`. The `-0.1`/`+0.1` in the top/left versus
-    /// bottom/right split is Ultralytics' own, and it is load-bearing: it is
-    /// what puts the odd pixel of an odd pad on the *trailing* edge.
+    /// Fits `src_w x src_h` into a stride-aligned rectangle (max `size x size`) matching Ultralytics `LetterBox`.
     pub fn fit(src_w: u32, src_h: u32, size: u32, stride: u32) -> Letterbox {
         let (w0, h0) = (src_w as f64, src_h as f64);
-        // `r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])` — height
-        // first, because Ultralytics' shapes are (h, w).
+        // Scale factor matching Ultralytics height/width convention.
         let ratio = (size as f64 / h0).min(size as f64 / w0);
-        // The one deliberate departure from Ultralytics: a floor of one pixel.
-        // A webtoon slice a pixel or two wide scales its short side to less
-        // than half a pixel, which rounds to 0 — and a 0 there is not a small
-        // image, it is a `[1, 3, 640, 0]` tensor that ONNX Runtime rejects and
-        // a `gain` of 0 that divides by zero on the way back out. Ultralytics
-        // never sees this because it never letterboxes a strip that thin.
+        // Floored to 1 px to avoid zero-dimension tensors on extreme strips.
         let inner_w = (round_py(w0 * ratio) as u32).max(1);
         let inner_h = (round_py(h0 * ratio) as u32).max(1);
 
-        // `dw, dh = np.mod(dw, stride), np.mod(dh, stride)`, then halved.
+        // Stride-aligned padding split into leading/trailing offsets.
         let s = stride.max(1) as i64;
         let dw = (size as i64 - inner_w as i64).rem_euclid(s) as f64 / 2.0;
         let dh = (size as i64 - inner_h as i64).rem_euclid(s) as f64 / 2.0;
@@ -87,30 +52,10 @@ impl Letterbox {
         }
     }
 
-    /// Undo the fit for one box, returning page coordinates clamped to the page.
-    ///
-    /// A transcription of `ops.scale_boxes` (`ultralytics/utils/ops.py:103-142`)
-    /// with `ratio_pad=None`, which is how the detection predictor calls it:
-    /// the gain and the pad are *recomputed* from the network input shape and
-    /// the page shape rather than carried over from the letterbox. They come out
-    /// identical to [`Letterbox::fit`]'s `ratio`, `pad_x` and `pad_y` — there is
-    /// a test below that pins that — but recomputing is what the original does,
-    /// so it is what this does.
-    ///
-    /// The arithmetic is `f32` because Ultralytics' is: the boxes are a `float32`
-    /// tensor and the Python-float `gain` is cast down to the tensor's dtype
-    /// before the division, not the other way round.
-    ///
-    /// Clamped because a model is free to predict a box that runs off the edge
-    /// of the image it was given, and every consumer downstream — the reading
-    /// order sort, the queue, the placement rect — assumes a box is on the page.
+    /// Maps bounding boxes from letterbox input back to clamped source image coordinates.
     pub fn to_source(self, b: BBox, src_w: u32, src_h: u32) -> BBox {
         let (w0, h0) = (src_w as f64, src_h as f64);
         let gain = (self.net_h as f64 / h0).min(self.net_w as f64 / w0);
-        // `.max(1.0)` for the same reason [`Letterbox::fit`] floors `inner_w`:
-        // the scaled size is recomputed here rather than carried over, so it
-        // has to round the same way or the two disagree by a pixel on a strip
-        // thin enough to round to nothing. On any ordinary page it is a no-op.
         let pad_x = round_py((self.net_w as f64 - round_py(w0 * gain).max(1.0)) / 2.0 - 0.1) as f32;
         let pad_y = round_py((self.net_h as f64 - round_py(h0 * gain).max(1.0)) / 2.0 - 0.1) as f32;
         let gain = gain as f32;
@@ -123,8 +68,7 @@ impl Letterbox {
     }
 }
 
-/// An axis-aligned box in whatever space its producer was working in, with the
-/// class and confidence that came with it.
+/// Axis-aligned bounding box with confidence and class index.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BBox {
     pub x1: f32,
@@ -150,25 +94,9 @@ impl BBox {
     }
 }
 
-/// Greedy non-maximum suppression, per class.
-///
-/// Per class rather than across all of them: two different kinds of thing may
-/// legitimately occupy the same rectangle — a panel and the speech bubble
-/// inside it — and suppressing across classes would delete one of them.
-/// Ultralytics spells this the other way round, offsetting each box by
-/// `class * 7680` before a single class-agnostic pass
-/// (`ultralytics/utils/nms.py:141-147`); with a 640-pixel input no two classes
-/// can then touch, so the two are the same operation.
-///
-/// Ultralytics also caps the input at `max_nms = 30000` boxes and the output at
-/// `max_det = 300`. Neither is reproduced here and neither can bite: both caps
-/// are applied in descending-score order, and a manga page yields tens of
-/// detections above the 0.25 confidence floor, not thousands.
+/// Greedy per-class non-maximum suppression by IoU threshold.
 pub fn nms(mut boxes: Vec<BBox>, iou_threshold: f32) -> Vec<BBox> {
-    // Descending by score, so the first box of any overlapping group is the one
-    // kept. `total_cmp` rather than `partial_cmp().unwrap()`: a NaN score from a
-    // malformed output would panic on the unwrap, and sorting it to one end is
-    // strictly better than taking the process down.
+    // Sort descending by score; total_cmp avoids panicking on NaN.
     boxes.sort_by(|a, b| b.score.total_cmp(&a.score));
     let mut kept: Vec<BBox> = Vec::new();
     for b in boxes {
@@ -183,17 +111,7 @@ pub fn nms(mut boxes: Vec<BBox>, iou_threshold: f32) -> Vec<BBox> {
     kept
 }
 
-/// Decode one YOLO11 ONNX output tensor.
-///
-/// The layout is `[1, 4 + num_classes, num_anchors]` — note that it is
-/// transposed relative to how it reads: all the centre-x values come first,
-/// then all the centre-y, and so on. Indexing it the obvious way (anchor-major)
-/// produces boxes made of unrelated numbers, which is the single easiest
-/// mistake to make here and the reason this function exists rather than being
-/// inlined at the call site.
-///
-/// There is no objectness score in v8/v11; the class score *is* the confidence.
-/// Boxes come back in model-input pixels, still needing `Letterbox::to_source`.
+/// Decodes a YOLO11 ONNX output tensor `[1, 4 + classes, anchors]` to bounding boxes in model pixels.
 pub fn decode_yolo11(data: &[f32], channels: usize, anchors: usize, conf: f32) -> Vec<BBox> {
     if channels < 5 || anchors == 0 || data.len() < channels * anchors {
         return Vec::new();
@@ -202,7 +120,7 @@ pub fn decode_yolo11(data: &[f32], channels: usize, anchors: usize, conf: f32) -
     let at = |c: usize, a: usize| data[c * anchors + a];
     let mut out = Vec::new();
     for a in 0..anchors {
-        // Best class for this anchor, and its score.
+        // Select class with highest confidence.
         let mut best = 0usize;
         let mut best_score = f32::MIN;
         for c in 0..num_classes {
@@ -212,20 +130,12 @@ pub fn decode_yolo11(data: &[f32], channels: usize, anchors: usize, conf: f32) -
                 best = c;
             }
         }
-        // Strictly greater, as Ultralytics' candidate mask is
-        // (`xc = prediction[:, 4:mi].amax(1) > conf_thres`,
-        // `ultralytics/utils/nms.py:78`).
         if best_score <= conf {
             continue;
         }
-        // Centre form to corner form.
+        // Convert centre-size format (cx, cy, w, h) to corner format (x1, y1, x2, y2).
         let (cx, cy, w, h) = (at(0, a), at(1, a), at(2, a), at(3, a));
-        // A NaN or infinite coordinate has to be dropped here, at the only
-        // place it can still be dropped. `clamp` does not remove it — Rust's
-        // `f32::clamp` returns NaN for NaN — so it survives the inverse
-        // mapping, and the `as i32` that turns a box into a panel then
-        // silently reads it as 0, fabricating a `[0, 0, 0, 0]` panel at the
-        // page corner that the reading-order sort takes entirely seriously.
+        // Discard non-finite coordinates.
         if !(cx.is_finite() && cy.is_finite() && w.is_finite() && h.is_finite()) {
             continue;
         }
@@ -251,10 +161,7 @@ mod tests {
 
     #[test]
     fn letterbox_produces_the_stride_32_rectangle_ultralytics_does() {
-        // The golden pages. `LetterBox(auto=True, stride=32)` scales 1080x1535
-        // by 640/1535, giving 450x640, and pads the width up to the next
-        // multiple of 32 — 480, not 640. Captured from the venv:
-        //   predictor input tensor shape == (1, 3, 640, 480)
+        // `LetterBox(auto=True, stride=32)` scales 1080x1535 to 450x640, padding width to stride-32 (480x640).
         let lb = Letterbox::fit(1080, 1535, 640, 32);
         assert_eq!((lb.inner_w, lb.inner_h), (450, 640));
         assert_eq!((lb.net_w, lb.net_h), (480, 640));
@@ -327,9 +234,7 @@ mod tests {
 
     #[test]
     fn letterbox_of_an_extreme_strip_never_collapses_a_side_to_nothing() {
-        // A 1x2000 slice scales its width to 0.32 px, which rounds to 0. That
-        // 0 became the last dimension of the input tensor — a shape ONNX
-        // Runtime refuses — and a `gain` of 0 in the inverse mapping.
+        // Extreme aspect ratios floor dimensions to 1 px to avoid 0-dim tensors.
         for (w, h) in [(1u32, 2000u32), (2000, 1), (1, 1), (3, 5000), (5000, 3)] {
             let lb = Letterbox::fit(w, h, 640, 32);
             assert!(lb.inner_w >= 1 && lb.inner_h >= 1, "{w}x{h}: {lb:?}");
@@ -344,9 +249,7 @@ mod tests {
 
     #[test]
     fn decode_drops_an_anchor_whose_coordinates_are_not_finite() {
-        // A NaN coordinate cannot be clamped away later — `f32::clamp` passes
-        // NaN straight through, and `NaN as i32` is 0, so the box would arrive
-        // downstream as a confident [0, 0, 0, 0] panel in the page corner.
+        // Discards NaN or infinite coordinates before clamp/integer conversion.
         for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let data: Vec<f32> = vec![bad, 100.0, 20.0, 20.0, 0.9];
             assert!(decode_yolo11(&data, 5, 1, 0.5).is_empty(), "{bad}");

@@ -1,23 +1,8 @@
-//! Minimum-area rectangles and polygon offsetting — the vector half of what the
-//! DBNet post-processing needs from OpenCV, shapely and pyclipper.
+//! Minimum-area bounding rectangles and polygon offsetting for DBNet post-processing.
 //!
-//! `min_area_rect` is a transcription of OpenCV's rotating calipers, float
-//! widths and all, rather than a fresh implementation: DBNet's boxes are
-//! rectangles fitted to blobs a handful of pixels across, and at that size the
-//! difference between two defensible minimum-area rectangles is a whole pixel on
-//! a text line's edge.
-//!
-//! `offset_round` replaces pyclipper's `JT_ROUND` offset. The obvious shortcut —
-//! a rotated rectangle grown by `d` on every side, which is what a Minkowski sum
-//! with a disc gives analytically — was tried first and rejected: Clipper rounds
-//! its input path to integers and then rounds every generated arc point again,
-//! which bulges the result by up to a pixel. Measured against the Python
-//! pipeline that shortcut moved line quads by 1-3 px, which was enough to change
-//! how two blocks on one page split. The faithful version reproduces the Python
-//! line quads exactly.
+//! Re-implements OpenCV rotating calipers (`minAreaRect`) and pyclipper `JT_ROUND` offsetting.
 
-/// A rotated rectangle in OpenCV's parameterisation: centre, `(width, height)`
-/// along the rectangle's own axes, and the angle of the width axis in degrees.
+/// Rotated rectangle: centre, `(w, h)`, and angle in degrees.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RotRect {
     pub cx: f32,
@@ -28,21 +13,13 @@ pub struct RotRect {
 }
 
 impl RotRect {
-    /// The shorter side, which DBNet uses to throw away degenerate candidates.
+    /// Shorter side length.
     pub fn short_side(&self) -> f32 {
         self.w.min(self.h)
     }
 }
 
-/// Strict convex hull, in the vertex order OpenCV's `convexHull(clockwise=true)`
-/// produces: starting at the lowest-x (then lowest-y) point.
-///
-/// Order is load-bearing, not incidental. The calipers below sweep from a
-/// starting caliper set derived from indices into this array, and on inputs
-/// where several orientations tie for minimum area — a triangle whose three
-/// flush rectangles have identical area, say — a different starting vertex
-/// yields a different, equally minimal, answer. Matching OpenCV's order is what
-/// makes the tie break the same way.
+/// Strict 2D convex hull matching OpenCV `convexHull(clockwise=true)` vertex ordering.
 pub fn convex_hull(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
     let mut pts: Vec<(f32, f32)> = points.to_vec();
     pts.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
@@ -70,18 +47,14 @@ pub fn convex_hull(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
     let mut hull: Vec<(f32, f32)> = Vec::with_capacity(lower.len() + upper.len());
     hull.extend_from_slice(&lower[..lower.len() - 1]);
     hull.extend_from_slice(&upper[..upper.len() - 1]);
-    // Monotone chain walks the hull the opposite way round from OpenCV's
-    // Sklansky; reverse everything but the start point to land on its order.
+    // Sklansky ordering reversal.
     let rest: Vec<(f32, f32)> = hull[1..].iter().rev().copied().collect();
     let mut out = vec![hull[0]];
     out.extend(rest);
     out
 }
 
-/// `cv2.minAreaRect`: rotating calipers over the convex hull.
-///
-/// Kept in `f32` throughout because OpenCV is, and the tie-breaking `<`
-/// comparison on areas is sensitive to the last bit.
+/// Rotating calipers minimum-area bounding box matching OpenCV's `minAreaRect`.
 pub fn min_area_rect(points: &[(f32, f32)]) -> RotRect {
     let p = convex_hull(points);
     let n = p.len();
@@ -134,7 +107,7 @@ pub fn min_area_rect(points: &[(f32, f32)]) -> RotRect {
         pt0 = pt;
     }
 
-    // Which way round the hull runs decides the sign of the first caliper.
+    // Determine initial caliper orientation.
     let mut orientation = 0f32;
     let (mut ax, mut ay) = (vect[n - 1].0 as f64, vect[n - 1].1 as f64);
     for e in &vect {
@@ -225,7 +198,7 @@ pub fn min_area_rect(points: &[(f32, f32)]) -> RotRect {
     }
 }
 
-/// `cv2.boxPoints`: the rectangle's four corners, in OpenCV's order.
+/// Four rectangle corners in OpenCV `boxPoints` order.
 pub fn box_points(r: &RotRect) -> [(f32, f32); 4] {
     let rad = r.angle as f64 * std::f64::consts::PI / 180.0;
     let a = (rad.sin() * 0.5) as f32;
@@ -235,15 +208,7 @@ pub fn box_points(r: &RotRect) -> [(f32, f32); 4] {
     [p0, p1, (2.0 * r.cx - p0.0, 2.0 * r.cy - p0.1), (2.0 * r.cx - p1.0, 2.0 * r.cy - p1.1)]
 }
 
-/// DBNet's `get_mini_boxes`: the minimum-area rectangle as a quad ordered
-/// top-left, top-right, bottom-right, bottom-left, plus its short side.
-///
-/// The canonicalisation is by x then y — sort the four corners by x, then within
-/// each pair take the smaller y as the "top". For a rectangle rotated near 45
-/// degrees two corners can share an x, and the original resolves that by the
-/// stable sort falling back on `boxPoints`' own order; because both corners are
-/// then compared on y regardless of which came first, the result is the same
-/// either way.
+/// Minimum-area rectangle ordered [TL, TR, BR, BL] and its short side length.
 pub fn mini_box(points: &[(f32, f32)]) -> ([(f32, f32); 4], f32) {
     let rect = min_area_rect(points);
     let mut pts = box_points(&rect);
@@ -253,12 +218,12 @@ pub fn mini_box(points: &[(f32, f32)]) -> ([(f32, f32); 4], f32) {
     ([pts[i1], pts[i2], pts[i3], pts[i4]], rect.short_side())
 }
 
-/// Clipper's `Round`: half away from zero, unlike Rust's or numpy's defaults.
+/// Half-away-from-zero integer rounding matching Clipper.
 fn clip_round(v: f64) -> i64 {
     if v < 0.0 { (v - 0.5) as i64 } else { (v + 0.5) as i64 }
 }
 
-/// The signed area Clipper uses to decide a path's winding.
+/// Signed polygon area for winding check.
 fn clipper_area(poly: &[(i64, i64)]) -> f64 {
     if poly.len() < 3 {
         return 0.0;
@@ -272,20 +237,7 @@ fn clipper_area(poly: &[(i64, i64)]) -> f64 {
     -a * 0.5
 }
 
-/// `pyclipper.PyclipperOffset(JT_ROUND, ET_CLOSEDPOLYGON).Execute(delta)` for a
-/// single closed path.
-///
-/// Three details carry all the fidelity. Clipper works in integers, and
-/// pyclipper converts the incoming floats by C-style truncation, not rounding.
-/// The arc resolution comes from a tolerance of 0.25 px, which fixes how many
-/// points each rounded corner gets. And every generated point is rounded to an
-/// integer, which is why the offset polygon sits slightly outside the exact
-/// Minkowski sum.
-///
-/// Clipper follows this with a union pass that drops exactly-collinear
-/// vertices. That is skipped here: the only consumer is `min_area_rect`, and a
-/// vertex lying on the segment between its neighbours is inside the hull and
-/// cannot change the answer.
+/// Polygon expansion matching `pyclipper.PyclipperOffset(JT_ROUND, ET_CLOSEDPOLYGON)`.
 pub fn offset_round(path: &[(f64, f64)], delta: f64) -> Vec<(f64, f64)> {
     const DEF_ARC_TOLERANCE: f64 = 0.25;
     let raw: Vec<(i64, i64)> = path.iter().map(|&(x, y)| (x as i64, y as i64)).collect();

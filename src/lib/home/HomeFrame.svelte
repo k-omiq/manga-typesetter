@@ -3,7 +3,7 @@
   import { checkForUpdate } from '../updater.js';
   import UpdateDialog from './UpdateDialog.svelte';
 
-  // The scrolling page frame shared by the library and project screens.
+  // Shared layout frame for home screens.
   let { onSettings, children } = $props();
 
   let update = $state(null);
@@ -13,7 +13,7 @@
     try {
       update = await checkForUpdate();
     } catch {
-      // Silently ignore network and updater errors on startup
+      // Ignore updater errors on startup.
     }
   });
 </script>

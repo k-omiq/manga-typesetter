@@ -15,9 +15,9 @@ import {
 // pinning about a cache are the two things a cache gets wrong: handing back
 // something stale, and never letting go.
 //
-// The stub is the smallest surface `rememberPagePixels` touches — an element
+// The stub is the smallest surface `rememberPagePixels` touches - an element
 // with `width`, `height` and a 2D context that can draw an image and read the
-// bytes back — because what is under test is the bookkeeping, not the decode.
+// bytes back - because what is under test is the bookkeeping, not the decode.
 // `getImageData` returns a distinguishable buffer so a test can tell one page's
 // pixels from another's.
 const realDocument = globalThis.document;
@@ -106,8 +106,8 @@ describe('remembering and reading back', () => {
     expect(pagePixelsHeld()).toBe(0);
   });
 
-  // A decode that throws — a tainted canvas, a browser refusing the allocation
-  // — costs the fit and nothing else. Placement falls back.
+  // A decode that throws - a tainted canvas, a browser refusing the allocation
+  // - costs the fit and nothing else. Placement falls back.
   it('survives a decode that throws', () => {
     globalThis.document = {
       createElement: () => ({

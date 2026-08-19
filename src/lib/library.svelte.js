@@ -69,7 +69,7 @@ export async function initRoot() {
 //
 // Both separators are folded to one before the prefix test. `fsx.homeDir()`
 // answers `C:\Users\name` on Windows and the picker hands back backslashes too,
-// so a comparison with '/' written into it fails on every valid Windows path —
+// so a comparison with '/' written into it fails on every valid Windows path -
 // and Settings then refuses the folder the user just chose with a message about
 // the home directory it is plainly inside.
 export async function withinHome(dir) {
@@ -108,7 +108,7 @@ async function readJson(path) {
   return JSON.parse(await fsx.readTextFile(path));
 }
 
-// Every record file — project.json and chapter.json alike — goes down
+// Every record file - project.json and chapter.json alike - goes down
 // atomically. chapter.json is the only copy of a chapter's typesetting and it is
 // rewritten on an 800ms debounce, so a half-written one is a chapter lost.
 async function writeJson(path, value) {
@@ -123,18 +123,18 @@ async function subdirs(dir) {
 // ---------- scan ----------
 
 // Everything slice 1 knows about a chapter's state: it has pages, and it has
-// typesetting. There is no progress model here and none is invented — a box on
+// typesetting. There is no progress model here and none is invented - a box on
 // any page means work has started, and that is the whole claim.
 export const isTypeset = (pages) => (pages ?? []).some((pg) => (pg.boxes ?? []).length > 0);
 
 // The chapter's translations, as the same JSON document the export produces,
-// written beside chapter.json on every save. It is a derived file — chapter.json
-// remains the only copy of anything — so it goes down with the same atomic write
+// written beside chapter.json on every save. It is a derived file - chapter.json
+// remains the only copy of anything - so it goes down with the same atomic write
 // and nothing anywhere reads it back.
 //
 // Takes the serialised text rather than the pages, because the caller that
 // matters has to snapshot the document at the same instant it builds
-// chapter.json's own `pages` — see `writeOpenChapter`.
+// chapter.json's own `pages` - see `writeOpenChapter`.
 async function writeTranslationsJson(dir, text) {
   await fsx.writeTextFileAtomic(await fsx.join(dir, 'translations.json'), text);
 }
@@ -154,13 +154,13 @@ async function readChapter(projectDir, slug) {
     pageCount: pages.length,
     typeset: isTypeset(pages),
     // Absent reads as 'typeset', which is what every chapter written before this
-    // field existed actually is — so no chapter on disk changes behaviour.
+    // field existed actually is - so no chapter on disk changes behaviour.
     mode: normalizeChapterMode(raw.mode),
     unreadable: false,
   };
 }
 
-// A folder copied inside the library — the obvious way to back one up — carries
+// A folder copied inside the library - the obvious way to back one up - carries
 // the original's id. Two entries under one id break the keyed {#each} that
 // renders them and make every id lookup ambiguous, so the later one is flagged
 // rather than admitted. The first occurrence keeps the id and stays usable.
@@ -225,7 +225,7 @@ async function readProject(root, slug, problems, dupes) {
     coverChapterId: raw.coverChapterId ?? null,
     coverPageId: raw.coverPageId ?? null,
     // Absent reads 'pages', which is what every project written before the
-    // longstrip layout existed actually is — see LAYOUTS in the store.
+    // longstrip layout existed actually is - see LAYOUTS in the store.
     layout: normalizeLayout(raw.layout),
     chapters,
     unreadable: false,
@@ -234,7 +234,7 @@ async function readProject(root, slug, problems, dupes) {
 
 // Every scan takes a ticket. A scan can sit for a long time on a folder
 // permission prompt, and the app's own documented recovery from that is Settings
-// ▸ Change folder — which points the library somewhere else and scans again. The
+// ▸ Change folder - which points the library somewhere else and scans again. The
 // blocked scan then rejects long after the new one has painted the screen, so it
 // must not put its results anywhere.
 let scanSeq = 0;
@@ -245,7 +245,7 @@ export async function scanLibrary() {
   // after every await, and the failure message at the bottom would name the root
   // now in force against the error of the one this scan actually read.
   const root = library.root;
-  // `loading` belongs to the newest scan whichever root it is reading — a
+  // `loading` belongs to the newest scan whichever root it is reading - a
   // superseded scan clearing it would blank a spinner the live one still owns.
   // Results belong to a scan only while the root they describe is still the one
   // on screen.
@@ -254,7 +254,7 @@ export async function scanLibrary() {
 
   // No root means initRoot never finished. Scanning '' would either fail with
   // something unrecognisable or read the wrong place, and clearing the error
-  // would throw away the only explanation the user has — including across the
+  // would throw away the only explanation the user has - including across the
   // retry button, which lands back here.
   if (!root) {
     library.projects = [];
@@ -327,7 +327,7 @@ export const projectById = (id) => library.projects.find((p) => p.id === id);
 export const chapterById = (projectId, chapterId) =>
   projectById(projectId)?.chapters.find((c) => c.id === chapterId);
 
-// Where the open chapter's own files live — what the undo history writes beside.
+// Where the open chapter's own files live - what the undo history writes beside.
 // Derived from the catalogue on every call rather than remembered, so a rescan
 // that rebuilds the records cannot leave anyone holding a stale directory.
 export function openChapterDir() {
@@ -345,7 +345,7 @@ export function openChapterDir() {
 // succeeds silently on a directory that already exists. Together those two make
 // a folder the app has never seen invisible to collision avoidance: a project
 // named after it would write project.json inside the user's own folder, adopt
-// it, and hand a later delete — or a creation rollback — a recursive remove of
+// it, and hand a later delete - or a creation rollback - a recursive remove of
 // files this app never put there.
 //
 // So every candidate is checked against the filesystem, and an existing
@@ -364,7 +364,7 @@ async function freeDir(parent, name, taken) {
 // `layout` is fixed here and nowhere else. Every chapter in the project inherits
 // it, the editor reads it on open, and there is deliberately no way to change it
 // afterwards: the pages of a longstrip chapter are slices of one continuous
-// image with no margins, and re-reading them as separate pages — or the reverse —
+// image with no margins, and re-reading them as separate pages - or the reverse -
 // describes art that does not exist. Anything unrecognised, including the
 // `undefined` every existing caller passes, is 'pages'.
 export async function createProject(name, { layout = 'pages' } = {}) {
@@ -394,7 +394,7 @@ export async function deleteProject(projectId) {
   library.projects = library.projects.filter((x) => x.id !== projectId);
 }
 
-// The bytes of a chapter's first page — whatever that page actually draws — so
+// The bytes of a chapter's first page - whatever that page actually draws - so
 // a cover can be re-derived from a chapter already on disk.
 async function firstPageBytes(c) {
   const record = await readJson(await fsx.join(c.dir, 'chapter.json'));
@@ -402,7 +402,7 @@ async function firstPageBytes(c) {
   if (!pg) return null;
   const name = pg.cleaned ?? pg.file;
   // A name out of a record can be anything a hand edit put there, and this one
-  // is about to be joined onto a directory — the same reasoning as dropCleaned.
+  // is about to be joined onto a directory - the same reasoning as dropCleaned.
   if (!isPlainFileName(name)) return null;
   const dir = await fsx.join(c.dir, pg.cleaned ? 'cleaned' : 'raws');
   return { bytes: await fsx.readFile(await fsx.join(dir, name)), pageId: pg.id ?? null };
@@ -414,7 +414,7 @@ async function firstPageBytes(c) {
 // `buildChapter` offers a thumbnail on `!p.coverChapterId` alone: an id with no
 // image behind it is the same dead end as an id naming a chapter that is gone.
 // So a failure to re-derive gives the cover up entirely and takes the stale
-// thumb.png with it — the file is the deleted chapter's art, and the card
+// thumb.png with it - the file is the deleted chapter's art, and the card
 // renders it straight off the project directory.
 async function reassignCover(p, remaining) {
   for (const c of remaining) {
@@ -462,7 +462,7 @@ export async function deleteChapter(projectId, chapterId) {
   await fsx.remove(c.dir);
   const remaining = p.chapters.filter((x) => x.id !== chapterId);
   // The cover has to follow, and project.json has to hear about it. Left
-  // standing, `coverChapterId` names a chapter that no longer exists — and
+  // standing, `coverChapterId` names a chapter that no longer exists - and
   // since `buildChapter` decides whether to offer a thumbnail on
   // `!p.coverChapterId`, every later import declines and the project can never
   // have a cover again. The record leads and the catalogue follows, as
@@ -487,7 +487,7 @@ function naturalSort(a, b) {
 
 // Two picked files can share a name (routine when the user selects from two
 // folders). Give the second one a disk-unique name rather than silently
-// overwriting the first — same numbering style as uniqueSlug, but the
+// overwriting the first - same numbering style as uniqueSlug, but the
 // extension and the user's original stem are preserved, never slugified.
 function uniqueFileName(name, taken) {
   if (!taken.has(name)) return name;
@@ -500,7 +500,7 @@ function uniqueFileName(name, taken) {
   }
 }
 
-// Cover art for the library grid. A derived asset written to its own path — it
+// Cover art for the library grid. A derived asset written to its own path - it
 // is never written back over a raw, and the raw it came from is untouched.
 export async function makeThumb(bytes) {
   const url = URL.createObjectURL(new Blob([bytes]));
@@ -530,18 +530,18 @@ export async function makeThumb(bytes) {
 // written, or null when this environment cannot measure it.
 //
 // A page is stored `w:0,h:0` until something decodes its image, and until this
-// existed the only thing that ever did was the canvas — one page at a time, as
+// existed the only thing that ever did was the canvas - one page at a time, as
 // the user opened it. So a 28-page chapter sat on disk with 23 pages at 0x0
 // (measured, in the author's own library), and every consumer that needs a page
 // size before the page has been looked at got a zero: `buildPagePsd` made
 // ag-psd throw `Invalid document size`, and `renderPageCanvas` sized a 0x0
 // canvas and exported an empty file without a word. Measuring at import is the
-// fix at the source — the size is a fact about the file being copied, and this
+// fix at the source - the size is a fact about the file being copied, and this
 // is the one moment the app holds the bytes.
 //
 // `createImageBitmap` rather than an `<img>`: it takes the bytes directly (no
 // object URL to mint and revoke, no element to attach), it decodes off the main
-// thread, and it is the webview's own decoder — the same one that will draw the
+// thread, and it is the webview's own decoder - the same one that will draw the
 // page in the canvas later, which is what makes its answer the RIGHT answer
 // rather than merely a plausible one. Closed immediately: a 1080x1535 bitmap is
 // 6.6 MB of RGBA, and an import loop that leaked one per page would hold the
@@ -551,7 +551,7 @@ export async function makeThumb(bytes) {
 // which has no `createImageBitmap` at all, and a corrupt or exotic file can
 // fail the decode in the real webview. The caller stores 0 for it, and 0 is the
 // one value the store reads as "nobody has measured this yet" (`hasPageSpace`)
-// — the state a first canvas visit is allowed to adopt from without dragging
+// - the state a first canvas visit is allowed to adopt from without dragging
 // the page's boxes across. A wrong number here would be adopted as truth and
 // then defended: the next honest measurement would look like a page whose art
 // had been replaced, and rescale every box on it.
@@ -570,7 +570,7 @@ async function imageSize(bytes) {
   }
 }
 
-// Free ON DISK as well as within this batch — the same reasoning as freeDir.
+// Free ON DISK as well as within this batch - the same reasoning as freeDir.
 // `cleaned/` on an existing chapter already holds files this run knows nothing
 // about, and overwriting one would silently change another page's image.
 async function freeFileName(dir, name, used) {
@@ -583,7 +583,7 @@ async function freeFileName(dir, name, used) {
 }
 
 // `cleaned/` exists only once a page actually has a cleaned image, so it is
-// created on the way to the first successful copy rather than up front — a copy
+// created on the way to the first successful copy rather than up front - a copy
 // that fails on its first file must not leave an empty directory behind on a
 // chapter that has no cleaned pages.
 function lazyDir(path) {
@@ -597,7 +597,7 @@ function lazyDir(path) {
   };
 }
 
-// Copy bytes in under a name that collides with nothing. Bytes in, bytes out —
+// Copy bytes in under a name that collides with nothing. Bytes in, bytes out -
 // nothing here decodes or re-encodes an image, so bit depth, colour type and
 // ICC profile arrive exactly as they left.
 async function copyInto(dir, name, bytes, used) {
@@ -609,7 +609,7 @@ async function copyInto(dir, name, bytes, used) {
 
 // The shared skeleton of every way a chapter comes into being: pick a free
 // directory, let `copy` fill it, then write the records and update the
-// catalogue — with one rollback that removes only what this run created.
+// catalogue - with one rollback that removes only what this run created.
 //
 // `copy(dir, cover)` returns the page list. `cover.offer(bytes)` is how it
 // nominates the project's thumbnail; the first offer wins and a failure to
@@ -656,7 +656,7 @@ async function buildChapter(p, number, title, copy, mode = 'typeset') {
     await writeJson(await fsx.join(dir, 'chapter.json'), record);
     // A chapter has its translations file from birth rather than from its first
     // save, so a chapter imported with a translations JSON already has one on
-    // disk for whatever else is watching that folder. Written unconditionally —
+    // disk for whatever else is watching that folder. Written unconditionally -
     // it is one small file and "there is always one beside chapter.json" is a
     // simpler promise than "there is one once there were lines".
     await writeTranslationsJson(dir, buildTextJson(pages));
@@ -690,8 +690,8 @@ async function buildChapter(p, number, title, copy, mode = 'typeset') {
     }
 
     // Compute the project's next persisted state into locals first, so the
-    // in-memory catalogue is only mutated once every disk write —
-    // including this one — has actually succeeded.
+    // in-memory catalogue is only mutated once every disk write -
+    // including this one - has actually succeeded.
     const coverChapterId = willHaveCover ? chapter.id : p.coverChapterId;
     const coverPageId = willHaveCover ? (pages[0]?.id ?? null) : p.coverPageId;
     const updatedAt = now();
@@ -745,7 +745,7 @@ async function buildChapter(p, number, title, copy, mode = 'typeset') {
 // lines a translations file supplies.
 //
 // Cleaned pages pair with raws BY POSITION after the same natural sort the raws
-// use — the order a cleaner delivers work in, and the only rule that imposes no
+// use - the order a cleaner delivers work in, and the only rule that imposes no
 // naming convention. Because it is positional it is fragile to a mismatched
 // count, so the dialog states the pairing before this is ever called. Extra
 // cleaned files and extra translated pages are ignored here; neither may invent
@@ -775,7 +775,7 @@ export async function createChapter({
       const f = ordered[i];
       const bytes = new Uint8Array(await f.arrayBuffer());
       const file = await copyInto(rawsDir, f.name, bytes, usedRaws);
-      // Measured here rather than left for a canvas visit that may never come —
+      // Measured here rather than left for a canvas visit that may never come -
       // see `imageSize`. A decode that fails leaves the page at 0, which reads
       // as unmeasured everywhere; it never invents a size.
       const size = await imageSize(bytes);
@@ -803,7 +803,7 @@ export async function createChapter({
         const bytes = new Uint8Array(await f.arrayBuffer());
         pages[i].cleaned = await copyInto(cleanedDir, f.name, bytes, usedCleaned);
         // The page's space is the space of the image the app DRAWS, and both the
-        // canvas and the exporters draw `cleaned ?? raw` — so the cleaned raster
+        // canvas and the exporters draw `cleaned ?? raw` - so the cleaned raster
         // is the measurement that counts, and it overwrites the raw's the moment
         // one arrives. A cleaner who works at a different resolution to the raw
         // is the whole reason this is not "whatever we measured first".
@@ -811,7 +811,7 @@ export async function createChapter({
         // A cleaned file that cannot be decoded takes the page back to
         // unmeasured instead of leaving the raw's number standing. The raw's
         // size is a true fact about a file this page no longer displays, and as
-        // a stored page size it is a lie the exporter would render at — the art
+        // a stored page size it is a lie the exporter would render at - the art
         // stretched to a shape it never had. 0 says "unknown", which is exactly
         // what is true, and every consumer already has an answer for it.
         const size = await imageSize(bytes);
@@ -829,7 +829,7 @@ export async function createChapter({
 //
 // Each input page: { rawName, rawBytes, cleanedName, cleanedBytes, w, h,
 // lines, boxes, detect }. A page with no raster or missing/invalid file name
-// is not accepted — it would persist with an empty or unresolvable `file`,
+// is not accepted - it would persist with an empty or unresolvable `file`,
 // unrenderable and impossible to remove.
 export async function createChapterFromPages({ projectId, number, title, pages: input }) {
   const p = projectById(projectId);
@@ -906,7 +906,7 @@ export async function createChapterFromPages({ projectId, number, title, pages: 
 function assertClosed(chapterId) {
   // `opening` as well as the ref: an open gives the ref up for the length of the
   // load (see `openChapter`), and a chapter half-way onto the screen is exactly
-  // as unsafe to rewrite as one already there — the open finishes holding its
+  // as unsafe to rewrite as one already there - the open finishes holding its
   // own copy of the pages, and the first autosave puts it back over this.
   if (app.chapterRef?.chapterId === chapterId || opening?.chapterId === chapterId) {
     throw new Error('This chapter is open in the editor — leave it first');
@@ -948,13 +948,13 @@ export async function readChapterSources(projectId, chapterId) {
 // translations.json goes down with it, or every one of these edits leaves the
 // file beside chapter.json describing a chapter that has moved on: a re-import
 // of the lines, or a cleaned page whose raster is a different size, and the
-// derived document keeps saying what was true before it — until somebody opens
+// derived document keeps saying what was true before it - until somebody opens
 // the chapter in the editor and the autosave happens to refresh it. It is
 // written FIRST, and deliberately: every caller here rolls back the files it
 // copied when this throws, and a rollback that ran after chapter.json had
 // already landed would unlink the images the new record names. So the derived
-// file is written while a failure is still harmless, and chapter.json — the
-// only copy of anything — is the last thing to commit.
+// file is written while a failure is still harmless, and chapter.json - the
+// only copy of anything - is the last thing to commit.
 async function commitPages(c, path, record, pages) {
   record.updatedAt = now();
   record.pages = pages;
@@ -967,12 +967,12 @@ async function commitPages(c, path, record, pages) {
 
 // Unlink the cleaned files nothing points at any more. Only names that came out
 // of the record, only inside this chapter's own `cleaned/`, and only once the
-// record no longer references them — so a failure here leaves a stray file,
+// record no longer references them - so a failure here leaves a stray file,
 // never a page pointing at one that is gone.
 //
 // `dropCleaned` checks `isPlainFileName`: `fsx.remove` is recursive, and
 // chapter.json is an ordinary file on disk that a half-written save, a hand edit
-// or a foreign tool can put anything into — so a separator or a dot-dot in a
+// or a foreign tool can put anything into - so a separator or a dot-dot in a
 // `cleaned` value would aim a recursive delete at a directory this app never
 // created. Such a name is not one of ours; it is left alone.
 async function dropCleaned(cleanedDir, names, pages) {
@@ -991,7 +991,7 @@ async function dropCleaned(cleanedDir, names, pages) {
 // keep theirs; files past the page count are ignored.
 //
 // A failure part-way is NOT rolled back. The pages already replaced keep their
-// new image and the error names the page it stopped at — the previous files are
+// new image and the error names the page it stopped at - the previous files are
 // gone by then, and a half-restored chapter is worse than a stated partial one.
 export async function replaceCleanedPages(projectId, chapterId, files) {
   const { c, path } = await chapterFile(projectId, chapterId);
@@ -1007,7 +1007,7 @@ export async function replaceCleanedPages(projectId, chapterId, files) {
   // Seeded with every name the record already claims, not just what is on disk.
   // A page whose cleaned file has gone missing still points at that name, and
   // handing the same name to a new copy would silently alias two pages onto one
-  // image — the missing file being exactly what this sheet exists to repair.
+  // image - the missing file being exactly what this sheet exists to repair.
   const used = new Set(pages.map((pg) => pg.cleaned).filter(Boolean));
   const copied = [];
   let failure = null;
@@ -1016,12 +1016,12 @@ export async function replaceCleanedPages(projectId, chapterId, files) {
       const bytes = new Uint8Array(await ordered[i].arrayBuffer());
       await ensureCleaned();
       const name = await copyInto(cleanedDir, ordered[i].name, bytes, used);
-      // Measured off the bytes in hand, exactly as the import does — and for
+      // Measured off the bytes in hand, exactly as the import does - and for
       // exactly the same reason. The page's space is the space of the image the
       // app DRAWS, and everything draws `cleaned ?? raw`; a cleaner who delivers
       // at a different resolution to the raw used to leave `w`/`h` describing a
       // raster this page no longer displays, which is not a stale number but a
-      // wrong coordinate system — boxes placed against the art on screen, PSDs
+      // wrong coordinate system - boxes placed against the art on screen, PSDs
       // written at a size the layers were never drawn at, and `hasPageSpace`
       // reading it as measured so no later open would ever repair it.
       copied.push({ index: i, name, size: await imageSize(bytes) });
@@ -1112,7 +1112,7 @@ export async function clearPageCleaned(projectId, chapterId, pageId) {
   // The page draws its raw again, and the raw is not necessarily the size the
   // cleaned raster was. There are no raw bytes in hand here to measure, so the
   // page goes back to unmeasured and `openChapter` reads the true size off disk
-  // on the next open — the same repair every chapter imported before the app
+  // on the next open - the same repair every chapter imported before the app
   // measured anything already takes.
   next[idx].w = 0;
   next[idx].h = 0;
@@ -1126,7 +1126,7 @@ export async function removeAllCleaned(projectId, chapterId) {
   const pages = record.pages ?? [];
   const previous = pages.map((pg) => pg.cleaned).filter(Boolean);
   if (!previous.length) return 0;
-  // Only the pages that actually lose an image go back to unmeasured — see
+  // Only the pages that actually lose an image go back to unmeasured - see
   // `clearPageCleaned`. A page that never had a cleaned raster keeps the
   // measurement of the raw it has been drawing all along.
   const next = pages.map((pg) => (pg.cleaned ? { ...pg, cleaned: null, w: 0, h: 0 } : { ...pg }));
@@ -1139,7 +1139,7 @@ export async function removeAllCleaned(projectId, chapterId) {
 // 1..N; it says nothing about whether the chapter has pages after that, so it
 // never shortens the chapter and never appends to it.
 //
-// It also says nothing about tags — the format has never carried them — so the
+// It also says nothing about tags - the format has never carried them - so the
 // tags the user applied by hand are carried across by line number rather than
 // replaced with the file's silence. Without that, re-running a corrected
 // translation over a tagged chapter left every box in place and stripped every
@@ -1156,7 +1156,7 @@ export async function applyTranslations(projectId, chapterId, parsed) {
   );
   await commitPages(c, path, record, next);
 
-  // A box placed from the queue carries no text of its own — it renders
+  // A box placed from the queue carries no text of its own - it renders
   // whichever line has its number. A file that numbers its lines differently
   // leaves those boxes pointing at nothing, and they render empty. Nothing is
   // lost (re-applying the old file brings them back) but it is not something to
@@ -1188,7 +1188,7 @@ export async function applyTranslations(projectId, chapterId, parsed) {
 // `assertClosed`: that refusal exists because rewriting a chapter's *pages*
 // under the open document would be overwritten by the next autosave, and a mode
 // is one field the open document itself owns. So the chapter on screen takes the
-// other branch — the state changes and the debounce writes it, which is the same
+// other branch - the state changes and the debounce writes it, which is the same
 // path every other edit to an open chapter takes.
 export async function setChapterMode(projectId, chapterId, mode) {
   const c = chapterById(projectId, chapterId);
@@ -1198,7 +1198,7 @@ export async function setChapterMode(projectId, chapterId, mode) {
 
   if (app.chapterRef?.chapterId === chapterId) {
     app.chapterMode = next;
-    // The same tool reset an open in translate mode performs — the rail is about
+    // The same tool reset an open in translate mode performs - the rail is about
     // to lose the two tools the user may currently be holding. Ending inline
     // editing and closing bulk state prevents stuck editingId and phantom bulk.
     if (next === 'translate') {
@@ -1216,7 +1216,7 @@ export async function setChapterMode(projectId, chapterId, mode) {
   record.mode = next;
   record.updatedAt = now();
   await writeJson(path, record);
-  // The record leads, the catalogue follows — as everywhere else in this file.
+  // The record leads, the catalogue follows - as everywhere else in this file.
   c.mode = next;
   c.updatedAt = record.updatedAt;
   return next;
@@ -1225,7 +1225,7 @@ export async function setChapterMode(projectId, chapterId, mode) {
 // ---------- open / save the editor's chapter ----------
 
 // The open chapter's page images are not held here any more. They are minted a
-// handful at a time, around the page on screen, by `page-images.js` — see the
+// handful at a time, around the page on screen, by `page-images.js` - see the
 // note at the top of that file. What this function used to do, minting every
 // raw and every cleaned page in the chapter before showing the first one, is
 // what made opening a long chapter cost hundreds of megabytes that were never
@@ -1233,7 +1233,7 @@ export async function setChapterMode(projectId, chapterId, mode) {
 
 // Every open takes a ticket, the same way every scan does. An open is a run of
 // disk reads and image decodes and the user can start another one part-way
-// through it — click chapter 1, change their mind, click chapter 2 — and
+// through it - click chapter 1, change their mind, click chapter 2 - and
 // chapter 1's decodes then finish after chapter 2 is already on screen. Without
 // a ticket the slow one lands its pages AND its ref on top of the new one, and
 // every edit the user then makes is autosaved into the wrong chapter's file.
@@ -1267,13 +1267,13 @@ export async function openChapter(projectId, chapterId) {
   const mark = { projectId, chapterId };
   opening = mark;
   // Nothing has been given up until the ref has been. Until then a failure
-  // leaves the chapter on screen exactly as it was — which is what a rejected
+  // leaves the chapter on screen exactly as it was - which is what a rejected
   // `flushSave` below has to do, because the work it could not write is still in
   // front of the user and the next attempt is their way out of it.
   let handedOver = false;
   try {
-    // Write anything still pending for the chapter being replaced — and cancel
-    // its debounce either way — before app.pages stops being that chapter.
+    // Write anything still pending for the chapter being replaced - and cancel
+    // its debounce either way - before app.pages stops being that chapter.
     await flushSave();
     if (!mine()) return;
 
@@ -1283,7 +1283,7 @@ export async function openChapter(projectId, chapterId) {
     // This is the whole of the chapter-switch race. `app.pages` is about to stop
     // describing the chapter `chapterRef` names, and everything that writes
     // reads that ref: the 800ms debounce `loadProjectPages` re-arms, a
-    // `flushSave` from a quit, and — the one that actually happened — the
+    // `flushSave` from a quit, and - the one that actually happened - the
     // `goBack` that `App.svelte` runs when the load below throws, which flushes
     // on its way out of the editor. Every one of them would serialise the NEW
     // chapter's pages into the OLD chapter's chapter.json, which is that
@@ -1298,7 +1298,7 @@ export async function openChapter(projectId, chapterId) {
     // The outgoing chapter has been flushed and its ref given up, and
     // `app.pages` may be a half-loaded document belonging to neither chapter.
     // `App.svelte` answers a failed open by navigating back, which flushes on
-    // the way out — so what that flush has to find is an editor with nothing
+    // the way out - so what that flush has to find is an editor with nothing
     // open at all, rather than one chapter's pages under another chapter's name.
     if (handedOver && mine()) closeChapter();
     throw e;
@@ -1311,7 +1311,7 @@ export async function openChapter(projectId, chapterId) {
 
 // Everything from the record read to the ref going back on. Called with the
 // outgoing chapter already flushed and `app.chapterRef` already null, so every
-// way out of here — a return, a throw, a newer open — leaves nothing aimed at
+// way out of here - a return, a throw, a newer open - leaves nothing aimed at
 // the chapter being left.
 async function loadChapter(p, c, projectId, chapterId, mine) {
   const record = await readJson(await fsx.join(c.dir, 'chapter.json'));
@@ -1320,7 +1320,7 @@ async function loadChapter(p, c, projectId, chapterId, mine) {
   const cleanedDir = await fsx.join(c.dir, 'cleaned');
 
   // Pages imported before `createChapter` measured them are on disk as `w:0,h:0`
-  // — a page with no coordinate space at all. The canvas repairs one per visit,
+  // - a page with no coordinate space at all. The canvas repairs one per visit,
   // so a chapter nobody has flipped through end to end still exports blank
   // sheets and PSDs ag-psd refuses to write. Repairing them here costs one
   // decode per unmeasured page, once, on the open that finds them: a measured
@@ -1330,7 +1330,7 @@ async function loadChapter(p, c, projectId, chapterId, mine) {
   let repaired = false;
   const measureIfUnmeasured = async (pg) => {
     if (hasPageSpace(pg)) return pg;
-    // Whatever the page actually draws — `cleaned ?? raw` — because that is the
+    // Whatever the page actually draws - `cleaned ?? raw` - because that is the
     // raster the page's coordinates have to agree with.
     const name = pg.cleaned ?? pg.file;
     const dir = pg.cleaned ? cleanedDir : rawsDir;
@@ -1348,7 +1348,7 @@ async function loadChapter(p, c, projectId, chapterId, mine) {
   const pages = [];
   for (const raw of record.pages ?? []) {
     // Checked per page, not merely after the loop: this is the long await in the
-    // whole function — one image decode per unmeasured page — and it is exactly
+    // whole function - one image decode per unmeasured page - and it is exactly
     // where a user who has changed their mind gets a second open in.
     if (!mine()) return;
     const pg = await measureIfUnmeasured(raw);
@@ -1377,7 +1377,7 @@ async function loadChapter(p, c, projectId, chapterId, mine) {
   const minted = loadProjectPages(pages);
   // After the swap, not before. Pointing the module at the new chapter releases
   // the old one's images, and releasing an image nulls the `raw`/`cleaned` of
-  // the page object that held it — done a moment earlier, those page objects
+  // the page object that held it - done a moment earlier, those page objects
   // are still the ones on screen, and the outgoing chapter would blink to a
   // blank sheet on its way out.
   setChapterImageDirs(rawsDir, cleanedDir);
@@ -1386,10 +1386,10 @@ async function loadChapter(p, c, projectId, chapterId, mine) {
   await setResidentWindow(app.pages, app.pageIndex);
   // A newer open has already swapped its own document in and taken the image
   // module with it. Everything below is state this load has no business writing
-  // any more — above all the ref, which is what a save aims at.
+  // any more - above all the ref, which is what a save aims at.
   if (!mine()) return;
   // The mode is a property of THIS chapter, so it is written on every open
-  // rather than left standing from the last one — opening a typeset chapter
+  // rather than left standing from the last one - opening a typeset chapter
   // after a translate one must give back the whole editor. The catalogue follows
   // the record it just read, so a chapter.json edited outside the app is
   // believed here as well as by the scan.
@@ -1397,12 +1397,12 @@ async function loadChapter(p, c, projectId, chapterId, mine) {
   app.chapterMode = mode;
   c.mode = mode;
   // The layout belongs to the PROJECT, so it comes off the catalogue record
-  // rather than out of chapter.json — a chapter has no say in it. Written on
+  // rather than out of chapter.json - a chapter has no say in it. Written on
   // every open for the same reason the mode is: opening a paged chapter after a
   // longstrip one must give back the paged canvas.
   app.projectLayout = normalizeLayout(p.layout);
   // Translate mode has no place and no text tool, and `setTool` refuses them
-  // while it is on — so a chapter opened in it always lands on the hand rather
+  // while it is on - so a chapter opened in it always lands on the hand rather
   // than on whatever the previous chapter was left holding.
   if (mode === 'translate') setTool('pan');
   // Order matters. loadProjectPages ends in markUnsaved(), which only schedules
@@ -1425,11 +1425,11 @@ async function loadChapter(p, c, projectId, chapterId, mine) {
   // arriving. Left unawaited, the read landed AFTER the user could already act:
   // a page turn or an edit in that window met an `openHistory` that overwrites
   // the document unconditionally and loads page one's stack over whatever page
-  // they had moved to — in-flight records gone, and undo pointing at edits that
+  // they had moved to - in-flight records gone, and undo pointing at edits that
   // belong to another page.
   //
-  // The cost this was avoiding — a slow or wedged filesystem standing between
-  // the user and a chapter that is ready to draw — is not one this function
+  // The cost this was avoiding - a slow or wedged filesystem standing between
+  // the user and a chapter that is ready to draw - is not one this function
   // escapes anyway: the record read above and `setResidentWindow`'s page reads
   // are on the same disk, and both are already awaited. One more read changes
   // nothing about that and closes the race. Still caught: history is a
@@ -1440,7 +1440,7 @@ async function loadChapter(p, c, projectId, chapterId, mine) {
 // Saves are serialised, the same way the history file's writes are and for the
 // same reason. `flushSave`'s clearTimeout cannot call back a debounce that has
 // already entered `Promise.resolve().then(saver)`, so two of these can be in
-// flight at once — and each snapshots `app.pages` at its own moment, so the
+// flight at once - and each snapshots `app.pages` at its own moment, so the
 // older snapshot can rename last and overwrite a genuinely later edit. The
 // atomic write means the file can never tear; the queue is what makes the last
 // edit the one that survives.
@@ -1448,7 +1448,7 @@ let saving = Promise.resolve();
 
 // A tag for "which save is this", so a save that lands can tell whether it is
 // still the newest one queued. Incremented once per call, before the queue
-// even runs it — the ordering the indicator has to trust is call order, not
+// even runs it - the ordering the indicator has to trust is call order, not
 // finish order.
 let saveSeq = 0;
 
@@ -1456,7 +1456,7 @@ export function saveOpenChapter() {
   const seq = ++saveSeq;
   const done = saving.then(() => writeOpenChapter(seq));
   // The queue must outlive a save that fails, or one bad write would strand
-  // every later one — but the rejection still reaches this caller, because a
+  // every later one - but the rejection still reaches this caller, because a
   // rejected autosave is the user's only signal that their work is off-disk.
   saving = done.catch(() => {});
   return done;
@@ -1465,15 +1465,15 @@ export function saveOpenChapter() {
 async function writeOpenChapter(seq) {
   // Captured once. Every await below is a window in which the user can close
   // this chapter or open another, and `app.pages` stops being what `ref`
-  // describes the moment they do — so the identity of the ref is re-checked
+  // describes the moment they do - so the identity of the ref is re-checked
   // after each one. A debounce already in flight cannot be cancelled; this is
   // what stops it writing an empty or foreign document over a real chapter.
   const ref = app.chapterRef;
   if (!ref) return;
   // …and the document in hand has to be that chapter's. The two are set together
   // and cleared together, so a disagreement means this save has arrived in the
-  // middle of something — a chapter switch part-way through, a load abandoned by
-  // a newer one — with `app.pages` already replaced. Writing then is the one
+  // middle of something - a chapter switch part-way through, a load abandoned by
+  // a newer one - with `app.pages` already replaced. Writing then is the one
   // shape that puts a live chapter's document into another chapter's file.
   if (!loadedRef || loadedRef.projectId !== ref.projectId || loadedRef.chapterId !== ref.chapterId) {
     return;
@@ -1486,8 +1486,8 @@ async function writeOpenChapter(seq) {
   if (app.chapterRef !== ref) return;
 
   record.updatedAt = now();
-  // The open chapter's mode is app state while it is open — that is how a switch
-  // made from the project screen reaches a chapter already on screen — so the
+  // The open chapter's mode is app state while it is open - that is how a switch
+  // made from the project screen reaches a chapter already on screen - so the
   // record follows it here rather than the other way round.
   record.mode = app.chapterMode;
   // Blob URLs are runtime-only. `file` and `cleanedFile` are the durable
@@ -1509,20 +1509,20 @@ async function writeOpenChapter(seq) {
   // Serialised here, in the same synchronous breath as `record.pages` and from
   // the same document, so the two files can never describe different moments.
   // Read after the write below instead, it would be `app.pages` as it stands
-  // once the disk has come back — which may by then be another chapter's.
+  // once the disk has come back - which may by then be another chapter's.
   const text = buildTextJson(app.pages);
   await writeJson(path, record);
   // …and the translations beside it, on the same debounce. Every route into the
-  // document already ends in `markUnsaved()` — detection, a queue edit, a
-  // placement — so this file is refreshed 800ms after the last keystroke rather
+  // document already ends in `markUnsaved()` - detection, a queue edit, a
+  // placement - so this file is refreshed 800ms after the last keystroke rather
   // than on a count of edits: no rule about "every two boxes" to get wrong, and
   // no burst of writes while someone is typing. It is a derived file and nothing
   // reads it back, so it cannot lose the user anything chapter.json above has
-  // not already saved — but it is awaited and not swallowed, because a disk that
+  // not already saved - but it is awaited and not swallowed, because a disk that
   // cannot take this one cannot take that one either, and the save indicator is
   // the only place that ever gets said.
   await writeTranslationsJson(c.dir, text);
-  // Any write that lands ends the failure streak, whoever asked for it — the
+  // Any write that lands ends the failure streak, whoever asked for it - the
   // debounced autosave included. The escape below is for a disk that keeps
   // failing, not for one that failed once an hour ago.
   saveFailures = 0;
@@ -1543,7 +1543,7 @@ async function writeOpenChapter(seq) {
     c.pageCount = record.pages.length;
     c.typeset = isTypeset(record.pages);
   }
-  // Only the chapter still on screen can be declared saved — and only when no
+  // Only the chapter still on screen can be declared saved - and only when no
   // later save is already queued behind this one. A newer call bumped saveSeq
   // the moment it was made, before it ever reached the write; if that has
   // happened, a newer snapshot exists that this write did not carry, and the
@@ -1554,7 +1554,7 @@ async function writeOpenChapter(seq) {
 
 export function closeChapter() {
   // Before the pages go, because the live page's stack is only in memory until
-  // this runs — without it the last 800ms of records never reach disk. The id
+  // this runs - without it the last 800ms of records never reach disk. The id
   // comes off the page itself rather than `page()`, whose empty-document
   // stand-in answers to 0 and would file the stack under a page that does not
   // exist; a null hands the module back to its own record of which page is
@@ -1579,10 +1579,10 @@ export function closeChapter() {
   app.loaded = false;
   // Back to the default, because the mode belonged to the chapter that was open.
   // Left standing, a translate chapter closed to the library would keep the
-  // editor stripped for the next chapter opened — and `openChapter` writes it
+  // editor stripped for the next chapter opened - and `openChapter` writes it
   // anyway, so this is only about what the app is between two chapters.
   app.chapterMode = 'typeset';
-  // And so does the layout, for the same reason — it belonged to the project the
+  // And so does the layout, for the same reason - it belonged to the project the
   // closed chapter was in.
   app.projectLayout = 'pages';
   // The failure streak belongs to the chapter that was open. Nothing is pending
@@ -1605,7 +1605,7 @@ export function closeChapter() {
 //
 // But a full disk, a revoked permission or an unplugged volume fails EVERY time,
 // and a chapter that cannot be closed inside a window that cannot be closed is a
-// worse outcome than the paragraph being protected — the only way out would be
+// worse outcome than the paragraph being protected - the only way out would be
 // the quit path, which drops the same work without asking. So the SECOND
 // consecutive attempt says exactly what is about to be lost and lets the user
 // through. Two deliberate requests, same shape as the two-step deletes on the
@@ -1632,7 +1632,7 @@ export function resetSaveFailures() {
 
 // Wait for a promise, but not forever. Every failure inside the history's write
 // is reported and swallowed, so the one thing left that can go wrong there is a
-// call that never comes back — a network volume that has gone away, a wedged
+// call that never comes back - a network volume that has gone away, a wedged
 // mount. Awaited unbounded, that would hang the quit for good: the close-request
 // path is single-flight, so a second press of the red button would not even
 // retry, and the window could never be closed again.
@@ -1652,7 +1652,7 @@ async function atMost(ms, p) {
 }
 
 // Flush whatever the debounce is holding, on the way out of the chapter.
-// `where` picks the wording — 'editor' for closing the chapter, 'quit' for
+// `where` picks the wording - 'editor' for closing the chapter, 'quit' for
 // closing the window. Resolves true when it is safe to go, false when the caller
 // must stay put.
 export async function flushBeforeLeaving(where) {
@@ -1661,13 +1661,13 @@ export async function flushBeforeLeaving(where) {
   // been applied to the document and will be written by the save below, while
   // the panel holding its record is about to be unmounted and throw it away.
   // The stack would then come back off disk a step short of the document, and
-  // the next undo would rewind the edit before it while the last one stood —
+  // the next undo would rewind the edit before it while the last one stood -
   // the same shape as a settle landing on the wrong page, through a narrower
   // door. Here rather than after the flushes because the record has to exist
   // before the history's flush takes its snapshot, and while `app.pages` is
   // still the document the entry names.
   settleEdits();
-  // The history's own flush belongs on this path — it is the only thing that
+  // The history's own flush belongs on this path - it is the only thing that
   // gets the last records out on the way to a quit, which destroys the window
   // the moment this resolves. Started alongside the document's save rather than
   // before it, and its result never consulted: whether the user may leave is
@@ -1695,7 +1695,7 @@ export async function flushBeforeLeaving(where) {
     // Only the quit path waits, and only for a bounded moment. Quitting
     // destroys the window as soon as this resolves, so the records have to have
     // landed by then; leaving the editor destroys nothing, and `closeChapter`
-    // flushes again a moment later anyway. Neither can change the answer — a
+    // flushes again a moment later anyway. Neither can change the answer - a
     // `finally` does not overwrite a return.
     if (where === 'quit') await atMost(HISTORY_WAIT_MS, history);
   }

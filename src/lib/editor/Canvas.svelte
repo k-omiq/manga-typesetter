@@ -1,8 +1,5 @@
 <script>
-  // The page itself, and nothing else. Everything that used to sit around it —
-  // the panel header, the tool dock, the zoom dock — is now chrome floating over
-  // the full-bleed canvas, owned by EditorRoot. What is left is the scroll
-  // viewport, the page frame and the boxes on it.
+  // Editor canvas viewport and page rendering.
   import { onMount, untrack } from 'svelte';
   import TextBox from '../TextBox.svelte';
   import {
@@ -32,68 +29,29 @@
   } from './strip.js';
   import { publishStripScroll } from './strip-sync.svelte.js';
 
-  // The dock's Fit button has no page geometry of its own, and the fit has to be
-  // measured against this scroll container rather than the window — the canvas
-  // layer is inset from the left by the reference sidebar and the rail. So the
-  // measurement stays here and the button reaches it through this handle.
+  // Handle for dock Fit button.
   let { onReady } = $props();
 
   let scrollEl;
   let stageEl;
   let pageFrameEl;
-  // The longstrip column, and one element per page inside it. Both are null in a
-  // paged chapter, where `pageFrameEl` above is the only frame there is.
-  //
-  // The per-page elements are held because three things need a specific page's
-  // frame rather than "the frame": a pointer event has to be resolved to the
-  // page it landed on, each TextBox's rotate drag measures its own page's
-  // origin, and the scroll listener reads every frame's offset to decide which
-  // page the reader is on.
+  // Per-page frame element bindings.
   let stripEl;
   let frameEls = $state([]);
   let lastFitKey = '';
 
-  // Free pan, in CSS pixels, applied to the page frame on top of whatever the
-  // scroll container is doing.
-  //
-  // The hand used to be scrollLeft/scrollTop and nothing else, which made it a
-  // tool that did nothing at the zoom most of the work happens at: at Fit — and
-  // at anything below the zoom where the page outgrows the viewport — there is
-  // no overflow, so there is no scroll, so the hand grabbed the page and the
-  // page stayed put. Panning is not scrolling; scrolling is just the part of it
-  // the container can express.
-  //
-  // So the drag spends scroll room first, and the part the container refuses
-  // becomes this offset. That ordering matters: on a zoomed-in page the gesture
-  // is still a plain scroll, scrollbars track the hand, and nothing about the
-  // old behaviour changed. Only once an edge is reached does the page start to
-  // travel on its own.
+  // Canvas pan state in CSS pixels.
   let pan = $state({ x: 0, y: 0 });
-  // True only while a hand/text drag is actually moving the page. It gates a
-  // `will-change: translate` on the frame: promoted for the gesture, WebKit
-  // keeps the page's raster cached and slides it, instead of periodically
-  // re-rasterizing mid-drag — which showed up as a one-frame full-page shimmer
-  // ("flinch") every half-second or so of dragging. Not left on permanently:
-  // the frame is the largest element on screen and a standing layer for it is
-  // real compositor memory.
+  // Tracks active pan gesture for hardware acceleration.
   let panLive = $state(false);
-  // How much of the page must stay inside the viewport. This is the "sensible
-  // restriction": the page can be pushed almost all the way out of frame — far
-  // enough to read the very corner of it against the edge of the screen — but
-  // never so far that there is nothing left to grab and drag back.
+  // Minimum pixels of page retained in viewport.
   const KEEP = 96;
 
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-  // Everything the clamp is made of, read off the layout in one go: the frame's
-  // un-panned position and the two boxes. `applied` is the offset the DOM is
-  // currently rendered with, which is what lets the un-panned position be
-  // recovered from a live measurement instead of being tracked separately — the
-  // frame moves with the zoom, the fit, the sidebar and the scroll position, and
-  // every one of those would need mirroring here otherwise.
+  // Base layout dimensions for pan clamping.
   function panBase(applied) {
-    // Whatever the pan is actually applied to: one page frame, or the whole
-    // longstrip column.
+
     const el = strip ? stripEl : pageFrameEl;
     if (!scrollEl || !el) return null;
     const sr = scrollEl.getBoundingClientRect();
@@ -115,7 +73,7 @@
   //
   // That split is what the drag needs. Every move writes scrollLeft/scrollTop and
   // then clamps, and a getBoundingClientRect between those two forces a
-  // synchronous layout on every single pointermove — of the whole longstrip
+  // synchronous layout on every single pointermove - of the whole longstrip
   // column, in a strip. It also asked the DOM a question about a pan the DOM has
   // not necessarily been given yet, so the base it derived could disagree with
   // the offset it was clamping, and the page jittered at the edges of the range.
@@ -133,7 +91,7 @@
     const snap = (v) => Math.round(v * dpr) / dpr;
     return {
       x: snap(clamp(next.x, keepX - base.fw - ux, base.vw - keepX - ux)),
-      // A strip does not pan vertically. Down the column IS the scroll — the
+      // A strip does not pan vertically. Down the column IS the scroll - the
       // container always has somewhere to go, so a free offset could only ever
       // be built up at the two ends of the chapter, and the clamp that bounds it
       // is measured against the column's own height, which for a webtoon is tens
@@ -145,8 +103,8 @@
   }
 
   // The at-rest form: measure and clamp in one breath. Every caller outside a
-  // drag is answering a change that has already been laid out — a zoom, a
-  // resize — so there is nothing to be gained by holding the measurement.
+  // drag is answering a change that has already been laid out - a zoom, a
+  // resize - so there is nothing to be gained by holding the measurement.
   function clampPan(next, applied) {
     const base = panBase(applied);
     return base ? clampTo(next, base) : next;
@@ -157,7 +115,7 @@
   // Every branch in this file is behind this one flag: a paged chapter draws and
   // behaves exactly as it did before longstrip existed.
   const strip = $derived(isLongstrip());
-  // What a page draws, for any page rather than only the current one — a strip
+  // What a page draws, for any page rather than only the current one - a strip
   // mounts every page in the chapter at once. Same rule as the single-page
   // `baseSrc` below, and the note there is the reason for it.
   const srcOf = (pg) => (translate ? pg.raw : (pg.cleaned ?? pg.raw));
@@ -165,14 +123,14 @@
   // raw so an imported raws-only chapter still shows something to place on.
   //
   // A translate chapter is the other way round and not a fallback: the raw is
-  // the page being read, and a cleaned raster — which has had the Japanese
-  // painted out of it — is the one thing that cannot be translated from. So it
+  // the page being read, and a cleaned raster - which has had the Japanese
+  // painted out of it - is the one thing that cannot be translated from. So it
   // is `p.raw` outright, and a chapter with no raw shows nothing rather than
   // quietly showing the cleaned art instead.
   const baseSrc = $derived(translate ? p.raw : (p.cleaned ?? p.raw));
 
   // Fit is "the whole page, plus the breathing room the stage draws around it,
-  // inside the canvas viewport" — so the number it reports is a zoom at which
+  // inside the canvas viewport" - so the number it reports is a zoom at which
   // nothing is cut off. Three things it used to get wrong, all of which made the
   // percentage a small lie and left the page's edges hanging over the viewport:
   //   · the margin was 100 against a stage that pads 60 on each side, so it
@@ -185,8 +143,8 @@
   //     was a lie on the vertical axis the moment the two differed. That is the
   //     one that mattered most, because the stage's vertical padding is no
   //     longer plain --stage-pad: `.editor-scroll` spans the FULL window height
-  //     — the chrome pills at the top and the zoom dock at the bottom float over
-  //     it and inset nothing — so `.stage` raises its top and bottom padding to
+  //     - the chrome pills at the top and the zoom dock at the bottom float over
+  //     it and inset nothing - so `.stage` raises its top and bottom padding to
   //     clear them. Fit has to reserve the same band the stylesheet reserves, or
   //     it reports a page as fitting into space that is behind the dock.
   //
@@ -203,13 +161,13 @@
     const padX = px(cs.paddingLeft) + px(cs.paddingRight);
     const padY = px(cs.paddingTop) + px(cs.paddingBottom);
     // The pads are in the key too: a stylesheet whose padding responds to
-    // anything — a media query, a theme — must re-fit, and the viewport size
+    // anything - a media query, a theme - must re-fit, and the viewport size
     // alone would not have changed.
     // A strip fits its WIDTH and nothing else: the column is the whole chapter,
     // there is no height that could be made to fit, and the vertical axis is the
     // container's own scrolling. It is measured against the widest page rather
-    // than the current one — a fit taken off a narrow slice would let a wide one
-    // hang over both edges — so the key names that instead of one page's box.
+    // than the current one - a fit taken off a narrow slice would let a wide one
+    // hang over both edges - so the key names that instead of one page's box.
     const key = strip
       ? `${vw}x${vh}+${padX}x${padY}@strip:${maxPageWidth(app.pages)}`
       : `${vw}x${vh}+${padX}x${padY}@${p.w}x${p.h}`;
@@ -227,7 +185,7 @@
     }
   }
 
-  // Every gesture in flight, so an unmount can end them all — see the same set
+  // Every gesture in flight, so an unmount can end them all - see the same set
   // in FloatingPanel. The listeners live on `document` and nothing guarantees a
   // further pointer event once this component is gone.
   const live = new Set();
@@ -240,14 +198,14 @@
   // together because in a strip they are two answers to one question: the
   // chapter's pages are all on screen at once, so "where on the page" has no
   // meaning until "which page" has been settled, and the page the scroll
-  // position happens to have made current is not it — the reader can click the
+  // position happens to have made current is not it - the reader can click the
   // tail of the slice above or the head of the one below without the index
   // moving at all.
   //
   // Resolved from the event's own target rather than from geometry: the frame
   // is the element the press landed in, which is the same answer as a hit test
   // and cannot disagree with what the browser dispatched. Answers null when the
-  // press was not inside a frame at all — in a paged chapter that is
+  // press was not inside a frame at all - in a paged chapter that is
   // unreachable (the caller has already demanded a press on `.boxlayer`), and
   // in a strip it is a press on the air beside the column.
   // Whether a page has a coordinate space at all. Until its art has been
@@ -271,16 +229,16 @@
 
   // Bound to `.stage`, not to `.boxlayer`, and that difference is the whole of
   // the hand tool. `.stage` is the element the grab cursor is painted on, and it
-  // fills the scroll viewport (`min-width/min-height:100%`) — the pad around the
+  // fills the scroll viewport (`min-width/min-height:100%`) - the pad around the
   // page and the grey surround of one zoomed below fit are all part of it. Bound to
   // `.boxlayer` instead, which is `inset:0` of the page frame, the hand advertised
   // a pan over roughly a third of the visible surface that it then refused to
   // perform. Presses on the page still arrive here: `.boxlayer` is a descendant,
   // so they bubble.
   //
-  // Only the hand claims the extra ground. Text and Place stay page-only — they
+  // Only the hand claims the extra ground. Text and Place stay page-only - they
   // read a point in page coordinates, and a click 200px out in the grey would
-  // otherwise land a box off the paper — so their branch below still demands a
+  // otherwise land a box off the paper - so their branch below still demands a
   // press that landed on `.boxlayer` itself.
   function onStagePointerDown(e) {
     // The primary button and nothing else. A right-click is on its way to a
@@ -298,7 +256,7 @@
     }
     // Below here every branch can add a box to the page, and a translate chapter
     // has none. The tool is forced to the hand when such a chapter opens and
-    // `setTool` refuses the other two while it is on, so this is unreachable —
+    // `setTool` refuses the other two while it is on, so this is unreachable -
     // which is exactly why it is cheap to keep: the cost of being wrong is a
     // stray box on a page the user is not typesetting.
     if (translate) return;
@@ -314,7 +272,7 @@
     const pg = hit.pg;
     // The page under the pointer decides, not the current one, and it is handed
     // on so the box lands where the click did. `placeActiveAt` moves the index
-    // onto it — see `focusPage`.
+    // onto it - see `focusPage`.
     if (pg.activeLineN != null && lineByN(pg, pg.activeLineN)) placeActiveAt(hit.x, hit.y, pg);
     else deselect();
   }
@@ -328,7 +286,7 @@
     // the capture, a button released outside gets no pointerup here at all and
     // the page comes back stuck to the cursor. Captured on the element the press
     // landed on rather than on `.stage`, because a captured pointer's events are
-    // retargeted at the capture element — and the release below resolves which
+    // retargeted at the capture element - and the release below resolves which
     // page a new box goes on from `ev.target`. The listeners stay on `document`:
     // a captured pointer's events still bubble to it.
     e.target.setPointerCapture?.(pid);
@@ -337,7 +295,7 @@
     const sl = scrollEl.scrollLeft,
       st = scrollEl.scrollTop;
     const basePan = { x: pan.x, y: pan.y };
-    // Measured once, here, and not again for the rest of the gesture — see
+    // Measured once, here, and not again for the rest of the gesture - see
     // `clampTo`. What changes under a pan is the scroll position, and the
     // handler already knows how far it has moved it.
     const geom = panBase(basePan);
@@ -346,7 +304,7 @@
       if (panLive !== v) panLive = v;
     };
     const move = (ev) => {
-      // A second pointer — another touch, or a pen alongside the mouse — would
+      // A second pointer - another touch, or a pen alongside the mouse - would
       // otherwise drive this same closure from a start point it never measured
       // against.
       if (ev.pointerId !== pid) return;
@@ -358,7 +316,7 @@
       // Scroll takes what it can hold; the rest becomes the free offset. Both
       // halves are computed from the gesture's own start values rather than
       // accumulated per frame, so a drag out past the edge and back in lands
-      // exactly where it began — an accumulating version drifts.
+      // exactly where it began - an accumulating version drifts.
       const maxL = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
       const maxT = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
       const wantL = sl - dx,
@@ -373,8 +331,8 @@
       pan = geom ? clampTo(want, geom, gotL - sl, gotT - st) : want;
     };
     // One controller for both endings, the same net FloatingPanel and TextBox
-    // keep: a gesture the browser takes away from us — an OS gesture claiming
-    // the pointer, a lost capture — fires pointercancel and never a pointerup,
+    // keep: a gesture the browser takes away from us - an OS gesture claiming
+    // the pointer, a lost capture - fires pointercancel and never a pointerup,
     // and a pan handler that survived it would follow the cursor with nothing
     // held and nothing left to stop it. A cancelled press adds no box: the
     // gesture was taken away, not finished.
@@ -387,15 +345,15 @@
       if (addsBox && !panning && ev.type === 'pointerup') {
         // Resolved from the RELEASE, which is where the box goes. A press that
         // never travelled cannot have left the frame it started in, so this is
-        // the same frame either way; reading it here keeps the one rule — the
-        // box lands on the page the pointer is over — with no second copy of
+        // the same frame either way; reading it here keeps the one rule - the
+        // box lands on the page the pointer is over - with no second copy of
         // the press's answer to keep in step.
         const hit = frameCoords(ev);
         // A page whose art has not decoded yet is `w:0,h:0`, and it has no
         // coordinate space to put a box in: `addEmptyBox` clamps the box
         // against `p.w - w`, which on such a page is a clamp to zero, so every
         // box typed onto it collapses into the top-left corner and stays there
-        // once the real size arrives. Refused rather than placed wrongly — the
+        // once the real size arrives. Refused rather than placed wrongly - the
         // press is worth a word, because the page it landed on looks like a
         // page and the box would simply not appear where the user put it.
         if (hit && !measured(hit.pg)) toast('This page is still loading — try again in a moment');
@@ -410,14 +368,14 @@
 
   // The one place the page's coordinate space is learned: the image that fills
   // the frame has finished decoding and can finally say how big it is. Until
-  // this fires the page is `w:0,h:0` — `createChapter` copies the files without
-  // decoding them — so every page in a chapter is unmeasured until it has been
+  // this fires the page is `w:0,h:0` - `createChapter` copies the files without
+  // decoding them - so every page in a chapter is unmeasured until it has been
   // looked at once.
   //
   // Addressed by the URL that loaded, not by "the page on screen". There is one
   // `<img>` element and `src` changes under it on every page turn, so a decode
   // that finishes after the turn used to write the size of the page being left
-  // onto the page being arrived at — and on a chapter with a double-page spread
+  // onto the page being arrived at - and on a chapter with a double-page spread
   // in it, that leaves a page permanently stretched and saves it that way. The
   // object URL belongs to exactly one page, so the answer has no timing in it.
   // The fallback to the current page is the pre-existing behaviour, kept for
@@ -425,7 +383,7 @@
   // rather than dropping the measurement on the floor.
   //
   // `owner` is the page this `<img>` was mounted for. It only matters for the
-  // fallback below — the addressing above is by URL and needs no help — but in a
+  // fallback below - the addressing above is by URL and needs no help - but in a
   // strip "the current page" is a poor guess at which of the mounted images just
   // decoded, and the element already knows.
   function onCleanedLoad(e, owner) {
@@ -438,11 +396,11 @@
     // The resident window moved off the page while its picture was decoding, so
     // `page-images.js` revoked the URL and nulled the fields that pointed at it.
     // The measurement is then about a page that is no longer showing this art,
-    // and the fallback below would write it onto whichever page is current NOW —
+    // and the fallback below would write it onto whichever page is current NOW -
     // stretching that page's coordinate space, rescaling every box on it, and
     // saving the result. `wasPageImage` is how this is told apart: the module
     // remembers the URLs it minted, including the ones it has since revoked, so
-    // a decode that lands after an eviction is recognised and dropped whole —
+    // a decode that lands after an eviction is recognised and dropped whole -
     // the pixel cache below is skipped with it, for the same reason.
     //
     // Or it is a `src` this app never minted, which nothing does today. That one
@@ -451,7 +409,7 @@
     if (!target) setPageDims(owner ?? page(), img.naturalWidth, img.naturalHeight);
     // The same moment, used twice. This element is the only place in the app
     // where a decoded page raster exists without anything having to fetch one,
-    // and balloon fitting needs those pixels SYNCHRONOUSLY — a click places a
+    // and balloon fitting needs those pixels SYNCHRONOUSLY - a click places a
     // box and the box's size comes out of the fit. So the page is copied into an
     // `ImageData` here, once, and placement reads it out of the cache; see
     // page-pixels.js for the bound and for why the `src` is stored beside the
@@ -465,7 +423,7 @@
     // Only when the measurement was about the page being drawn: a fit
     // recomputed off another page's dimensions is the same lie one step later.
     //
-    // A strip has no such thing as another page's dimensions — its fit is the
+    // A strip has no such thing as another page's dimensions - its fit is the
     // widest page in the chapter, so a page that has just been measured for the
     // first time can change it whoever is on screen. Unforced, so the key does
     // the deciding and a page that was not the widest costs nothing.
@@ -479,8 +437,8 @@
     app.pageIndex;
     // Not in a strip. There the index is DERIVED from the scroll position (see
     // `syncStrip`), so this would fire on the way down every chapter: dropping
-    // the pan and re-fitting — which in a strip also means re-deciding the zoom
-    // — under a reader who is only scrolling. The page turn it exists to answer
+    // the pan and re-fitting - which in a strip also means re-deciding the zoom
+    // - under a reader who is only scrolling. The page turn it exists to answer
     // does not exist there.
     if (untrack(() => strip)) return;
     // A new page arrives centred, whatever the last one was left looking like.
@@ -492,8 +450,8 @@
   //
   // Nothing else in the app decides this: `gotoPage` stays the one writer of the
   // index, so the history swap and the queue's `activeLineN` still happen
-  // exactly once per change, and everything downstream — the queue, the
-  // inspector, detect, the save — goes on reading `page()` without knowing the
+  // exactly once per change, and everything downstream - the queue, the
+  // inspector, detect, the save - goes on reading `page()` without knowing the
   // difference.
   //
   // Throttled to a frame because a scroll fires far faster than one, and each
@@ -511,7 +469,7 @@
     if (!strip || !scrollEl) return;
     // A frame per page or nothing: a half-mounted column would answer with the
     // pages it happens to have, which is a jump to a page nobody scrolled to.
-    // Only the first `pages.length` entries are asked about — a chapter swapped
+    // Only the first `pages.length` entries are asked about - a chapter swapped
     // underneath the editor for a shorter one leaves the bindings it emptied
     // behind as nulls, and refusing to answer for the rest of the session
     // because of them would freeze the index at whatever page it was on.
@@ -540,17 +498,17 @@
     // `gotoPage` clears the selection and closes the caret, so a click on a box
     // in the tail of the slice above would be undone by the next scroll frame.
     // The page that box is on holds the index until it has been scrolled off
-    // screen — see `focusHoldsIndex` for the rule and why it is a hold rather
+    // screen - see `focusHoldsIndex` for the rule and why it is a hold rather
     // than a lock.
     const working = !!(app.editingId || app.selectedId);
     if (i !== app.pageIndex && !(working && focusHoldsIndex(tops, heights, app.pageIndex, st, vh)))
       gotoPage(i);
-    // The reference strip follows this one — see strip-sync.svelte.js.
+    // The reference strip follows this one - see strip-sync.svelte.js.
     publishStripScroll(scrollFraction(scrollEl));
   }
 
-  // Zooming does not cancel a pan — a user who has pushed the page aside to see
-  // a corner expects to be able to zoom into it — but it does change what
+  // Zooming does not cancel a pan - a user who has pushed the page aside to see
+  // a corner expects to be able to zoom into it - but it does change what
   // "almost off screen" means, so the offset is re-bounded against the new
   // frame. `untrack` on the read is what stops this writing its own dependency
   // and re-running forever.
@@ -572,7 +530,7 @@
     computeFit(true);
     // The observer is why the fit needs no knowledge of the sidebar: dragging the
     // rail, hiding the reference, resizing the window all change this element's
-    // box, and each of them re-measures. The floating panels do not — they are
+    // box, and each of them re-measures. The floating panels do not - they are
     // deliberately ignored, so a panel dragged over the page covers it rather
     // than reflowing it.
     const ro = new ResizeObserver(() => {
@@ -594,7 +552,7 @@
     // Continuous in the wheel's own delta rather than a fixed step per event,
     // the same shape the reference strip's pinch already had (see `RefSidebar`).
     // A trackpad pinch arrives as sixty to a hundred small events, and a flat
-    // ×1.1 on each of them crossed the entire zoom range in one flick — the page
+    // ×1.1 on each of them crossed the entire zoom range in one flick - the page
     // leapt to the ceiling and back. `exp` keeps it geometric like the dock's
     // buttons, so the same travel is the same ratio wherever the zoom starts,
     // and the ends are still `setZoom`'s clamp.

@@ -6,12 +6,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // `autoFitBox` is the one function that makes a box's rectangle describe its
 // text, and until this file existed nothing in the suite ever ran it: it asks
 // `canMeasure()` first, and under node there is no canvas, so it declined in all
-// 558 tests. Everything downstream of it — the fit at placement, the refit on
-// load, the geometry an undo puts back — was comment-backed only.
+// 558 tests. Everything downstream of it - the fit at placement, the refit on
+// load, the geometry an undo puts back - was comment-backed only.
 //
 // The seam is one function, and the mock is one line of it. `measure.js` already
 // falls back to a stand-in metric with no canvas (`lineWidth` answers
-// `chars * size * 0.55`), and that fallback is deterministic — so the ONLY thing
+// `chars * size * 0.55`), and that fallback is deterministic - so the ONLY thing
 // this environment is missing is the permission to use it. Nothing else is
 // stubbed: the real `layoutLines`, the real `balanceLines`, the real
 // `neededHeight` and `growToFit` all run. That is deliberate. A hand-written
@@ -201,7 +201,7 @@ describe('placement fits the box it just created', () => {
     expect(page().boxes).toHaveLength(0);
     redo();
     // The `place` entry carries the box, and the box it carries is the fitted
-    // one — the fit runs before the record, not after it.
+    // one - the fit runs before the record, not after it.
     expect(geom(page().boxes[0])).toEqual(geom(b));
   });
 });
@@ -211,7 +211,7 @@ describe('placement fits the box it just created', () => {
 // ===========================================================================
 // The grow is not an edit of its own and gets no history step of its own. What
 // it gets is a ride on the entry for the edit that caused it: `geomBefore` and
-// `geomAfter`. It used to be re-derived instead, which cannot work — the fit is
+// `geomAfter`. It used to be re-derived instead, which cannot work - the fit is
 // grow-only, so nothing it could do would give back the height the grow took.
 describe('undo restores the height an edit grew', () => {
   const short = () => [
@@ -221,7 +221,7 @@ describe('undo restores the height an edit grew', () => {
       h: 1200,
       lines: [],
       // Three lines at size 20 need 70, so the load's own refit leaves both of
-      // these exactly as the file had them — the growth below belongs to the
+      // these exactly as the file had them - the growth below belongs to the
       // edit under test and to nothing else.
       boxes: [
         { id: 'b1', lineN: null, text: 'AAAA BBBB CCCC', x: 100, y: 500, w: 60, h: 80, style: { size: 20, valign: 'middle' } },
@@ -260,7 +260,7 @@ describe('undo restores the height an edit grew', () => {
   });
 
   // The worse half of the same bug: undo restores `autoHeight:false`, so a
-  // re-derivation on the way back does not merely fail to shrink the box — it
+  // re-derivation on the way back does not merely fail to shrink the box - it
   // declines to run at all, and the height is stuck for good.
   it('walks back a box that grew because auto-height was switched on', () => {
     loadProjectPages([
@@ -350,7 +350,7 @@ describe('undo restores the height an edit grew', () => {
     b.h = 20;
     record({ t: 'style', pageId: 1, boxId: 'b1', before: { size: 20, valign: 'top' }, after: { size: 60, valign: 'top' } });
     undo();
-    // No pair to restore, so the height is re-derived — grow-only, so the box
+    // No pair to restore, so the height is re-derived - grow-only, so the box
     // is at least big enough for the text the undo just put back in it.
     expect(byId('b1').style.size).toBe(20);
     expect(byId('b1').h).toBe(neededHeight(2, { size: 20, lineHeight: 1.1 }, 2));
@@ -387,7 +387,7 @@ describe('a font arriving invalidates the fitted heights', () => {
 });
 
 // The queue's translation field writes `line.en`, and a box placed from that
-// line renders it — so it is an edit to the box's text arrived at from the other
+// line renders it - so it is an edit to the box's text arrived at from the other
 // end, and the box has to follow. It used to rely on the canvas component's
 // effect, which only ever covers what is rendered.
 describe('the queue’s own text field is a path like any other', () => {

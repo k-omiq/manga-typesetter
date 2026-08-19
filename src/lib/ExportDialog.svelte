@@ -5,16 +5,12 @@
 
   const isTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
 
-  // JSON exports the detected/typeset text, not a rendered page — one document
-  // for the whole scope rather than one file per page.
+  // JSON exports detected/typeset text as one document.
   const isJson = $derived(app.fmt === 'JSON');
-  // A longstrip chapter's raster export is a re-cut of the whole column, so the
-  // slice height only has anything to answer for the formats and the scope that
-  // re-cut it: not PSD (one layered document per source page) and not JSON.
+  // Longstrip raster export re-cuts column for non-PSD/JSON formats.
   const isStrip = $derived(isLongstrip() && !isJson && app.fmt !== 'PSD');
 
-  // Typing "9" on the way to "9000" must not be clamped to the floor under the
-  // user's fingers, so the field is only pulled into range when it is committed.
+  // Clamp slice height when committed.
   function onSliceH(e) {
     const v = Math.round(Number(e.target.value));
     app.stripSliceH = isFinite(v) && v > 0 ? Math.min(SLICE_H_MAX, Math.max(SLICE_H_MIN, v)) : SLICE_H_DEFAULT;
@@ -32,11 +28,7 @@
   }
   async function go(scope) {
     close();
-    // Exporting is not saving. This used to call markSaved(), which flipped the
-    // indicator to "saved" at the one moment chapter.json is most likely to be
-    // genuinely stale — a debounce is normally still pending when the user hits
-    // Export. The indicator answers "is my work on disk", and an export answers
-    // a different question.
+
     await exportImages(app.fmt, scope);
   }
 </script>
@@ -52,10 +44,7 @@
       </button>
     </div>
     <div class="modal-body">
-      <!-- The format used to live in the top bar, beside the Export button. The
-           bar is gone and the floating chrome has no room for a combo box, so it
-           comes here — where it is read anyway, right above the name and blurb
-           that change with it. -->
+
       <div class="grp">
         <label class="lbl" for="exp-fmt">Format</label>
         <select id="exp-fmt" bind:value={app.fmt}>
@@ -68,17 +57,12 @@
         <input type="text" value={app.exportName} oninput={onName} placeholder="page" />
         <div class="exp-sub">
           {#if isJson}
-            <!-- One file either way, but not the same name: only the whole-chapter
-                 document is unqualified, and a single page carries its id. The
-                 blurb is read before the scope is chosen below, so it has to
-                 name both rather than promise one. -->
+
             One file — <code>{app.exportName}-text.json</code> for the whole chapter, or
             <code>{app.exportName}-&lt;page&gt;-text.json</code> for a single page — carrying
             the detected text (JP + your translation), reading order and box geometry.
           {:else if isStrip}
-            <!-- Two answers, because the two scopes below produce different
-                 files: a whole strip chapter is re-cut into slices, one page of
-                 it is still that page. -->
+
             All pages: <code>{app.exportName}-strip-01.{app.fmt.toLowerCase()}</code> — this page:
             <code>{app.exportName}-&lt;page&gt;.{app.fmt.toLowerCase()}</code>
           {:else}

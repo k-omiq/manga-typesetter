@@ -6,7 +6,7 @@
 // library.svelte.js is loaded on boot and runs under a `node` test environment,
 // and neither has any business dragging that in to serialise some text. The two
 // functions here need nothing but the document itself, so they live in a leaf
-// and exporter.js re-exports `buildTextJson` — one serialiser, one file format,
+// and exporter.js re-exports `buildTextJson` - one serialiser, one file format,
 // no second copy to drift.
 import { lineText, PAGE_W, PAGE_H } from './store.svelte.js';
 
@@ -33,11 +33,11 @@ export function serializePageText(p) {
       const g = geom.get(l.n);
       // `tags` alongside `type`, not instead of it: `type` is the legacy field
       // every other consumer still reads, and it can only ever hold one of the
-      // three names the importer validates — so a line tagged `shout` would come
+      // three names the importer validates - so a line tagged `shout` would come
       // back as `dialogue` and the user's own vocabulary would be lost on the
       // round trip through this file. Written only where the line really has an
       // array, because the array's *presence* is what tells `lineTags` the user
-      // has taken over from the legacy `type` — materialising `[]` for every line
+      // has taken over from the legacy `type` - materialising `[]` for every line
       // would read as the user having deliberately cleared every tag in the chapter.
       return {
         n: l.n,

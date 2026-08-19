@@ -30,7 +30,7 @@ import { defaultStyle } from './data.js';
 
 // The registry is a module singleton that persists across cases, exactly as it
 // persists across sessions in the app. Every case starts from a known one by
-// re-binding an empty fake store — which is also the only way to see the writes,
+// re-binding an empty fake store - which is also the only way to see the writes,
 // since node has no localStorage.
 const fakeStorage = (initial) => {
   let v = initial ?? null;
@@ -161,7 +161,7 @@ describe('saving a tag’s settings', () => {
   it('admits an unregistered chapter tag at the end, never at slot 1', () => {
     // The picker offers tags the open chapter uses that the registry has never
     // seen. Saving settings on one used to go through `createTag` → `touchTag`,
-    // which promoted it to the front — an undocumented third case in "promote on
+    // which promoted it to the front - an undocumented third case in "promote on
     // apply, never on remove", and it reordered the picker's first two slots
     // under the cursor of a user who was only editing a font.
     createTag('sign');
@@ -189,7 +189,7 @@ describe('deleting a tag', () => {
     expect(deleteTag('SFX')).toBe(true);
     expect(findTag('sfx')).toBe(null);
     expect(tags.list.map((t) => t.name)).toEqual(['sign']);
-    // The line keeps the tag — the name is the only join to lines in chapters
+    // The line keeps the tag - the name is the only join to lines in chapters
     // this app has not read, so deletion cannot mean "take it off my document".
     expect(lineTags(line)).toEqual(['sfx']);
   });
@@ -219,7 +219,7 @@ describe('deleting a tag', () => {
     const pages = [{ id: 1, lines: [{ n: 1, type: 'sfx' }], boxes: [] }];
     deleteTag('sfx');
     // Not a bug and the UI has to say so: the tag is still on the lines, so
-    // `knownTags` still has to offer it — just with nothing behind it.
+    // `knownTags` still has to offer it - just with nothing behind it.
     expect(knownTags(pages).find((t) => t.name === 'sfx')).toEqual({
       name: 'sfx',
       font: null,
@@ -245,7 +245,7 @@ describe('deleting a tag', () => {
 describe('the settings form’s round trip', () => {
   it('keeps a width whose colour did not survive sanitising', () => {
     // `sanitizeTags` vets the two fields on their own, so this entry is one a
-    // stored registry really produces — a bad colour costs the colour, not the
+    // stored registry really produces - a bad colour costs the colour, not the
     // width. The form seeded its switch from `outline` alone, so this opened
     // with the switch off and Save wrote `outlineWidth: null` over the 6.
     const [t] = sanitizeTags({ list: [{ name: 'sfx', outline: 5, outlineWidth: 6 }] });
@@ -297,7 +297,7 @@ describe('tags surviving a re-import', () => {
 
   it('re-projects the restored tags onto line.type for the exporters', () => {
     // Otherwise the restored line carries tags:['sfx'] under the incoming
-    // type:'dialogue', and the JSON/PSD exporters — which still read `type` —
+    // type:'dialogue', and the JSON/PSD exporters - which still read `type` -
     // disagree with the queue about the same line.
     const out = carryTagsForward([{ n: 1, tags: ['whisper', 'sfx'] }], imported());
     expect(out[0].type).toBe('sfx');
@@ -339,7 +339,7 @@ describe('tags surviving a re-import', () => {
 
   // A translations file describes the translator's lines and says nothing about
   // the ones the user typed onto the page, so the wholesale replacement used to
-  // take those out — and with them the free box's *text*, which is where it
+  // take those out - and with them the free box's *text*, which is where it
   // lives, and its only queue row. The user would be left with a box rendering
   // nothing and no row to type into.
   it('keeps the free-typed lines the file says nothing about', () => {
@@ -357,7 +357,7 @@ describe('tags surviving a re-import', () => {
 
   it('appends them after the imported lines, in their own order', () => {
     // Free lines are pushed on the end as they are made, so this is where they
-    // already sit in the queue — a re-import must not shuffle the panel.
+    // already sit in the queue - a re-import must not shuffle the panel.
     const out = carryTagsForward([{ n: -2 }, { n: -1 }], imported());
     expect(out.map((l) => l.n)).toEqual([1, 2, 3, -2, -1]);
   });
@@ -370,7 +370,7 @@ describe('tags surviving a re-import', () => {
 
   it('leaves a number the incoming file already claims to the file', () => {
     // Two lines answering to one number is the one outcome nothing downstream
-    // survives — `lineByN` would hand the box whichever came first.
+    // survives - `lineByN` would hand the box whichever came first.
     const out = carryTagsForward([{ n: -1, en: 'mine' }], [...imported(), { n: -1, en: 'theirs' }]);
     expect(out.filter((l) => l.n === -1)).toHaveLength(1);
     expect(out.at(-1).en).toBe('theirs');
@@ -393,7 +393,7 @@ describe('migration from line.type', () => {
     expect('tags' in line).toBe(false);
   });
   it('treats the array’s presence as the user having taken over', () => {
-    // An empty array must mean "no tags", not "fall back to type" — otherwise a
+    // An empty array must mean "no tags", not "fall back to type" - otherwise a
     // tag the user removed comes straight back on the next read.
     const line = { n: 1, type: 'sfx' };
     setLineTags(line, []);
@@ -483,7 +483,7 @@ describe('editing a tag is not retroactive', () => {
 
     updateTag('sfx', { font: 'Nunito', outline: '#ff0000', outlineWidth: 2 });
 
-    // The box placed before the edit is untouched — the whole point.
+    // The box placed before the edit is untouched - the whole point.
     expect(byId(first).style.font).toBe('Bangers');
     expect(byId(first).style.outline).toBe('#000000');
     expect(byId(first).style.outlineWidth).toBe(6);
@@ -514,7 +514,7 @@ describe('editing a tag is not retroactive', () => {
     placeActiveAt(200, 200);
     const second = app.pages[0].boxes[1];
     // Unset means the tag forces nothing, so the box gets the style it would
-    // have inherited anyway — not the Bangers the box before it was given.
+    // have inherited anyway - not the Bangers the box before it was given.
     expect(second.style.font).toBe(app.lastStyle.font);
     expect(second.style.font).not.toBe('Bangers');
   });
@@ -596,11 +596,11 @@ describe('the surface the bulk editor consumes', () => {
     expect(boxesWithTag('shout', pages).map((h) => h.box.id)).toEqual(['b2', 'b5']);
   });
 
-  // This test used to read "never returns a free-typed box — it has no line and
+  // This test used to read "never returns a free-typed box - it has no line and
   // so no tags", and that is no longer the rule: a box made with the Text tool
   // now creates a line of its own, so it is taggable and a tag-scoped bulk edit
-  // reaches it. What survives of the old claim is the half that is still true —
-  // a box with no line at all cannot be tagged — and the only boxes left in that
+  // reaches it. What survives of the old claim is the half that is still true -
+  // a box with no line at all cannot be tagged - and the only boxes left in that
   // state are the ones already on disk, which `loadProjectPages` deliberately
   // does not migrate.
   it('returns a free-typed box today, and still never one saved without a line', () => {

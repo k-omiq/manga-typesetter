@@ -6,9 +6,7 @@
   let fileInput;
   let slotInput;
   let dragOver = $state(false);
-  // Set just before the per-slot picker opens, so the chosen file overrides the
-  // guess the filename would have produced. Cleared as soon as it is consumed —
-  // a stale target would send the next plain drop into the wrong slot.
+  // Chosen file overrides filename heuristics.
   let slotTarget = null;
 
   function onOverlayClick(e) {
@@ -135,9 +133,7 @@
 </div>
 
 <style>
-  /* One card per family, four rows per card. The point of the layout is that a
-     letterer can see at a glance which faces are real files and which ones the
-     browser is faking, since a faux face is not shippable. */
+
   .font-family {
     background: var(--surface);
     border: 1px solid var(--line);

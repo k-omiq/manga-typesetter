@@ -11,9 +11,7 @@
   let confirmingId = $state(null); // inline two-step delete confirm
   let naming = $state(false);
   let newName = $state('');
-  // How this project's chapters are read, and the one thing about a project that
-  // cannot be changed after it exists — see `createProject`. Offered here rather
-  // than buried in settings for exactly that reason.
+  // Project reading layout.
   let layout = $state('pages');
 
   onMount(scanLibrary);
@@ -25,8 +23,7 @@
     newName = '';
     const chosen = layout;
     layout = 'pages';
-    // Every other mutation on this screen reports its own failure; a create
-    // that throws must not become a silent unhandled rejection.
+
     try {
       const p = await createProject(name, { layout: chosen });
       goProject(p.id);
@@ -64,10 +61,7 @@
       onkeydown={(e) => e.key === 'Enter' && onCreate()}
       autofocus
     />
-    <!-- Pages is a chapter you turn a page at a time; Longstrip is a webtoon —
-         every page of the chapter stacked into one column with no gaps, which
-         is how the art was cut and how it has to be read back. Chosen here
-         because it cannot be chosen later. -->
+
     <div class="seg new-layout">
       <button class:on={layout === 'pages'} onclick={() => (layout = 'pages')}>Pages</button>
       <button class:on={layout === 'longstrip'} onclick={() => (layout = 'longstrip')}>Longstrip</button>
@@ -105,11 +99,10 @@
     {/each}
   </div>
 {:else if library.loading}
-  <!-- A scan in flight must say so. Rendering nothing here is what made a
-       stalled scan look exactly like a library with nothing in it. -->
+
   <div class="home-empty">Reading your library…</div>
 {:else if !library.error}
-  <!-- Only claim the library is empty when it was actually read. -->
+
   <div class="home-empty">
     <div>No projects yet.</div>
     <div>Start a chapter and the raws you pick will be copied into your library.</div>

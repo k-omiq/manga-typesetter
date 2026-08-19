@@ -14,27 +14,14 @@
   // app.bulk.style is the editable template; null when closed.
   const s = $derived(app.bulk.style);
   const count = $derived(app.bulk.targets.length);
-  // How many properties this edit is actually about. Zero is the state a freshly
-  // opened panel is in, and the footer says so rather than offering an Apply
-  // that would change nothing.
+  // Count of properties enabled in the mask.
   const ticked = $derived(app.bulk.active ? bulkTicked().length : 0);
 
-  // Draggable panel position (inline left/top in px, relative to whichever
-  // positioned ancestor it is rendered inside — `.ed-canvas`, the canvas
-  // viewport. Both the opening centre below and the drag clamp read that same
-  // `offsetParent`, so the panel stays over the page rather than the window.)
+  // Draggable panel position relative to .ed-canvas.
   let pos = $state({ x: 0, y: 16 });
   let panelEl;
 
-  // Panel size. `h: null` means "as tall as the content wants, up to the cap"
-  // — the state the panel opens in and stays in until the grip is used. Once a
-  // height is set it is honoured, and the CSS cap below still applies, so a
-  // panel dragged low can never be resized to hang off the bottom.
-  //
-  // Deliberately not reset when the panel reopens, unlike the position: a
-  // window the user made bigger should still be that size next time, and the
-  // reason position *is* reset is that a panel can be dropped somewhere the
-  // next canvas does not have — a size cannot, because the caps clamp it.
+  // Panel size clamped to content and viewport bounds.
   const MIN_W = 280;
   const MAX_W = 560;
   const MIN_H = 220;
@@ -44,18 +31,7 @@
     return Math.max(a, Math.min(b, v));
   }
 
-  // Both caps are `100%` of the positioned ancestor minus wherever the panel's
-  // corner ended up, so the foot — Cancel and Apply — and the right-hand edge
-  // are inside the canvas at every drop position. Written in CSS rather than
-  // measured here on purpose: the browser re-resolves them when the canvas
-  // resizes, with nothing to observe.
-  //
-  // Both, not just the height, and the width is the one that is easy to miss: a
-  // static `max-width:calc(100% - 32px)` is only the right cap for a panel at
-  // x=16, and a wide panel dragged to the right of the canvas would hang off
-  // the edge under it. The grip already clamps against `pos.x`; without the
-  // matching cap here the two disagreed, and a drag could produce a width the
-  // next resize would appear to snap away.
+  // Max dimensions relative to canvas bounds.
   const panelStyle = $derived(
     `left:${pos.x}px; top:${pos.y}px; width:${size.w}px;` +
       (size.h ? `height:${size.h}px;` : '') +
@@ -63,8 +39,7 @@
       `max-height:calc(100% - ${pos.y}px - 16px)`,
   );
 
-  // The parent's content box, which both gestures clamp against — the same
-  // `offsetParent` the position is measured in.
+  // Parent content box for drag/resize clamping.
   function parentBox() {
     const parent = panelEl?.offsetParent || panelEl?.parentElement;
     return {
@@ -73,7 +48,7 @@
     };
   }
 
-  // Re-center near top of the editor each time the panel opens, so it never gets lost.
+  // Re-center near top of editor on open.
   $effect(() => {
     if (app.bulk.active && panelEl) {
       const { w: pw } = parentBox();
@@ -81,9 +56,7 @@
     }
   });
 
-  // Every gesture in flight, so an unmount can end them all — see the same set
-  // in FloatingPanel. The listeners live on `window`, and nothing guarantees a
-  // further pointer event once this panel is gone.
+  // Track active gesture AbortControllers.
   const live = new Set();
   $effect(() => () => {
     for (const ac of live) ac.abort();
@@ -91,16 +64,12 @@
   });
 
   function onHeadPointerDown(e) {
-    // Don't start a drag from the close button (or anything inside it).
+    // Do not drag from close button.
     if (e.target.closest('.x')) return;
-    // The primary button and nothing else: a right-click on the header is on its
-    // way to a context menu, not a drag.
+    // Primary pointer button only.
     if (e.button !== 0) return;
     e.preventDefault();
-    // The drag follows the pointer even once it leaves the window — without the
-    // capture a button released outside gets no pointerup here at all, and the
-    // panel comes back stuck to the cursor. The listeners stay on `window`: a
-    // captured pointer's events still bubble to it.
+    // Pointer capture tracks drag outside window.
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const pid = e.pointerId;
     const startX = e.clientX;
@@ -108,21 +77,17 @@
     const baseX = pos.x;
     const baseY = pos.y;
     const move = (ev) => {
-      // A second pointer — another touch, or a pen alongside the mouse — would
-      // otherwise drive this same closure from a start point it never measured
-      // against.
       if (ev.pointerId !== pid) return;
       const { w: pw, h: ph } = parentBox();
       const w = panelEl?.offsetWidth || 0;
       let nx = baseX + (ev.clientX - startX);
       let ny = baseY + (ev.clientY - startY);
-      // Clamp so the header stays visible (keep at least ~40px on screen).
+      // Keep at least 40px on screen.
       nx = clamp(nx, 40 - w, pw - 40);
       ny = clamp(ny, 0, Math.max(0, ph - 40));
       pos = { x: nx, y: ny };
     };
-    // One controller for both endings. It only moves panel position — there is
-    // no history record to settle — so the end handler just tears down.
+
     const ac = new AbortController();
     const end = (ev) => {
       if (ev.pointerId !== pid) return;
@@ -135,16 +100,12 @@
     window.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
-  // The corner grip, the same gesture shape as the header drag and as
-  // `FloatingPanel`'s own grip. Both axes are bounded: width by taste (a wider
-  // panel only pads the controls, it does not add columns), height by what is
-  // left of the canvas below the panel's top, which is the same number the CSS
-  // cap uses — so the grip cannot produce a size the cap then contradicts.
+  // Corner resize grip handler.
   function onGripPointerDown(e) {
-    if (e.button !== 0) return; // see onHeadPointerDown
+    if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    e.currentTarget.setPointerCapture?.(e.pointerId); // see onHeadPointerDown
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     const pid = e.pointerId;
     const startX = e.clientX;
     const startY = e.clientY;
@@ -170,69 +131,28 @@
     window.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
-  // ---------- reading and writing one masked property ----------
-  // Every control below goes through these two, addressing its property by the
-  // same path the mask is keyed on. That is what keeps a row's tick box and its
-  // control talking about the same thing: there is one spelling of "shadow blur"
-  // in this file, not a `s.shadow.blur` in the markup and a `'shadow.blur'` in
-  // the checkbox that could drift apart.
+  // Read/write masked properties by path.
   const get = (key) => {
     const dot = key.indexOf('.');
     return dot === -1 ? s[key] : s[key.slice(0, dot)][key.slice(dot + 1)];
   };
-  // Writing a property ticks it. Touching a control is the user saying they want
-  // that property in this edit, and making them say it twice — move the slider,
-  // then tick the box — is the kind of ceremony that gets a feature called
-  // broken. The tick boxes are for the other direction: untick something you
-  // adjusted and thought better of, or tick a property whose seeded value is
-  // already what you want so you never touch its control.
+  // Modifying a property enables it in the mask.
   function set(key, v) {
     const dot = key.indexOf('.');
     if (dot === -1) s[key] = v;
     else s[key.slice(0, dot)][key.slice(dot + 1)] = v;
     tickBulkProp(key);
   }
-  // The four hex lengths CSS actually has — #rgb, #rgba, #rrggbb, #rrggbbaa —
-  // and not a `{3,8}` range, which also admitted 5 and 7 digits. `#12345` is not
-  // a colour: it ticked the property and pushed an unparseable value onto every
-  // box in the edit, and the field went on showing the bad text because Svelte
-  // will not reset a DOM value that state did not change. This copy came from
-  // `Inspector.svelte`, which still has the range and still reaches one box with
-  // it.
+  // Validate CSS hex color strings.
   const HEX = /^#?(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-  // `el` is the input the value came from. On a reject its value is put back by
-  // hand: the state never changed, so nothing would re-render it, and the user
-  // would be left looking at text the panel had silently refused.
+  // Restore previous value on invalid hex input.
   function setHex(key, v, el) {
     if (HEX.test(v)) set(key, v.startsWith('#') ? v : '#' + v);
     else if (el) el.value = get(key);
   }
   const num = (key, v, lo, hi) => set(key, clamp(+v || 0, lo, hi));
 
-  // The Inspector's own groups, its own labels and its own default open/closed
-  // state, on purpose: the two panels edit the same style, and a user who has
-  // learned where "Warp & Edges" lives in one should not have to learn it again
-  // here. Only the header tick needs the membership list — it is what lets a
-  // whole shadow be put on twenty boxes without six clicks.
-  //
-  // Two places this reads against the letter of the spec, both deliberate:
-  //
-  //   Transform is open. The spec asks for the less-used groups collapsed, and
-  //   Shadow and Warp are — but the group that holds Rotation is not a less-used
-  //   one, and more to the point it is open in the Inspector. Matching the
-  //   Inspector is the rule that earns its keep here, because the alternative is
-  //   two panels over the same style whose folds disagree, and a user hunting
-  //   for a control they can see in the other one. It is three rows.
-  //
-  //   Every row carries a text label, where the spec says a row should be its
-  //   tick box and its control and nothing else. That reading works for a slider
-  //   or a colour swatch; it does not work for a column of bare number inputs —
-  //   Offset X, Offset Y, Blur, Seed, Size, Line, Letter are all one small
-  //   spinner, and stripped of their labels they are indistinguishable. The
-  //   labels *are* the minimal formatting the same paragraph asks for. What was
-  //   actually stripped is the extra chrome: no per-row reset, no revert arrow,
-  //   no value readout except where a slider has no other way to show its
-  //   number.
+  // Inspector group mapping for bulk mask properties.
   const GROUPS = {
     font: ['font', 'size', 'bold', 'italic', 'uppercase', 'align', 'valign', 'lineHeight', 'letterSpacing'],
     fill: ['color', 'opacity', 'outline', 'outlineWidth'],
@@ -245,84 +165,41 @@
   const nOn = (g) => GROUPS[g].filter((k) => app.bulk.mask[k]).length;
   const setGroup = (g, on) => GROUPS[g].forEach((k) => setBulkProp(k, on));
 
-  // ---------- tag-wise editing ----------
-  // Scope is never an enum: it is which array of pages gets handed to the tag
-  // functions, exactly as `tags.svelte.js` intends. `chapter` is every page,
-  // `page` is the one on screen — and the list of tags on offer follows it, so
-  // what the selector shows is always what the edit could actually reach.
+  // Tag scope: chapter or current page.
   let scope = $state('chapter');
   let tag = $state('');
   const scopePages = $derived(scope === 'page' ? [page()] : app.pages);
   const scopeWord = $derived(scope === 'page' ? 'this page' : 'the chapter');
   const tagList = $derived(app.bulk.active ? tagsInUse(scopePages) : []);
   const tagHits = $derived(tag ? boxesWithTag(tag, scopePages).length : 0);
-  // How much of that reach is off this page, and how many pages it spreads over.
-  // Said out loud because of what undo does with it: the history keeps one stack
-  // per page, so `applyBulkToTag` files one entry against each page it reached
-  // rather than one for the apply. Every box is recoverable — the older reading
-  // of this, that the boxes off this page could not be walked back at all, was
-  // never true after the split — but recovering them costs one ⌘Z per page,
-  // pressed on that page. That is a thing a user has to be told before they
-  // press Apply, not after.
+  // Number of matching boxes off current page.
   const tagHitsHere = $derived(tag ? boxesWithTag(tag, [page()]).length : 0);
   const tagHitsAway = $derived(Math.max(0, tagHits - tagHitsHere));
   const tagPages = $derived(
     tag ? new Set(boxesWithTag(tag, scopePages).map((h) => h.page.id)).size : 0,
   );
-  // Boxes with no line at all, which since free-typed boxes joined the queue is
-  // one specific thing: a free-typed box saved to disk before that change, which
-  // `loadProjectPages` deliberately does not migrate. It carries no tags,
-  // `boxesWithTag` can never return it, and counting it here is the honest
-  // version of that — without it, a user whose chapter is full of them watches a
-  // chapter-wide tag edit skip boxes for no visible reason. A box typed onto the
-  // page today has a line of its own and is reached like any other, so this is
-  // normally zero.
+  // Legacy free-typed boxes lacking queue lines.
   const freeCount = $derived(
     scopePages.reduce((n, p) => n + (p?.boxes ?? []).filter((b) => b.lineN == null).length, 0),
   );
 
-  // A tag chosen under one scope may not exist under the other — switching to
-  // "this page" with `sfx` selected, when this page has none, would leave the
-  // selector showing a tag that matches nothing.
+  // Clear tag if not available in current scope.
   $effect(() => {
     if (tag && !tagList.includes(tag)) tag = '';
   });
-  // A fresh open starts with no tag chosen, so the Apply button can never fire
-  // the previous session's tag at a template the user has only just begun
-  // editing — it opens disabled, with nothing named.
+  // Reset selected tag on open.
   $effect(() => {
     if (app.bulk.active) tag = '';
   });
 
-  // Whether a tag apply could do anything right now. The same three conditions
-  // gate the button and are spelled out in the note, so a disabled button is
-  // never a mystery.
+
   const canApplyTag = $derived(!!tag && ticked > 0 && tagHits > 0);
 
-  // Enter moves to the Apply button; it does not apply. That is a deliberate
-  // step away from the spec's "select a tag and hit Enter", and the reason is
-  // the macOS WKWebView `<select>`: its popup is a native menu, and the Enter
-  // that chooses an option can also arrive at the element underneath. Bound
-  // straight to the apply, that key would restyle every tagged box in the
-  // chapter at the instant the user picked the tag — before they had looked at
-  // what they picked. Which way round the popup delivers `change` and `keydown`
-  // is not knowable from source and differs by platform, so no ordering test can
-  // be trusted to tell a real Enter from the popup's; the fix is for the key not
-  // to be destructive at all. A stray Enter now moves focus to a button, which
-  // is visible and costs nothing, and the deliberate second Enter presses it.
-  //
-  // It also settles the mouse path, which was the other half of the problem: if
-  // the select does not keep focus after a click-pick, Enter is unreachable and
-  // the footer Apply belongs to the click-to-select flow and is disabled at zero
-  // targets — so the tag edit had no mouse route at all. The button is that
-  // route, and it is the same control both hands use.
-  // `$state` only to keep the compiler quiet about a `bind:this` it cannot see
-  // is read imperatively; nothing re-renders off this.
+  // Move focus to Apply button on Enter.
   let applyTagBtn = $state(null);
   function onTagKey(e) {
     if (e.key !== 'Enter') return;
-    // The select would otherwise let Enter reach the panel's surroundings, and
-    // App.svelte closes bulk mode on Escape/Enter-ish chrome keys.
+
     e.preventDefault();
     applyTagBtn?.focus();
   }
@@ -357,8 +234,7 @@
     onclick={() => (open[g] = !open[g])}
     onkeydown={(e) => e.key === 'Enter' && (open[g] = !open[g])}
   >
-    <!-- Inside the head, so it lines up with the rows' tick column, which means
-         its click has to be kept off the head's collapse toggle. -->
+
     <input
       class="btick"
       type="checkbox"
@@ -383,17 +259,9 @@
       </button>
     </div>
 
-    <!-- One scroller, not three. The tag block, the hint and the property list
-         are all content — a short panel has to be able to reach the bottom of
-         any of them — while the header stays as the drag handle and the foot
-         keeps Apply pinned where the eye expects it. Scrolling only the
-         property list, which is what this used to do, left the tag block and
-         its note able to push the list to nothing and then be uncuttable
-         themselves. -->
+
     <div class="bulk-scroll">
-    <!-- By tag: the whole of this block is the tag-driven edit, scope included.
-         It sits above the hint that describes the click-to-select flow so the
-         scope pills cannot be read as governing that one. -->
+
     <div class="bulk-tag">
       <div class="trow">
         <span class="lbl">Scope</span>
@@ -402,13 +270,7 @@
           <button class:on={scope === 'page'} onclick={() => (scope = 'page')}>This page</button>
         </div>
       </div>
-      <!-- The list is the tags in use in *scope* — this chapter, or this page —
-           and not the user's whole vocabulary. The spec asked for "all the tags
-           currently used in the project", and this is the narrower reading on
-           purpose: a tag used only in some other chapter would sit in this list
-           matching nothing this edit can reach, and the list changing as the
-           scope pills move is what makes "restyle every box carrying it" a true
-           sentence. The note below names the scope in words for the same reason. -->
+
       <div class="trow">
         <span class="lbl">By tag</span>
         <select bind:value={tag} onkeydown={onTagKey} disabled={!tagList.length}>
@@ -438,12 +300,7 @@
             <br />Tick a property below first — nothing is set to change.
           {/if}
           {#if tagHitsAway}
-            <!-- The honest version of what undo will do. One entry per page, on
-                 that page's own stack, because a single entry can only live on
-                 one of them — so this is recoverable, at one press per page,
-                 taken on that page. It is not one press, and the panel used to
-                 imply the boxes off this page could not be walked back at all;
-                 both readings would have cost someone their afternoon. -->
+
             <br />{tagHitsAway} of them {tagHitsAway === 1 ? 'is' : 'are'} on other pages. Undo is per page:
             {tagPages} pages, one ⌘Z each, on the page itself.
           {/if}
@@ -640,9 +497,7 @@
         </div>
       </div>
 
-      <!-- Typeset. Height is not here — it is not a style — but `autoHeight`
-           is, and a chapter-wide tick of it is the fastest way to make every
-           box on every page describe its own text. -->
+
       <div class="insp-sub" class:closed={!open.typeset}>
         {@render head('typeset', 'Typeset')}
         <div class="insp-sub-body">
@@ -661,11 +516,7 @@
             <span class="lbl">Hyphenate</span>
             <div class="switch" class:on={s.hyphenate} role="switch" aria-checked={s.hyphenate} tabindex="0" onclick={() => set('hyphenate', !s.hyphenate)} onkeydown={(e) => e.key === 'Enter' && set('hyphenate', !s.hyphenate)}><span class="knob"></span></div>
           </div>
-          <!-- The switch, and only the switch. Re-fitting is per-box by
-               definition — it measures the balloon under one rectangle — so the
-               Inspector's button has no bulk equivalent; what a bulk edit can do
-               is turn balloon layout off across a page of boxes that were fitted
-               to the wrong thing. -->
+
           <div class="brow" class:off={!app.bulk.mask.balloon}>
             {@render tick('balloon')}
             <span class="lbl">Balloon fit</span>
@@ -679,7 +530,7 @@
         </div>
       </div>
 
-      <!-- Transform, minus X/Y/W/H: position and size stay the Inspector's. -->
+
       <div class="insp-sub" class:closed={!open.transform}>
         {@render head('transform', 'Transform')}
         <div class="insp-sub-body">

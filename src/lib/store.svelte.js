@@ -8,12 +8,12 @@ import {
   normalizeStyle,
   normalizeFit,
 } from './data.js';
-// The tag module reaches back for nothing — it takes the pages it works on as
-// arguments — so this stays a one-way edge and the two cannot cycle. What comes
+// The tag module reaches back for nothing - it takes the pages it works on as
+// arguments - so this stays a one-way edge and the two cannot cycle. What comes
 // across, and for which moment:
 //
-//   styleForLine     the style a placed box is born with, and — since applying
-//                    a tag to an already-placed line restyles its box — the
+//   styleForLine     the style a placed box is born with, and - since applying
+//                    a tag to an already-placed line restyles its box - the
 //                    style that box is moved to. One function for both, so the
 //                    two orders (tag then place, place then tag) cannot drift
 //                    into two different answers.
@@ -27,8 +27,8 @@ import {
 //                    a spelling the rest of the app would treat as a second tag.
 //   carryTagsForward the one rule for "this page's lines are being replaced
 //                    wholesale": queue-side markup follows its line number
-//                    across, and the free-typed rows the user added — which no
-//                    importer and no detector has any opinion about — are
+//                    across, and the free-typed rows the user added - which no
+//                    importer and no detector has any opinion about - are
 //                    appended untouched. The JSON re-import path already goes
 //                    through it; `applyDetection` now does too, so the two
 //                    cannot answer differently.
@@ -41,8 +41,8 @@ import {
   carryTagsForward,
 } from './tags.svelte.js';
 // The one edge in this file that points at a module which points back: `measure`
-// imports `fontCssFor` from here. Both directions are lazy — neither module
-// touches the other at evaluation time, only inside function bodies — so the
+// imports `fontCssFor` from here. Both directions are lazy - neither module
+// touches the other at evaluation time, only inside function bodies - so the
 // cycle resolves whichever order the two are first loaded in, and it buys the
 // far more valuable property that `measure.js` stays the single owner of text
 // metrics. The alternative was a second measurer living in the store, which is
@@ -53,7 +53,7 @@ import { neededHeight, growToFit } from './typeset.js';
 // The pixel half of balloon fitting, and the two halves of getting pixels to it.
 // `balloon.js` is pure and knows nothing about this app; `page-pixels.js` is the
 // app's answer to "where do the pixels come from", and it answers null wherever
-// there is no canvas — which is to say under node, where every test below takes
+// there is no canvas - which is to say under node, where every test below takes
 // the fallback path exactly as a page nobody has opened does.
 import { detectBalloon, inscribedRect } from './balloon.js';
 import { pagePixelsFor, forgetPagePixels } from './page-pixels.js';
@@ -65,12 +65,12 @@ let pageLoadSeq = 5000; // page ids for imported projects that carry none
 
 // Replace all pages from an imported project (e.g. a lossless PSD). Normalizes
 // styles up to the current schema.
-// Object URLs (raw/cleaned) are passed through as-is — the caller regenerates
+// Object URLs (raw/cleaned) are passed through as-is - the caller regenerates
 // them from the source.
 //
 // Page and box ids are persisted in chapter.json and are addressed by the undo
 // history across sessions, so a load keeps the id it was given. A fresh one is
-// minted only when there is none, or when the file names two of them the same —
+// minted only when there is none, or when the file names two of them the same -
 // two boxes answering to one id would confuse selection, deletion and undo
 // alike, and so would two pages. The pre-pass walks the whole document first so
 // both sequences start past the highest id in it, and something minted on page
@@ -79,12 +79,12 @@ let pageLoadSeq = 5000; // page ids for imported projects that carry none
 // Returns how many ids it had to mint. Anything above zero means what is now in
 // memory disagrees with the file, and the caller has to get that written back:
 // the minted ids come off module-global counters, so leaving the repair unsaved
-// means the same box is called something different every session — the drift the
+// means the same box is called something different every session - the drift the
 // history cannot see.
 const idNum = (id) => (typeof id === 'string' && /^b\d+$/.test(id) ? Number(id.slice(1)) : 0);
 
 // `line.tags` comes out of chapter.json, which is a file on the user's disk that
-// nothing stops them opening in an editor — and two shapes of it break the app
+// nothing stops them opening in an editor - and two shapes of it break the app
 // rather than merely reading oddly:
 //
 //   ["sfx","sfx"]  the queue renders its chips in a keyed `{#each}`, so a
@@ -94,8 +94,8 @@ const idNum = (id) => (typeof id === 'string' && /^b\d+$/.test(id) ? Number(id.s
 //                  like every other write, adds `sfx` beside it instead of
 //                  removing it.
 //
-// Both are the same failure — a name in the document that the app's own
-// vocabulary would never have produced — so the fix is the app's own vocabulary,
+// Both are the same failure - a name in the document that the app's own
+// vocabulary would never have produced - so the fix is the app's own vocabulary,
 // applied once, on the way in. A `tags` that is not an array at all is dropped
 // rather than repaired: the array's *presence* is what tells `lineTags` the user
 // has taken over from the legacy `line.type`, and a string there means the file
@@ -148,7 +148,7 @@ export function loadProjectPages(rawPages) {
       // changing and drag every box across by 1080/850. 0 means "nobody has
       // measured this yet", which is the state `createChapter` leaves every
       // page in anyway, and it is the one state the first measurement can be
-      // adopted from without moving anything. Consumers ask the art instead —
+      // adopted from without moving anything. Consumers ask the art instead -
       // see `hasPageSpace`.
       w: p.w > 0 ? p.w : 0,
       h: p.h > 0 ? p.h : 0,
@@ -159,7 +159,7 @@ export function loadProjectPages(rawPages) {
       // NOT migrated: a box already on disk with `lineN: null` is loaded as it
       // was, and stays a canvas-only box that cannot be tagged. Giving it a line
       // here would mean inventing a queue row, with a number the user never
-      // chose, in a chapter they have not opened since — writing rows into
+      // chose, in a chapter they have not opened since - writing rows into
       // somebody's document as a side effect of looking at it. Every one of
       // those boxes keeps rendering, exporting (`extraBoxes` in exporter.js) and
       // round-tripping through the PSD exactly as before; what they cannot do is
@@ -184,8 +184,8 @@ export function loadProjectPages(rawPages) {
           // The balloon this box was fitted to, in page coordinates. Through
           // `normalizeFit` for the same reason the style goes through
           // `normalizeStyle`: what is on disk was written by some build, and a
-          // shape this one does not recognise — a third `kind`, a NaN from a
-          // hand edit — has to degrade to "this box has no fit" rather than
+          // shape this one does not recognise - a third `kind`, a NaN from a
+          // hand edit - has to degrade to "this box has no fit" rather than
           // reaching the line breaker. Always present, never undefined, so the
           // field exists on the reactive proxy from the first render and a
           // component reading `box.fit` subscribes to it before anything writes
@@ -199,7 +199,7 @@ export function loadProjectPages(rawPages) {
     return cp;
   });
   // Boxes arriving from outside this session get the same treatment every other
-  // path gets — see `autoFitBox`. A box on disk was sized by an older build, by a
+  // path gets - see `autoFitBox`. A box on disk was sized by an older build, by a
   // hand-edited file, or against a user font that has since been replaced, and
   // any of those can leave text hanging out of its own rectangle the moment the
   // chapter opens. Grow-only, so a box that is roomier than its text is left
@@ -207,7 +207,7 @@ export function loadProjectPages(rawPages) {
   // metrics, so a test run never rewrites geometry from a stand-in number.
   for (const p of app.pages) refitPage(p);
   // A different document is now open, and page ids are per-document counters
-  // that collide freely across chapters — so anything the cache still holds is
+  // that collide freely across chapters - so anything the cache still holds is
   // at best dead weight and at worst another chapter's page 3. The src check
   // inside the cache would already refuse to hand those pixels over; this is
   // what gives the memory back at the moment the chapter changes rather than at
@@ -223,28 +223,28 @@ export function loadProjectPages(rawPages) {
 }
 
 // ---------- free-typed lines ----------
-// A box made with the Text tool used to live on the canvas alone — `lineN: null`,
+// A box made with the Text tool used to live on the canvas alone - `lineN: null`,
 // no queue row, and so no line for a tag to sit on. Tags live on lines, so that
 // box could not be tagged, could not be reached by a tag-scoped bulk edit, and
 // did not appear in the "N / M placed" count of the page it was on. It now gets
 // a line of its own, and the whole of what makes that line *free* is its number:
 //
-//   n < 0  — free-typed. The user made this line by typing on the canvas.
-//   n > 0  — imported. The translator numbered it; psd.js and exporter.js write
+//   n < 0  - free-typed. The user made this line by typing on the canvas.
+//   n > 0  - imported. The translator numbered it; psd.js and exporter.js write
 //            that number out and a re-imported translations file joins on it.
 //
 // The number is the marker rather than a `free: true` field beside it, and that
 // is the decision the rest of this rests on. A new field would have to be
-// carried by every serializer the document passes through — chapter.json,
-// `serializePage` in psd.js, the detected-text JSON export — and any one of them
+// carried by every serializer the document passes through - chapter.json,
+// `serializePage` in psd.js, the detected-text JSON export - and any one of them
 // forgetting it turns a free line into an imported line with an absurd number.
 // `n` is already carried by all of them, because nothing works without it.
 //
 // Negative because every producer of a translations file numbers from 1: the
 // engine's detector, the JSON importer's own fallback (`Number(n) || idx + 1`
 // in `normLine`), and this app's exporter. So the two spaces cannot meet, no
-// imported line ever has to be renumbered to make room, and a re-import — which
-// replaces a page's lines wholesale — cannot land on top of one (see
+// imported line ever has to be renumbered to make room, and a re-import - which
+// replaces a page's lines wholesale - cannot land on top of one (see
 // `carryTagsForward`, which is what carries free lines across that replacement).
 export const isFreeLine = (l) => Number.isFinite(l?.n) && l.n < 0;
 // A box with no imported line behind it. Two shapes, and the second is why this
@@ -253,11 +253,11 @@ export const isFreeLine = (l) => Number.isFinite(l?.n) && l.n < 0;
 //   lineN < 0     a free-typed box made since free boxes joined the queue.
 //   lineN == null a free-typed box saved before that, in a chapter on disk.
 //
-// The old ones are deliberately NOT migrated on load — see `loadProjectPages`.
+// The old ones are deliberately NOT migrated on load - see `loadProjectPages`.
 export const isFreeBox = (b) => b?.lineN == null || b.lineN < 0;
 
 // The number the next free-typed line on this page takes: one below the lowest
-// number the page already carries, so it collides with nothing currently there —
+// number the page already carries, so it collides with nothing currently there -
 // not with an imported line, not with an earlier free one, and not with a
 // negative number some hand-edited file put in the document. Per page, because
 // `box.lineN` only ever joins within a page.
@@ -268,8 +268,8 @@ export function firstUnplaced(p) {
   const u = p.lines.find((l) => !p.boxes.some((b) => b.lineN === l.n));
   if (u) return u.n;
   // Nothing left to place, so the queue parks on the last line. Free lines are
-  // skipped here on purpose: they are placed by construction — the box is what
-  // created them — so parking on one arms `placeActiveAt` to drop a *second*
+  // skipped here on purpose: they are placed by construction - the box is what
+  // created them - so parking on one arms `placeActiveAt` to drop a *second*
   // box on a line that already has one, and it does it silently, on the very
   // last click of a page the user has just finished. The last imported line is
   // what "all placed" has always meant.
@@ -281,7 +281,7 @@ export const lineByN = (p, n) => p.lines.find((l) => l.n === n);
 
 // ---------- how far through a page's translation we are ----------
 // The translate workspace's answer to "N / M placed": a line is done when it has
-// English on it. Derived, never stored — a stored flag would be one more thing
+// English on it. Derived, never stored - a stored flag would be one more thing
 // the textarea has to remember to keep in step, and it would be wrong the first
 // time anything wrote `en` from outside the queue (a JSON import, a paste, an
 // undo). Whitespace does not count, because a line holding a stray space is not
@@ -298,17 +298,17 @@ export const app = $state({
   pages: [],
   selectedId: null,
   editingId: null, // box currently in inline-edit mode
-  tool: 'place', // one of TOOLS — see setTool
+  tool: 'place', // one of TOOLS - see setTool
   lastStyle: defaultStyle(), // style new boxes inherit (follows the previous box)
   // Bulk-style picker mode. `style` is the template being edited, `targets` the
   // boxes clicked on the canvas, `mask` which of the template's properties this
-  // edit is actually about — see BULK_PROPS.
+  // edit is actually about - see BULK_PROPS.
   bulk: { active: false, targets: [], style: null, mask: {} },
   exportOpen: false, // export scope/destination dialog
   exportDir: '', // last chosen output directory (native only), persisted
   exportName: 'page', // base filename, persisted
   // How tall one output image is when a longstrip chapter is re-sliced on
-  // export, in strip (page) pixels — see editor/strip-cuts.js, whose
+  // export, in strip (page) pixels - see editor/strip-cuts.js, whose
   // SLICE_H_DEFAULT this mirrors. It lives here rather than in the dialog so
   // that closing and reopening the dialog does not throw the number away; the
   // export path falls back to the default if it is ever cleared.
@@ -317,7 +317,7 @@ export const app = $state({
   isFit: true,
   fmt: 'PNG',
   fonts: { builtin: BUILTIN_FONTS.slice(), user: USER_FONTS.slice() },
-  // Bumped once per batch of faces becoming available — see `noteFontsChanged`.
+  // Bumped once per batch of faces becoming available - see `noteFontsChanged`.
   // Not a count of anything and never read for its value: it exists so that a
   // layout derived from a text measurement can depend on "the fonts have
   // changed", which is otherwise not a reactive fact.
@@ -326,7 +326,7 @@ export const app = $state({
   saved: false,
   // The last autosave was rejected by the disk. There is no manual save in this
   // app, so this is the user's only signal that their work is not reaching the
-  // filesystem — it stays raised until a write lands, not just until the next
+  // filesystem - it stays raised until a write lands, not just until the next
   // toast fades.
   saveFailed: false,
   exporting: false,
@@ -337,13 +337,13 @@ export const app = $state({
   detecting: false, // detection/OCR request in flight
   detectBatch: null, // { done, total } while a whole-chapter detect runs, else null
   chapterRef: null, // { projectId, chapterId } while a chapter is open
-  // The open chapter's workflow mode, mirrored from its chapter.json — see
+  // The open chapter's workflow mode, mirrored from its chapter.json - see
   // CHAPTER_MODES. It is a property of the chapter and not a preference of the
   // app, so `openChapter` writes it on every open and `closeChapter` puts it
   // back to the default: two chapters in different modes must each open the way
   // their own file says, whichever was opened first.
   chapterMode: 'typeset',
-  // The open chapter's PROJECT's layout, mirrored from its project.json — see
+  // The open chapter's PROJECT's layout, mirrored from its project.json - see
   // LAYOUTS. Like the mode above it is a property of what is open rather than a
   // preference of the app, so `openChapter` writes it and `closeChapter` puts
   // it back.
@@ -379,7 +379,7 @@ export const lineText = (ln) => {
   return ln.en ?? ln.natural ?? ln.stylised ?? ln.text ?? '';
 };
 // Resolve a box's display text. Line-backed boxes (text == null) look up their
-// line on `p` — defaulting to the current page, but callers rendering another
+// line on `p` - defaulting to the current page, but callers rendering another
 // page (e.g. export-all) must pass that page so glyphs resolve correctly.
 export const boxText = (b, p = page()) => {
   if (b.text != null) return b.text;
@@ -393,7 +393,7 @@ export const boxText = (b, p = page()) => {
 //
 //   free-typed (lineN < 0)  the line's `en`. The box carries `text: null` and
 //                           owns nothing, exactly like a box placed from the
-//                           queue — which is the whole point of giving it a
+//                           queue - which is the whole point of giving it a
 //                           line. One copy of the text, in the one place the
 //                           queue's textarea, `boxText`, `boxTextFor` in psd.js
 //                           and the detected-text JSON export all already read.
@@ -405,7 +405,7 @@ export const boxText = (b, p = page()) => {
 // Two copies was the alternative and it is the one to argue against, because it
 // looks cheaper: keep the text on the box and mirror it onto the line for the
 // exporter. The mirror can only be written where the store can see the write,
-// and the contenteditable writes on every keystroke — so the queue row for that
+// and the contenteditable writes on every keystroke - so the queue row for that
 // line renders a stale copy for as long as the user keeps typing, and typing
 // into the queue's textarea writes a line the box's own non-null `text` then
 // shadows. The box simply stops following the queue. There is no version of the
@@ -444,15 +444,15 @@ function clamp(v, a, b) {
 // (`topExtra`/`bottomExtra` in `layoutBox`), so four wrapped lines in a box sized
 // for two spilled above and below the rectangle and out of the speech bubble,
 // with nothing anywhere saying so. For a typesetting tool that is not a cosmetic
-// problem — the rectangle is the thing the user positions, resizes and aligns,
+// problem - the rectangle is the thing the user positions, resizes and aligns,
 // and a rectangle that lies about its contents makes every one of those gestures
 // guesswork.
 //
 // So the height follows the text, and this is the one function that makes it do
-// so. Every path that can change what the box has to fit calls it — inline
+// so. Every path that can change what the box has to fit calls it - inline
 // typing, the Inspector's text field and style controls, the queue's own
 // translation field, a bulk apply, a tag apply, a width drag, a placement, a
-// chapter load, and a font arriving after all of those (`noteFontsChanged`) —
+// chapter load, and a font arriving after all of those (`noteFontsChanged`) -
 // because a `$effect` in the component would only ever cover the boxes rendered
 // on the page currently on screen. The one path that does NOT call it is an undo
 // or redo, which restores the recorded geometry directly rather than re-deriving
@@ -461,22 +461,22 @@ function clamp(v, a, b) {
 // WIDTH IS NEVER TOUCHED. The width is what the user aimed at the bubble; it is
 // the input to the line breaking, not an output of it.
 //
-// Records nothing of its own. The grow is not an edit — it is a consequence of
+// Records nothing of its own. The grow is not an edit - it is a consequence of
 // an edit the user has already made, and giving it its own history entry would
 // charge two presses of undo for one gesture. Instead every record whose edit
 // can trigger a grow carries the box's `y`/`h` on both sides of it (`geomBefore`
-// / `geomAfter` — see `fitGeom` below and the `style`, `text` and `bulk` kinds in
+// / `geomAfter` - see `fitGeom` below and the `style`, `text` and `bulk` kinds in
 // history.svelte.js), so one press puts back the geometry the box actually had.
 // It used to re-run this on the way back instead, which cannot work: the fit is
 // grow-only by design, so an undo could never give back the height the grow took
-// — and an undo that restored `autoHeight:false` could not even try.
+// - and an undo that restored `autoHeight:false` could not even try.
 //
 // Answers true when it changed something, so a caller can tell.
 export function autoFitBox(b, p = page()) {
   const s = b?.style;
   if (!s || s.autoHeight === false) return false;
   // Curved text is laid out along an arc by `arcLayout`, one glyph at a time,
-  // and never wrapped into lines — there is no line count here to grow to.
+  // and never wrapped into lines - there is no line count here to grow to.
   if (s.curve) return false;
   // No metrics, no fitting. Under node every measurement falls back to a
   // stand-in (`text.length * size * 0.55`), which is fine for keeping a layout
@@ -488,7 +488,7 @@ export function autoFitBox(b, p = page()) {
   // does not draw anything, it decides how TALL the box is. Handed the flat
   // width while the editor lays the same box out to the balloon's per-line
   // ones, it would count a different number of lines and the box's rectangle
-  // would stop describing its own text — which is the exact bug this function
+  // would stop describing its own text - which is the exact bug this function
   // exists to prevent. Same helper, same arguments, same answer.
   const lines = layoutLines(
     text,
@@ -522,8 +522,8 @@ export function refitPage(p) {
 }
 
 // ---------- a font arriving changes every measurement ----------
-// Text metrics are not a constant. A user font is registered asynchronously —
-// read out of IndexedDB at boot, or added from a file mid-session — and until
+// Text metrics are not a constant. A user font is registered asynchronously -
+// read out of IndexedDB at boot, or added from a file mid-session - and until
 // its face is in `document.fonts` every measurement of a box using it is made
 // against the fallback family. That is the normal cold-start order, not an edge
 // case: `loadProjectPages` refits the whole chapter against the fallback, writes
@@ -531,8 +531,8 @@ export function refitPage(p) {
 //
 // Nothing then recomputed anything, and the disagreement was permanent and
 // three-way: the canvas kept the breaks it had derived, `box.h` kept a height
-// derived from a font nobody is looking at, and the exporter — which awaits
-// `document.fonts.ready` before it measures — broke the lines somewhere else
+// derived from a font nobody is looking at, and the exporter - which awaits
+// `document.fonts.ready` before it measures - broke the lines somewhere else
 // again and drew a block of a different height. The user's own screen was the
 // one thing that was wrong.
 //
@@ -593,24 +593,24 @@ export function saveExportPrefs(dir, name) {
 }
 
 // ---------- persistence intervals ----------
-// Four writers used to carry four numbers picked one at a time — 200ms for the
+// Four writers used to carry four numbers picked one at a time - 200ms for the
 // panels, 800ms for the chapter, 800ms again for the history file, and nothing
 // at all for the sidebar. Two tiers instead, split on what a write costs and on
 // what losing one costs, so a new writer has a number to join rather than one to
 // invent.
 //
-// PREF_SAVE_MS — a preference. A few hundred bytes of localStorage, synchronous,
+// PREF_SAVE_MS - a preference. A few hundred bytes of localStorage, synchronous,
 // no filesystem and none of the user's work in it: panel geometry, sidebar
 // width. Losing one costs a window position, so the window can be short. It is
 // not zero because every writer in this tier is driven by a drag or a key
 // repeat, and coalescing those is the whole point of the debounce.
 //
-// DOC_SAVE_MS — the user's work. The chapter's JSON and the undo history beside
+// DOC_SAVE_MS - the user's work. The chapter's JSON and the undo history beside
 // it, both real filesystem writes through the atomic-write path, both driven by
 // continuous typing. Four times the preference interval because each write is
 // orders of magnitude dearer, and shortening it would put a whole-document write
 // between keystrokes. The longer loss window is not carried by the timer: every
-// route out of the editor — leaving, quitting, opening another chapter — flushes
+// route out of the editor - leaving, quitting, opening another chapter - flushes
 // both writers rather than waiting for it.
 //
 // The chapter and its history share the number deliberately. They describe the
@@ -629,7 +629,7 @@ export const SIDEBAR_MAX = 460;
 export const clampSidebarWidth = (w) => clamp(w, SIDEBAR_MIN, SIDEBAR_MAX);
 // What comes back out of storage is parsed and vetted here rather than inline
 // below, because the read itself runs once at module load in an environment the
-// tests do not have — split out, the part that can actually be wrong is the
+// tests do not have - split out, the part that can actually be wrong is the
 // part that can be tested. Anything the rail could not have written is dropped
 // rather than coerced: a width that is not a number, a `hidden` that is not a
 // boolean, a blob that is not an object at all. Absent keys stay absent so the
@@ -659,7 +659,7 @@ try {
   /* ignore */
 }
 // Null whenever there is nothing pending, so `flushSidebar` can tell "the user
-// moved the rail and the timer has not fired" from "there is nothing to write" —
+// moved the rail and the timer has not fired" from "there is nothing to write" -
 // and a chapter nobody touched the sidebar in leaves no storage entry behind
 // that it did not already have.
 let sidebarT = null;
@@ -675,7 +675,7 @@ function writeSidebar() {
 }
 export function saveSidebar() {
   // Debounced, unlike the export prefs above, because the rail's arrow-key
-  // contract calls this on every key that moved the edge — and a held arrow
+  // contract calls this on every key that moved the edge - and a held arrow
   // auto-repeats, so an unbuffered write is dozens of serialisations a second
   // for a string nobody reads until the next launch. See PREF_SAVE_MS.
   clearTimeout(sidebarT);
@@ -688,7 +688,7 @@ export function saveSidebar() {
 // could not be lost; putting it on a timer opened a 200ms window in which ⌘Q
 // destroys the window with the last drag of the rail still pending. The document
 // and its history are drained on every route out of the editor (see
-// `flushBeforeLeaving`) and this is the same obligation, one tier down — cheap,
+// `flushBeforeLeaving`) and this is the same obligation, one tier down - cheap,
 // synchronous, and safe to call when there is nothing pending, because
 // `clearTimeout` of a fired or never-set timer is a no-op and the write is
 // idempotent.
@@ -704,27 +704,27 @@ export function flushSidebar() {
 }
 
 // ---------- registration seams ----------
-// Four things outside the store want to hear about something the store does —
-// the saver, the recorder, the page switch, the settle — and the store must stay
+// Four things outside the store want to hear about something the store does -
+// the saver, the recorder, the page switch, the settle - and the store must stay
 // unaware of who they are, or it would have to import the filesystem and the
 // history and cycle with both.
 //
 // Each was one slot, which is fine right up until a second listener wants the
 // same seam: the second registration silently displaced the first, so a panel
 // that coalesces its edits would have taken the Inspector's settle away and
-// neither of them would have said a word — the Inspector's edits would simply
+// neither of them would have said a word - the Inspector's edits would simply
 // stop being recorded. So each seam keeps a list.
 //
 // Registration hands back its own unsubscribe, and that one is exact: it drops
 // the entry it created and nothing else, so two subscribers can leave in either
-// order. It is the only release the app itself uses — every registration in
+// order. It is the only release the app itself uses - every registration in
 // src/ now holds its unsubscribe and calls it.
 //
 // Passing anything that is not a function clears the seam outright. That is a
 // blunt instrument and it is worth being honest about: `setSaver(null)` unhooks
 // `saveOpenChapter` and every autosave in the app stops with nothing said. It is
-// kept because the test suites lean on it as a teardown — a hook registered for
-// one case must not leak into the next, and `null` is the spelling they use —
+// kept because the test suites lean on it as a teardown - a hook registered for
+// one case must not leak into the next, and `null` is the spelling they use -
 // and because taking it away would leave those releases as silent no-ops, which
 // is the same hazard pointing the other way. Nothing in the app passes null; if
 // you are reaching for it in src/, you want the unsubscribe.
@@ -747,7 +747,7 @@ function seam() {
   // Copy-on-write above, so a notify holds the list it started with: a
   // subscriber that unsubscribes from inside its own callback cannot make the
   // walk skip the one behind it. The results come back for the one seam that
-  // has any — the saver's promises.
+  // has any - the saver's promises.
   const notify = (...args) => subs.map((s) => s.fn(...args));
   return { subscribe, notify, size: () => subs.length };
 }
@@ -762,7 +762,7 @@ export function setSaver(fn) {
 }
 // Every registered saver, as one promise. Started off a resolved promise so a
 // saver that throws synchronously comes back as a rejection like any other, and
-// `Promise.all` hands on the first rejection untouched — flushSave's caller
+// `Promise.all` hands on the first rejection untouched - flushSave's caller
 // reads that reason to decide whether the user may leave the chapter.
 const runSavers = () => Promise.resolve().then(() => Promise.all(savers.notify()));
 export function markUnsaved() {
@@ -785,7 +785,7 @@ export function markSaved() {
   // The debounce goes with the flag, and it has to: `markSaved` means "the disk
   // is current", and a timer left armed against work that has already landed
   // writes the whole document a second time 800ms later. On the way out of a
-  // chapter that second write is not merely redundant — `openChapter` has by
+  // chapter that second write is not merely redundant - `openChapter` has by
   // then pointed `app.chapterRef` somewhere else, and the pages the stale timer
   // hands the saver are the ones it was told about when it was armed. Cancelled
   // here rather than by each caller, because this is the one function every
@@ -795,13 +795,13 @@ export function markSaved() {
 }
 export function flushSave() {
   clearTimeout(saveT);
-  // Every non-debounce save comes through here — leaving the editor, quitting,
-  // opening another chapter — and this is the path most likely to be the one
+  // Every non-debounce save comes through here - leaving the editor, quitting,
+  // opening another chapter - and this is the path most likely to be the one
   // that fails, because it is the one that runs when the user is on their way
   // out. It also cancels the debounce, so a rejection here leaves nothing
   // scheduled to raise the indicator later: without this catch the pill would
   // sit on its neutral dot promising a save that no longer exists. The error is
-  // rethrown untouched — flushBeforeLeaving still decides whether the user may
+  // rethrown untouched - flushBeforeLeaving still decides whether the user may
   // go, and says why.
   return savers.size() && app.chapterRef
     ? runSavers().catch((e) => {
@@ -831,12 +831,12 @@ export function setPageSwitchHook(fn) {
   return pageSwitchHooks.subscribe(fn);
 }
 // And a third, for the edit that is still being made when something else
-// happens. A panel that coalesces a run of changes into one entry — the
-// Inspector's settle timer — always leaves a window in which an edit has been
+// happens. A panel that coalesces a run of changes into one entry - the
+// Inspector's settle timer - always leaves a window in which an edit has been
 // applied to the document and not yet recorded. `recordEdit` has no page
 // awareness of its own: it pushes onto whichever stack is live at the moment it
 // is called. So everything that would make a late entry land somewhere it does
-// not belong — a page turn, an undo, the start of a drag — closes that window
+// not belong - a page turn, an undo, the start of a drag - closes that window
 // through here first.
 const editSettleHooks = seam();
 export function setEditSettleHook(fn) {
@@ -847,14 +847,14 @@ export function settleEdits() {
   // order the user made them in: a panel's pending entry has been sitting in its
   // settle window for up to 400ms while the box on the canvas is still being
   // typed into. The other way round hands the user an undo that walks their own
-  // session backwards — the panel's tweak comes off first, then the typing that
+  // session backwards - the panel's tweak comes off first, then the typing that
   // preceded it. Pinned by 'records a subscriber's pending entry before its own
   // inline edit' in store.test.js, which is the whole of the claim: flip these
   // two lines and it fails.
   editSettleHooks.notify();
   // The inline box edit is settled here rather than by each caller because this
-  // is already what every path that would strand an unrecorded edit calls — the
-  // page turn, the undo, the start of a drag, the way out of the chapter — and
+  // is already what every path that would strand an unrecorded edit calls - the
+  // page turn, the undo, the start of a drag, the way out of the chapter - and
   // the box being typed into is exactly as strandable as the panel's slider was.
   // A page turn mid-typing used to throw the record away outright; that is the
   // undo step it was costing.
@@ -879,7 +879,7 @@ export const pageById = (id) => app.pages.find((p) => p.id === id) ?? null;
 // the box survived, nothing at all if it did not.
 let pendingPlace = null;
 // What the box being edited read at the start of the part of the session that
-// has not been recorded yet — the text the edit began with, until a settle
+// has not been recorded yet - the text the edit began with, until a settle
 // records that far and re-arms this from where it left off (see `settleText`).
 // `undefined` is the only value that means "nothing is armed", which is why
 // `null` is used for a box with no text of its own: `endEdit` decides whether to
@@ -893,7 +893,7 @@ let editBefore = undefined;
 // And the box's fitted geometry at that same moment, for the same span of the
 // session. Typing is the commonest way a box grows, so a `text` entry has to
 // carry the height either side of it or an undo hands back the short text in the
-// tall box — see `autoFitBox`. Kept beside `editBefore` rather than folded into
+// tall box - see `autoFitBox`. Kept beside `editBefore` rather than folded into
 // it because `endEdit` takes an explicit before-*text* from callers that know
 // better, and a pair there would mean every caller knowing about geometry too.
 let editGeomBefore = null;
@@ -904,12 +904,12 @@ export const clearPending = () => {
   editBefore = undefined;
   editGeomBefore = null;
 };
-// Every path that ends an edit calls this — not just `endEdit`. `deselect` and
+// Every path that ends an edit calls this - not just `endEdit`. `deselect` and
 // `selectBox` null `editingId` on pointerdown, before the browser fires blur on
 // the contenteditable, so the blur's `endEdit` finds nothing to end and returns
 // early. Settling only there would leave the box pending for good, and the next
 // `deleteBox` would mistake a real box full of real text for a gesture that
-// never happened and record nothing — undo silently losing the user's work.
+// never happened and record nothing - undo silently losing the user's work.
 function settlePending() {
   const pend = pendingPlace;
   if (!pend) return;
@@ -918,13 +918,13 @@ function settlePending() {
   // The index is read now rather than remembered from creation time: boxes may
   // have come and gone while the user was typing.
   const index = p ? p.boxes.findIndex((x) => x.id === pend.id) : -1;
-  if (index === -1) return; // already gone — the gesture left nothing to undo
+  if (index === -1) return; // already gone - the gesture left nothing to undo
   // No queue fields: a free-typed box never touched `activeLineN`, and claiming
   // it did would make this undo rewind a queue move belonging to another edit.
   //
   // The line does ride along, and it has to: the gesture created a queue row as
   // well as a box, so an undo that took only the box back would leave a row in
-  // the queue pointing at nothing — unplaceable (see `placeActiveAt`), holding
+  // the queue pointing at nothing - unplaceable (see `placeActiveAt`), holding
   // the text of a box that is no longer there, and impossible to get rid of
   // because the queue has no delete. See the `place` kind in history.svelte.js.
   recordEdit({
@@ -950,7 +950,7 @@ function freeLineRecord(p, b) {
 // The text half of ending an edit, and it has to live beside `settlePending`
 // for exactly the same reason: the contenteditable writes `box.text` on every
 // keystroke, so by the time anything ends the edit the document is already
-// current — what is missing is the one record that stands for the whole
+// current - what is missing is the one record that stands for the whole
 // session. And the blur that would carry it arrives after `deselect` or
 // `selectBox` has already nulled `editingId`, so `endEdit` finds nothing to end
 // and returns early. Left to the blur alone, every edit finished by clicking
@@ -962,12 +962,12 @@ function freeLineRecord(p, b) {
 // beside it would be the same edit counted twice.
 // Idempotent by re-arming rather than by forgetting, and the difference is the
 // rest of the session. `editBefore` used to be cleared unconditionally on the
-// way in, which does make a second call record nothing — but `endEdit`'s guard
+// way in, which does make a second call record nothing - but `endEdit`'s guard
 // is `before !== undefined`, so everything typed *after* a mid-session settle
 // was then recorded by nobody. Any caller that settles while the edit continues
 // disabled the recording it was supposed to protect: `flushBeforeLeaving` on a
 // save that fails throws instead of closing the chapter, and the user is bounced
-// back into the editor with `editingId` still set and the before-text gone — for
+// back into the editor with `editingId` still set and the before-text gone - for
 // the rest of that session, silently.
 //
 // So the invariant is structural instead: while an edit session is live,
@@ -983,13 +983,13 @@ function settleText() {
   }
   const b = byId(id);
   // Re-armed from the document, which the editable has already written every
-  // keystroke into — the same value `beginEdit` would have taken had the session
+  // keystroke into - the same value `beginEdit` would have taken had the session
   // started here. A box that has gone leaves nothing to arm from.
   //
   // Through `boxOwnText`, not `b.text`, so a free-typed box is compared against
   // the field its own text actually lives in. Read off `b.text` it is null on
-  // both sides of every edit, and every settle mid-session — a page turn, a
-  // drag, the way out of the chapter — would decide nothing had changed and
+  // both sides of every edit, and every settle mid-session - a page turn, a
+  // drag, the way out of the chapter - would decide nothing had changed and
   // record nothing.
   const geomBefore = editGeomBefore;
   editBefore = b ? boxOwnText(b) : undefined;
@@ -1026,7 +1026,7 @@ export function gotoPage(i) {
   // window belongs to the page being left, and the stack that is live is the
   // only place it can be pushed. A step later and it would land on the page
   // being arrived at, where the next write would file that page's entries under
-  // this one's key. That covers the inline edit too — the box being typed into
+  // this one's key. That covers the inline edit too - the box being typed into
   // when the page turned used to have its record dropped on the way out, which
   // is one undo step the user paid for every page turn mid-edit.
   settleEdits();
@@ -1093,7 +1093,7 @@ export function beginEdit(id) {
     editGeomBefore = b ? fitGeom(b) : null;
   }
 }
-// `beforeText` is what the box read when the edit began. It is optional — left
+// `beforeText` is what the box read when the edit began. It is optional - left
 // off, what `beginEdit` remembered is used, which is what every caller in the
 // app relies on; an explicit one is for a caller that knows better.
 export function endEdit(commitText, beforeText) {
@@ -1113,8 +1113,8 @@ export function endEdit(commitText, beforeText) {
   // The blur or the Escape that changed nothing, on a box that reads its text
   // off its queue line.
   //
-  // Such a box owns no text — `b.text` is null on purpose, so `boxText` resolves
-  // through the line and the queue's textarea keeps reaching the canvas — and
+  // Such a box owns no text - `b.text` is null on purpose, so `boxText` resolves
+  // through the line and the queue's textarea keeps reaching the canvas - and
   // `editBefore` is `boxOwnText`, which is that same null. But the editable
   // hands back what it was *displaying*, which is the line's string. Compared as
   // they stand, an untouched blur reads as "null became 'Hello'": `setBoxText`
@@ -1127,14 +1127,14 @@ export function endEdit(commitText, beforeText) {
   // < 0) has its text on its line by design and `boxOwnText` already reads the
   // same field on both sides, and a legacy box (lineN == null) owns its string
   // outright. Ahead of everything below because there is nothing to commit,
-  // nothing to record and nothing to mark unsaved — the document is exactly as
+  // nothing to record and nothing to mark unsaved - the document is exactly as
   // it was found.
   if (b.lineN != null && b.lineN > 0 && b.text == null && commitText === boxText(b, page())) return;
   if (commitText != null) {
     setBoxText(b, commitText);
     markUnsaved();
   }
-  // drop an empty placeholder box the user never typed into — and, with it, the
+  // drop an empty placeholder box the user never typed into - and, with it, the
   // queue line the gesture created. `isFreeBox` rather than `lineN == null`
   // because a free box now has a line: read the old way, a box typed today
   // survived empty and left a blank row in the queue forever.
@@ -1143,7 +1143,7 @@ export function endEdit(commitText, beforeText) {
     deleteBox(id);
     return;
   }
-  // The box survived, so the gesture that created it is now worth one record —
+  // The box survived, so the gesture that created it is now worth one record -
   // with the text the user actually typed, not the empty string it was born
   // with. Its own `text` record would be the same gesture counted twice.
   if (pendingPlace?.id === id) {
@@ -1168,7 +1168,7 @@ export function endEdit(commitText, beforeText) {
 }
 
 // ---------- page dimensions (the page's coordinate space) ----------
-// `p.w`/`p.h` are not a note about the file on disk — they ARE the page's
+// `p.w`/`p.h` are not a note about the file on disk - they ARE the page's
 // coordinate space. Every box's x/y/w/h is expressed in it, `.page-frame` is
 // `p.w * zoom` by `p.h * zoom`, and `.page-img` inside that frame is
 // `width:100%; height:100%`. Nothing letterboxes. So a page whose w/h disagree
@@ -1181,7 +1181,7 @@ export function endEdit(commitText, beforeText) {
 //              (`p.cleaned ?? p.raw`), at every zoom, on every page.
 //
 // Exactly two states are legal. A page that has learned its space (both
-// positive), and a page that has not yet — `w:0,h:0`, which is what
+// positive), and a page that has not yet - `w:0,h:0`, which is what
 // `createChapter` writes for every page it copies, because it never decodes the
 // images. The second is not a size, it is "unknown", and the difference is why
 // this asks for a *positive* pair rather than a truthy one: 0 must never be
@@ -1190,7 +1190,7 @@ export function endEdit(commitText, beforeText) {
 export const hasPageSpace = (p) =>
   Number.isFinite(p?.w) && Number.isFinite(p?.h) && p.w > 0 && p.h > 0;
 
-// The page an image belongs to, identified by the URL that loaded — never by
+// The page an image belongs to, identified by the URL that loaded - never by
 // "whichever page is on screen now". `raw`/`cleaned` are per-page object URLs,
 // unique by construction, so this is an exact answer with no timing in it. The
 // alternative, which is what this used to do, is a race the user pays for: an
@@ -1218,7 +1218,7 @@ function rescalePageGeometry(p, sx, sy) {
   // The balloon a box was fitted to is page geometry like the box's own
   // rectangle, and it moves with it. Left behind, a chapter whose cleaned raster
   // arrives at another resolution would keep every box's text laid out to a
-  // curve measured in the old coordinate space — the boxes would follow the art
+  // curve measured in the old coordinate space - the boxes would follow the art
   // and their line breaks would not. An axis-aligned ellipse scaled per axis is
   // still an axis-aligned ellipse, so this is exact for both kinds.
   const scaleFit = (f) => {
@@ -1248,7 +1248,7 @@ function rescalePageGeometry(p, sx, sy) {
   for (const db of d.boxes ?? []) {
     db.box = scaleBox(db.box);
     // A glyph height, so it follows the vertical scale. Wrong only for a
-    // non-uniform rescale, which is a change of aspect — the case where no
+    // non-uniform rescale, which is a change of aspect - the case where no
     // single number is right and the box geometry beside it is already the
     // thing that matters.
     if (Number.isFinite(db.font_size)) db.font_size *= sy;
@@ -1257,7 +1257,7 @@ function rescalePageGeometry(p, sx, sy) {
 
 // The one way a page's coordinate space is ever set or changed. Pinned to a
 // page rather than reading `page()`, so the caller has to say which page the
-// measurement is about — see `pageForSrc`.
+// measurement is about - see `pageForSrc`.
 //
 // Returns whether anything moved, so a caller that has to react (the canvas
 // refits) can tell a real change from a re-confirmation of what was already
@@ -1269,7 +1269,7 @@ export function setPageDims(p, w, h) {
   if (p.w === w && p.h === h) return false;
   // Nothing was authored in a space that did not exist, so there is nothing to
   // move: this is the first honest measurement the page has ever had. It is
-  // also the common case — `createChapter` writes `w:0,h:0` for every page, and
+  // also the common case - `createChapter` writes `w:0,h:0` for every page, and
   // a page only learns better by being opened in the canvas or detected on.
   const known = hasPageSpace(p);
   const sx = known ? w / p.w : 1;
@@ -1277,7 +1277,7 @@ export function setPageDims(p, w, h) {
   p.w = w;
   p.h = h;
   // A page that already had a space and now has a different one is a page whose
-  // art was replaced — a cleaned raster at another resolution arriving over a
+  // art was replaced - a cleaned raster at another resolution arriving over a
   // page that has already been typeset is the way this happens. The boxes were
   // authored over that art and have to follow it, or the fix for the stretch
   // would itself move every line off the bubble it was placed in.
@@ -1309,7 +1309,7 @@ export function setPageDimsForSrc(src, w, h) {
 export const TOOLS = ['place', 'text', 'pan'];
 export function setTool(t) {
   if (!TOOLS.includes(t)) return;
-  // A translate chapter has no place and no text tool — the rail hides both and
+  // A translate chapter has no place and no text tool - the rail hides both and
   // the canvas is there to be read, not typeset on. Refused here rather than at
   // each caller: the rail buttons, the v/t keyboard shortcuts and anything added
   // later all arrive through this one door, and a tool the canvas would honour
@@ -1320,7 +1320,7 @@ export function setTool(t) {
 }
 
 // ---------- the chapter's workflow mode ----------
-// A chapter is either being typeset — everything this app has ever done — or
+// A chapter is either being typeset - everything this app has ever done - or
 // translated, which is the raw page, the queue and nothing else. It is stored in
 // chapter.json; a file with no `mode` at all reads as 'typeset', which is what
 // every chapter on disk before this existed actually is.
@@ -1332,8 +1332,8 @@ export const normalizeChapterMode = (m) => (CHAPTER_MODES.includes(m) ? m : 'typ
 export const isTranslateMode = () => app.chapterMode === 'translate';
 
 // ---------- the project's page layout ----------
-// A project is either a stack of pages the reader turns — every project this app
-// has ever made — or a webtoon longstrip, where the chapter is one column of
+// A project is either a stack of pages the reader turns - every project this app
+// has ever made - or a webtoon longstrip, where the chapter is one column of
 // slices with nothing between them and "page" is only a record of where the file
 // was cut. It is chosen when the project is created and stored in project.json;
 // a file with no `layout` reads as 'pages', which is what every project on disk
@@ -1350,7 +1350,7 @@ export const isLongstrip = () => app.projectLayout === 'longstrip';
 
 // Make `p` the current page, if it is not already. In a strip every page is on
 // screen at once, so a click, a drag or a caret can land on a page the index is
-// not pointing at — and the index is what selection, the undo stack and the
+// not pointing at - and the index is what selection, the undo stack and the
 // queue are all scoped to. Moving it is not a page turn the user asked for; it
 // is the index catching up with where they are already working.
 //
@@ -1368,13 +1368,13 @@ export function focusPage(p) {
 // result = { img_width, img_height, panels, lines:[{n,type,jp,en,box,vertical,font_size}] }
 //
 // `img_width`/`img_height` are the decoded size of the image the engine was
-// handed — `src-tauri/src/detect/engine.rs` decodes the bytes once and
+// handed - `src-tauri/src/detect/engine.rs` decodes the bytes once and
 // `detect::analyze` reports that image's dimensions, with no resize anywhere
-// between — and every `box` below is in that space. So they are not a second opinion
+// between - and every `box` below is in that space. So they are not a second opinion
 // about the page's size that can simply be written over the first: they are the
 // frame of reference the boxes are quoted in.
 //
-// Which makes the old behaviour — overwrite `p.w`/`p.h` and keep the boxes —
+// Which makes the old behaviour - overwrite `p.w`/`p.h` and keep the boxes -
 // exactly backwards. The canvas draws `p.cleaned ?? p.raw`, detection runs on
 // `p.raw`, and the moment a chapter has a cleaned raster at a different
 // resolution the page adopted the raw's size and stretched the cleaned art
@@ -1385,7 +1385,7 @@ export function applyDetection(result, target = null) {
   const dw = result.img_width;
   const dh = result.img_height;
   // A page with no space yet has nothing to map into and nothing to contradict,
-  // and the detector has just decoded the raw at full size — so this is the one
+  // and the detector has just decoded the raw at full size - so this is the one
   // case where its numbers are the page's numbers. `setPageDims` is what writes
   // them, so the "nothing was authored in a space that did not exist" reasoning
   // stays in one place.
@@ -1397,7 +1397,7 @@ export function applyDetection(result, target = null) {
       ? [box[0] * sx, box[1] * sy, box[2] * sx, box[3] * sy]
       : box;
   // The detector's lines replace the page's, and what the USER put on those
-  // lines does not go with them. Read `en: ''` — which is what this was — the
+  // lines does not go with them. Read `en: ''` - which is what this was - the
   // first re-detection of a page threw away every translation on it and every
   // row the user had typed, with no undo entry and no warning. Re-detecting is
   // an ordinary thing to do (a better model, a cleaned raster, a page that came
@@ -1408,13 +1408,13 @@ export function applyDetection(result, target = null) {
   //
   //   en    kept when a line with the same `n` was already there AND its `jp` is
   //         unchanged. Detection renumbers from 1 in reading order on every run,
-  //         so `n` alone is not a durable identity — one bubble found that was
+  //         so `n` alone is not a durable identity - one bubble found that was
   //         missed before shifts every number after it. The Japanese is the
   //         durable half: same number, same `jp` means the detector found the
   //         same sentence again and the English typed against it still belongs
   //         to it. A changed `jp` means that number now names a different
   //         sentence, and carrying the old English onto it would put a
-  //         confident, wrong translation in the queue — strictly worse than an
+  //         confident, wrong translation in the queue - strictly worse than an
   //         empty row, which the user can see is empty.
   //   tags  carried by `carryTagsForward`, by number alone. Deliberately the
   //         looser rule, and deliberately the same one the JSON re-import path
@@ -1424,7 +1424,7 @@ export function applyDetection(result, target = null) {
   //         carrying a translation onto it. One rule for "lines replaced
   //         wholesale" beats two that drift.
   //   free  lines (`n < 0`) are rows the user typed onto the page. The detector
-  //         has no opinion about them — it never saw them and cannot renumber
+  //         has no opinion about them - it never saw them and cannot renumber
   //         them, since its numbers start at 1. `carryTagsForward` appends them
   //         untouched, exactly as it does on a re-import.
   const before = new Map(p.lines.map((l) => [l.n, l]));
@@ -1436,7 +1436,7 @@ export function applyDetection(result, target = null) {
       return { n: l.n, type: l.type, jp, en: was && (was.jp ?? '') === jp ? (was.en ?? '') : '' };
     }),
   );
-  // Detection geometry kept separately — read by the detected-text JSON export
+  // Detection geometry kept separately - read by the detected-text JSON export
   // and carried through the PSD round-trip. In page coordinates, like every
   // other geometry the document stores, which is what `intoPage` is for:
   // unscaled it would be in whatever space the engine happened to decode, and
@@ -1456,7 +1456,7 @@ export function applyDetection(result, target = null) {
   //
   // The free-typed ones stay, and they have to: their lines survive the
   // replacement above, and a surviving line whose box was wiped is precisely
-  // the orphan row `deleteBox` goes out of its way never to leave — unplaceable
+  // the orphan row `deleteBox` goes out of its way never to leave - unplaceable
   // (`placeActiveAt` refuses a line that is already placed by construction),
   // undeletable (the queue has no such control), holding the text of a box that
   // is gone. The box and its line survive together or neither does. A legacy
@@ -1471,7 +1471,7 @@ export function applyDetection(result, target = null) {
   // shortcut is reached, so the whole keyboard stays dead until something else
   // happens to clear it.
   //
-  // Cleared rather than settled. The wipe is not an edit and records nothing —
+  // Cleared rather than settled. The wipe is not an edit and records nothing -
   // there is no entry for a `text` record to sit beside, and an entry describing
   // a box the next line removes would only give undo something to fail on. This
   // is the case `clearPending` exists for: the document is being put away, so
@@ -1495,7 +1495,7 @@ export function applyDetection(result, target = null) {
 // a number chosen for a page nobody has seen. Detection already knows better:
 // `applyDetection` stores `p.detect.boxes = [{ n, box: [x1,y1,x2,y2], ... }]` in
 // page coordinates, one rect per detected line, and that rect is where the
-// Japanese actually sat — so it is the size and the position the English wants.
+// Japanese actually sat - so it is the size and the position the English wants.
 //
 // Two ways to find the rect, in this order:
 //   the line's own      the queue row being placed has detected geometry. This is
@@ -1542,7 +1542,7 @@ export function detectedRectFor(p, lineN, imgX, imgY) {
 // back `rh` x `rw`, centred where it was.
 //
 // This is the answer to a `vertical: true` detection, which means the Japanese
-// in that block is set in a column — tall and narrow, and the block is drawn
+// in that block is set in a column - tall and narrow, and the block is drawn
 // tight around it. English wants precisely the opposite shape in the same
 // bubble, so placing a box at the block's own aspect puts a wide language into a
 // rectangle shaped for a narrow one, and every line breaks after one or two
@@ -1550,8 +1550,8 @@ export function detectedRectFor(p, lineN, imgX, imgY) {
 //
 // It is deliberately only a fallback. When a balloon fit succeeded, the
 // inscribed rectangle of the fitted shape has already answered the question with
-// the actual geometry of the actual bubble — it is wide because the bubble is
-// wide, not because a heuristic swapped two numbers — and transposing on top of
+// the actual geometry of the actual bubble - it is wide because the bubble is
+// wide, not because a heuristic swapped two numbers - and transposing on top of
 // that would be a second, worse opinion applied to a good answer. So this runs
 // only where there is no fit, and `placeActiveAt` says so at the call site.
 export function transposeRect(rect) {
@@ -1566,8 +1566,8 @@ export function transposeRect(rect) {
 
 // How much of a fit has to be believed before a box is sized from it.
 //
-// `fitBalloonShape` has already refused everything it considers unexplained —
-// an escaped fill, a jagged burst, a thought cloud — so anything arriving here
+// `fitBalloonShape` has already refused everything it considers unexplained -
+// an escaped fill, a jagged burst, a thought cloud - so anything arriving here
 // with a shape passed its residual, coverage and span gates. This is the second
 // gate, and it is cheap insurance rather than a duplicate: the accepted band
 // runs all the way down to a confidence of 0 (a fit whose residual sits exactly
@@ -1579,7 +1579,7 @@ const MIN_FIT_CONFIDENCE = 0.5;
 // inside the balloon, minus the safety inset `balloon.js` applies for us, pushed
 // onto the page by the same clamp `placementRect` uses.
 //
-// Pure and exported for the same reason `placementRect` is — "what size is a box
+// Pure and exported for the same reason `placementRect` is - "what size is a box
 // on this bubble" is arithmetic worth pinning down without a canvas anywhere
 // near it.
 export function fittedRect(p, shape) {
@@ -1599,7 +1599,7 @@ export function fittedRect(p, shape) {
 // Every one of the ways this returns null is a real, expected case rather than
 // an error path, and together they are the fallback contract placement rests on:
 //
-//   no pixels    the page has not been decoded into the cache — a chapter just
+//   no pixels    the page has not been decoded into the cache - a chapter just
 //                opened, a page never looked at, or the node test environment,
 //                which has no canvas at all.
 //   no block     nothing was detected behind this line and the click landed on
@@ -1651,7 +1651,7 @@ export function placementRect(p, rect, imgX, imgY, fallbackW = 220, fallbackH = 
   // Only against a page that has been measured, which is the same guard
   // `growToFit` carries and for the same reason. `p.w`/`p.h` are 0 until
   // something decodes the art, and a box centred on a detected bubble at x=600
-  // was being clamped to `[0, max(0, 0 - w)]` — that is, to 0 — so every
+  // was being clamped to `[0, max(0, 0 - w)]` - that is, to 0 - so every
   // placement on a page the canvas had not measured yet collapsed onto the
   // origin and the bubble the detector found was thrown away. Off the page is
   // recoverable by dragging; a pile of boxes in the top-left corner is what the
@@ -1667,13 +1667,13 @@ export function placementRect(p, rect, imgX, imgY, fallbackW = 220, fallbackH = 
 }
 
 // `target` is the page the click landed on. It defaults to the current one,
-// which is the only page a paged document can offer — in a longstrip every page
+// which is the only page a paged document can offer - in a longstrip every page
 // is on screen at once and the canvas resolves the frame under the pointer, so
 // the coordinates and the page they are in must travel together or the box
 // lands on whichever slice the scroll position happens to have made current.
 export function placeActiveAt(imgX, imgY, target = null) {
   // Nothing places a box in a translate chapter. The rail forces the hand and
-  // the canvas checks too, so this is the third lock on the same door — cheap,
+  // the canvas checks too, so this is the third lock on the same door - cheap,
   // and it is the one that holds whatever a future caller does, because a box on
   // a page nobody is typesetting is work the user would have to find and delete.
   if (isTranslateMode()) return;
@@ -1684,8 +1684,8 @@ export function placeActiveAt(imgX, imgY, target = null) {
   // already current, which is every call a paged document makes.
   focusPage(target);
   // The edit this click ends is recorded before the placement it starts. Left to
-  // the `selectBox` at the bottom — which settles as a side effect of moving the
-  // selection — the free-typed box the user had just finished would be recorded
+  // the `selectBox` at the bottom - which settles as a side effect of moving the
+  // selection - the free-typed box the user had just finished would be recorded
   // *after* the box this click places, and undo would then rewind the pair in
   // the wrong order: the older edit first, the newer one still standing.
   settleEdits();
@@ -1696,7 +1696,7 @@ export function placeActiveAt(imgX, imgY, target = null) {
   // A free line's box is what created it, so it is placed by definition and
   // there is nothing here to place. Clicking such a row in the queue arms it
   // like any other (`activateLine` does not discriminate), and without this the
-  // next click on the canvas dropped a second box onto the same line — two boxes
+  // next click on the canvas dropped a second box onto the same line - two boxes
   // rendering the same text, one of them invisible under the other, and no
   // indication in the queue that there were two.
   if (isFreeLine(ln)) {
@@ -1704,7 +1704,7 @@ export function placeActiveAt(imgX, imgY, target = null) {
     return;
   }
   // The queue advances as part of this edit, so the record carries both sides
-  // of it — undoing the box without rewinding the queue would leave the two
+  // of it - undoing the box without rewinding the queue would leave the two
   // disagreeing about what still needs placing.
   const activeBefore = p.activeLineN;
   // Three sizes a box can be placed at, in order of how much is known about the
@@ -1714,7 +1714,7 @@ export function placeActiveAt(imgX, imgY, target = null) {
   //                  a shape it believes. The box is the largest rectangle that
   //                  fits inside that shape, and the shape is kept so the line
   //                  breaker can lay text out to the curve.
-  //   the block      no fit. The detector's rectangle, inset — today's answer —
+  //   the block      no fit. The detector's rectangle, inset - today's answer -
   //                  transposed first when the Japanese in it was set vertically,
   //                  since a tall narrow column is the one shape English does
   //                  not want. No transpose in the fitted branch above: the
@@ -1741,17 +1741,17 @@ export function placeActiveAt(imgX, imgY, target = null) {
     y: g.y,
     w: g.w,
     h: g.h,
-    // One of the two moments a tag's defaults are read — the other is an apply
+    // One of the two moments a tag's defaults are read - the other is an apply
     // onto a box already placed (`toggleTagOnLine`), which calls this same
     // function so the two orders cannot disagree. What lands on the box is a
     // plain value it owns from here on, so *editing* the tag afterwards still
-    // cannot reach back into it — that is the not-retroactive rule, and it is
+    // cannot reach back into it - that is the not-retroactive rule, and it is
     // unchanged: there is no path from `updateTag` to a box, only from a
     // deliberate apply. A line with no tags, or tags with nothing set, comes
     // back with the inherited style untouched, which is what makes tags optional.
     style: styleForLine(ln, cloneStyle(app.lastStyle)),
     // The balloon this box was fitted to, or null when it was not. Written on
-    // every placed box either way so the field is never absent — see the same
+    // every placed box either way so the field is never absent - see the same
     // reasoning in `loadProjectPages`. It rides inside the `place` history entry
     // below (`$state.snapshot(b)` takes the whole box), so an undo of a
     // placement takes the fit with it.
@@ -1785,7 +1785,7 @@ export function placeActiveAt(imgX, imgY, target = null) {
 // then routinely make that answer stale, and neither is a bug: the user drags
 // the box onto a different bubble, or the page is cleaned after it was typeset
 // and the balloon under the box now has nothing in it. Re-deciding the fit on
-// every render is not an option — it is a flood fill over a megapixel — so it is
+// every render is not an option - it is a flood fill over a megapixel - so it is
 // a button, and this is what the button calls.
 //
 // The block is the BOX's own rectangle rather than the detector's, and that is
@@ -1793,7 +1793,7 @@ export function placeActiveAt(imgX, imgY, target = null) {
 // where the user has put it, so seeding a fill from inside it finds the balloon
 // the box is on now. A box sitting on bare paper, on a burst, or on a page whose
 // pixels are not decoded gets its fit cleared rather than left pointing at a
-// bubble it has been dragged away from — a stale fit is worse than none, because
+// bubble it has been dragged away from - a stale fit is worse than none, because
 // the text is laid out to a curve that is no longer under it.
 //
 // Not recorded in the undo history. The fit is derived geometry rather than an
@@ -1824,12 +1824,12 @@ export function refitBalloon(boxId, p = page()) {
 // Creates a queue line as well as a box, and that is the change: a box typed
 // straight onto the canvas is now a line-backed box like any other, so it can be
 // tagged, a tag-scoped bulk edit reaches it, and it is counted by the queue's
-// "N / M placed" — as placed, which it is by construction, since the box is what
+// "N / M placed" - as placed, which it is by construction, since the box is what
 // brought the line into existence.
 //
 // The line's three fields, and why each reads the way it does:
 //   n     negative, one below everything on the page. See `isFreeLine`.
-//   jp    ''. There is no Japanese source — the user typed English onto the
+//   jp    ''. There is no Japanese source - the user typed English onto the
 //         page. The queue renders `{#if line.jp}` and the box renders its JP
 //         pill on the same condition, so an empty string is not a blank label,
 //         it is no label at all.
@@ -1839,12 +1839,12 @@ export function refitBalloon(boxId, p = page()) {
 //         with its line.
 //   type  'dialogue', which is one of the three names `normLine` validates in
 //         importer.js. Anything else and the app's own exported JSON would be
-//         rejected — silently downgraded to 'dialogue' — on re-import.
+//         rejected - silently downgraded to 'dialogue' - on re-import.
 // `target` as in `placeActiveAt`: the page the click landed on, defaulting to
 // the current one.
 export function addEmptyBox(imgX, imgY, target = null) {
   if (!app.pages.length) return null; // no chapter open: never write into the stand-in page
-  if (isTranslateMode()) return null; // no canvas boxes in a translate chapter — see `placeActiveAt`
+  if (isTranslateMode()) return null; // no canvas boxes in a translate chapter - see `placeActiveAt`
   // Same reason as `placeActiveAt`: this ends in `beginEdit`, and the caret and
   // the pending-place record it leaves behind are both scoped to the page the
   // index points at.
@@ -1867,7 +1867,7 @@ export function addEmptyBox(imgX, imgY, target = null) {
     h,
     // Through `styleForLine` like `placeActiveAt`, so there is one answer to
     // "what style is a box born with" rather than two. A line created this
-    // instant has no tags, so what comes back is the inherited style untouched —
+    // instant has no tags, so what comes back is the inherited style untouched -
     // but the moment the user tags the row, tagging and placing agree.
     style: styleForLine(ln, cloneStyle(app.lastStyle)),
     // Never fitted at birth: a box typed onto the page is not on a detected
@@ -1890,14 +1890,14 @@ export function addEmptyBox(imgX, imgY, target = null) {
 // `addEmptyBox` takes page coordinates, and the caller that has none is the
 // queue's Add button: it lives in a panel floating over the canvas, and the user
 // may be looking at any corner of a page zoomed to 400%. The page's own centre
-// is not an answer — at that zoom it is usually off-screen, and a box the user
+// is not an answer - at that zoom it is usually off-screen, and a box the user
 // cannot see is a box they cannot type into, which is the whole point of the
 // button.
 //
 // So the landing point is the centre of *the part of the page that is on
 // screen*: the page frame intersected with the canvas viewport. Pure, and taking
 // both rectangles rather than reading them, so the arithmetic is testable in
-// node where there is no layout — the DOM read is the four lines below it.
+// node where there is no layout - the DOM read is the four lines below it.
 //
 // Falls back to the page's centre whenever there is nothing to measure (no
 // canvas mounted, a zoom of zero) or the page is scrolled entirely out of view.
@@ -1920,13 +1920,13 @@ export function visiblePageCenter(p, viewport, frame, zoom = 1) {
 }
 
 // The DOM half. `.editor-scroll` and `.page-frame` are Canvas.svelte's elements
-// and this only ever measures them — the scroll position they encode is the one
+// and this only ever measures them - the scroll position they encode is the one
 // thing the store does not hold and cannot derive from `app.zoom`. A read is
 // enough, so the canvas keeps sole ownership of that scroll and there is no
 // second copy of it to fall out of step.
 //
 // Worth being honest about the shape of this: a registration seam, like
-// `setSaver` and `setPageSwitchHook` above, would be the tidier edge — the
+// `setSaver` and `setPageSwitchHook` above, would be the tidier edge - the
 // canvas handing over a `viewportRect()` at mount. That is a change to
 // Canvas.svelte, and this needs no cooperation from it at all, so the query
 // stands until somebody wants the seam for a second reason.
@@ -1936,7 +1936,7 @@ export function addTextBoxInView() {
     typeof document === 'undefined' ? null : (document.querySelector(sel)?.getBoundingClientRect() ?? null);
   // Addressed by page id, because a longstrip canvas mounts a frame for every
   // page in the chapter and a bare `.page-frame` would answer with the first
-  // slice — a rectangle nowhere near the viewport, whose intersection with it is
+  // slice - a rectangle nowhere near the viewport, whose intersection with it is
   // empty, so every box added from the queue's button landed at the page's
   // centre instead of the reader's. Paged canvases mount exactly one frame and
   // carry the same attribute, so there is one selector rather than a branch.
@@ -1963,7 +1963,7 @@ export function deleteBox(id) {
   const freeLine = freeLineRecord(p, b);
   p.boxes = p.boxes.filter((x) => x.id !== id);
   // The line goes with the box. A free line exists only to be that box's queue
-  // row — it holds the box's text and its tags and nothing else — so leaving it
+  // row - it holds the box's text and its tags and nothing else - so leaving it
   // behind leaves a row the user cannot place (see `placeActiveAt`), cannot
   // delete (the queue has no such control) and did not ask for. An imported line
   // is the opposite case and is untouched: it came from the translation, it
@@ -1973,7 +1973,7 @@ export function deleteBox(id) {
     // The queue cannot stay armed on a line that has just left the document.
     // `activeLineN` is what `placeActiveAt` looks the line up by, so a stale
     // negative number there makes every subsequent click on the canvas in Place
-    // mode a silent no-op — `lineByN` answers undefined and placement returns
+    // mode a silent no-op - `lineByN` answers undefined and placement returns
     // without a word. The user's only way out was to click another queue row,
     // which is not a thing anybody knows to try. Guarded rather than
     // unconditional because the queue may well be armed on some other line,
@@ -2000,12 +2000,12 @@ export function deleteBox(id) {
   }
   app.selectedId = null;
   // The caret goes with the box. A delete can arrive from outside the box being
-  // typed into — the Inspector's button, the keyboard while the pointer is
-  // elsewhere — and `editingId` left naming a box that no longer exists is not
+  // typed into - the Inspector's button, the keyboard while the pointer is
+  // elsewhere - and `editingId` left naming a box that no longer exists is not
   // a cosmetic leak: App.svelte reads it as "the user is typing" and returns
   // out of the keydown handler before any shortcut is reached, so every global
   // shortcut in the app stays dead for the rest of the session. Nothing is
-  // settled on the way past — whatever was typed is already in the document,
+  // settled on the way past - whatever was typed is already in the document,
   // and the document no longer holds the box.
   if (app.editingId === id) app.editingId = null;
   markUnsaved();
@@ -2013,13 +2013,13 @@ export function deleteBox(id) {
 }
 
 // ---------- bulk style mode ----------
-// Opened from the chrome cluster at top right, where the mode toggles live —
+// Opened from the chrome cluster at top right, where the mode toggles live -
 // this is a mode, not a tool, which is why it is no longer on the tool rail.
 // User tweaks one style, clicks the boxes to apply it to, then hits Apply.
 
 // Every style property a bulk edit can push onto a box, named by where it lives
 // on the style: a flat key, or `group.field` for the two nested ones. This list
-// is the mask's whole vocabulary — a property that is not here is a property no
+// is the mask's whole vocabulary - a property that is not here is a property no
 // tick box can turn on and no apply can move, which is why the panel lays its
 // rows out against it rather than against a list of its own.
 //
@@ -2070,8 +2070,8 @@ export const BULK_PROPS = [
 
 // The mask holds only the ticked keys, so "not ticked" and "absent" are the same
 // state and there is no third one to get out of step. Read through here rather
-// than off `app.bulk.mask` directly, so a key that is not a real property — a
-// typo in a panel row, a path from an older build — can never be counted as a
+// than off `app.bulk.mask` directly, so a key that is not a real property - a
+// typo in a panel row, a path from an older build - can never be counted as a
 // tick that then moves nothing.
 export const bulkTicked = () => BULK_PROPS.filter((k) => app.bulk.mask[k]);
 export function setBulkProp(key, on) {
@@ -2109,7 +2109,7 @@ export function mergeMasked(base, template, mask = {}) {
 
 export function openBulk() {
   // Bulk mode ends any inline edit, and the box being typed into stays on the
-  // page — so the gesture that created it is settled and recorded, not dropped.
+  // page - so the gesture that created it is settled and recorded, not dropped.
   if (app.editingId) {
     settleText();
     settlePending();
@@ -2120,7 +2120,7 @@ export function openBulk() {
     targets: [],
     style: cloneStyle(seed ?? app.lastStyle),
     // Nothing ticked. The other two candidates are worse: everything ticked is
-    // today's behaviour — the whole template lands on every target — which is
+    // today's behaviour - the whole template lands on every target - which is
     // the complaint this mask exists to answer, and it would make "only the
     // colour" twenty-six unticks. A remembered mask would silently carry the
     // last edit's intent into an unrelated one.
@@ -2128,7 +2128,7 @@ export function openBulk() {
     // Empty is only workable because every control ticks its own property as it
     // is changed (`tickBulkProp`): the user who wants to change the colour picks
     // a colour and presses Apply, and the tick boxes are there to correct that
-    // — to drop a property they fiddled with and thought better of, or to push a
+    // - to drop a property they fiddled with and thought better of, or to push a
     // value they never touched because the seeded template already holds it.
     mask: {},
   };
@@ -2147,7 +2147,7 @@ export function toggleBulkTarget(id) {
 // The one place the mask is turned into new styles, for both ways of naming the
 // boxes. `boxes` is what to restyle; the record's `before`/`after` are whole
 // styles rather than the masked fields, because that is what the history's
-// `bulk` kind assigns — an entry carrying only the changed fields would replace
+// `bulk` kind assigns - an entry carrying only the changed fields would replace
 // each box's style with a fragment on undo.
 function restyleForBulk(boxes) {
   const items = [];
@@ -2159,7 +2159,7 @@ function restyleForBulk(boxes) {
     // A bulk that changes the font, the size or the line height changes what
     // every target box has to fit. It costs no extra undo step: the item carries
     // the geometry either side of the fit, so the one entry the apply writes
-    // walks the style and the height it caused back together — per box, because
+    // walks the style and the height it caused back together - per box, because
     // one entry covers many and they grew by different amounts.
     autoFitBox(b, pg);
     items.push({ pageId: pg.id, boxId: b.id, before, after, geomBefore, geomAfter: fitGeom(b) });
@@ -2167,7 +2167,7 @@ function restyleForBulk(boxes) {
   // Both inside the guard, and `lastStyle` especially: an apply that matched no
   // box is not an edit, and it must not leave a trace on the style every later
   // box is born with. `applyBulkToTag('nosuchtag')` restyled nothing and still
-  // moved the inherited roughen amount from 4 to 13 — a style the user could
+  // moved the inherited roughen amount from 4 to 13 - a style the user could
   // then not account for, because it had never been applied to anything they
   // could see.
   //
@@ -2182,10 +2182,10 @@ function restyleForBulk(boxes) {
 }
 
 // The history half of a bulk apply, shared by both ways of naming the boxes,
-// because both can now reach more than one page — the tag-scoped apply always
+// because both can now reach more than one page - the tag-scoped apply always
 // could, and the click-to-select one can the moment the chapter is a longstrip.
 //
-// One entry per page the apply reached, onto that page's own stack — not one
+// One entry per page the apply reached, onto that page's own stack - not one
 // entry for the whole apply. A single entry can only live on one stack, and undo
 // is per page: the one entry filed against the page on screen would rewind boxes
 // on pages that were keeping stacks of their own, whose `before`/`after` still
@@ -2199,7 +2199,7 @@ function restyleForBulk(boxes) {
 // page. Every other reading of it was a lie about what undo would do.
 //
 // Items keep the order they were restyled in, so each page's entry carries its
-// boxes in document order. Which page's entry is written first does not matter —
+// boxes in document order. Which page's entry is written first does not matter -
 // they go to different stacks. Returns how many pages were reached, which is the
 // only thing the callers' messages need that they cannot see for themselves.
 function recordBulkByPage(items) {
@@ -2225,7 +2225,7 @@ export function applyBulk() {
   }
   // Every page, not `page()`. In a longstrip chapter the whole chapter is drawn
   // as one column, so the user can tick targets on any slice while the index
-  // sits on whichever one the scroll last focused — and a lookup scoped to that
+  // sits on whichever one the scroll last focused - and a lookup scoped to that
   // one page answered `undefined` for all the rest, which `filter(Boolean)` then
   // dropped without a word. Tick six boxes, press Apply, two of them change and
   // the toast says two. A paged chapter is unaffected: every target is on the
@@ -2243,7 +2243,7 @@ export function applyBulk() {
       .filter(Boolean),
   );
   // One record per page rather than one for the apply, for the reason spelled
-  // out over `recordBulkByPage` — which in a paged chapter is still exactly one.
+  // out over `recordBulkByPage` - which in a paged chapter is still exactly one.
   const pageCount = recordBulkByPage(items);
   const count = items.length;
   closeBulk();
@@ -2257,15 +2257,15 @@ export function applyBulk() {
 
 // The tag-driven half of the same edit: every box carrying `name` is restyled at
 // once, without the user clicking one of them. Scope is the `pages` array the
-// caller hands over — `app.pages` for the whole chapter, `[page()]` for this one
-// — which is the vocabulary `boxesWithTag` already speaks, so there is no scope
+// caller hands over - `app.pages` for the whole chapter, `[page()]` for this one
+// - which is the vocabulary `boxesWithTag` already speaks, so there is no scope
 // enum here either. `app.bulk.targets` is untouched and unread: the click-to-
 // select flow and this one are two ways of naming boxes, never one.
 //
 // A box typed onto the page is reached like any other: it has a line of its own
 // now (see `addEmptyBox`), so it can be tagged and `boxesWithTag` returns it.
 // The one thing still out of reach is a free-typed box saved to disk before that
-// was true — no line, so no tags — and those are deliberately left unmigrated.
+// was true - no line, so no tags - and those are deliberately left unmigrated.
 // The panel counts them out loud rather than leaving the user to wonder why
 // three boxes on the page did not change.
 //
@@ -2277,7 +2277,7 @@ export function applyBulkToTag(name, pages = app.pages) {
     return 0;
   }
   const items = restyleForBulk(boxesWithTag(name, pages));
-  // One entry per page — see `recordBulkByPage`. Grouped in the order
+  // One entry per page - see `recordBulkByPage`. Grouped in the order
   // `boxesWithTag` walked the pages, so each page's entry carries its boxes in
   // document order.
   const pageCount = recordBulkByPage(items);
@@ -2299,7 +2299,7 @@ export function applyBulkToTag(name, pages = app.pages) {
 // else, and the user was left to conclude the tag defaults did not work.
 //
 // So an apply now restyles the box, and the rule is exactly the rule placement
-// already follows — the box is moved to `styleForLine(line, its own style)`.
+// already follows - the box is moved to `styleForLine(line, its own style)`.
 // Stated the other way round: after applying a tag, the box carries the style it
 // would have been born with had it been placed under the line's tags as they now
 // stand. The two orders agree by construction, because they are the same
@@ -2308,10 +2308,10 @@ export function applyBulkToTag(name, pages = app.pages) {
 // What that means for manual styling, since it is the question the rule has to
 // answer: the tag wins, over the three fields a tag can define and no others.
 // `styleForLine` only ever sets font, outline and outlineWidth, and only those
-// its tags actually define — so size, colour, shadow, warp, rotation, every
+// its tags actually define - so size, colour, shadow, warp, rotation, every
 // property the user set by hand in the Inspector, come through untouched. If the
 // tag defines nothing, nothing changes, nothing is recorded, and the caller is
-// told so. The alternative — manual styling wins — makes an apply do nothing on
+// told so. The alternative - manual styling wins - makes an apply do nothing on
 // precisely the boxes the user has been fiddling with, which is the complaint
 // this exists to answer. It is one undo press away either way.
 //
@@ -2319,7 +2319,7 @@ export function applyBulkToTag(name, pages = app.pages) {
 // reference to the tag; there is no "what it would have been" to go back to, and
 // guessing would be a second rule for the same button.
 //
-// The tag write itself is not history — it never has been, and the chip is its
+// The tag write itself is not history - it never has been, and the chip is its
 // own inverse. So an undo of the restyle gives the style back while the tag
 // stays on the line, which is the honest reading of "one undo step for the
 // restyle" and the reason the panel must not call this "undo the tag".
@@ -2328,7 +2328,7 @@ const sameStyle = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function restyleLineBoxes(p, ln) {
   // Every box on the line, not the first: `activateLine` will happily re-arm a
   // line that is already placed, so a second click on the canvas gives that line
-  // two boxes. Both are the line's, so both follow its tags — and one entry
+  // two boxes. Both are the line's, so both follow its tags - and one entry
   // covers them, or the user would pay two presses for one click.
   const items = [];
   for (const b of p.boxes) {
@@ -2338,7 +2338,7 @@ function restyleLineBoxes(p, ln) {
     if (sameStyle(before, after)) continue;
     const geomBefore = fitGeom(b);
     b.style = cloneStyle(after);
-    // A tag sets the font, and a different font measures differently — so this
+    // A tag sets the font, and a different font measures differently - so this
     // is a restyle that can change how many lines the box's text takes, exactly
     // like the bulk apply above, and it fits for the same reason and records the
     // geometry either side for the same one.
@@ -2368,7 +2368,7 @@ function restyleLineBoxes(p, ln) {
 
 // One click on a tag chip in the queue. Returns
 //   { tags, added, restyled }
-// — the line's tags after the click, whether this was an apply or an un-apply,
+// - the line's tags after the click, whether this was an apply or an un-apply,
 // and how many boxes were restyled (0 whenever the tag defines nothing, the line
 // has no box yet, or this was an un-apply), so the panel can tell the user what
 // actually happened rather than guessing.
@@ -2396,7 +2396,7 @@ export function activateLine(n) {
 
 // ---------- zoom ----------
 // What the number means: `zoom` is page pixels to CSS pixels, so 100% draws the
-// page's own pixel grid one-for-one — the frame is `p.w * zoom` wide and the
+// page's own pixel grid one-for-one - the frame is `p.w * zoom` wide and the
 // image fills it. It is a ratio against `p.w`/`p.h`, which is why `setPageDims`
 // keeping those equal to the displayed image's natural size is what makes the
 // readout true rather than merely self-consistent.
@@ -2410,7 +2410,7 @@ export function applyFit(z) {
   setZoom(z, true);
 }
 // The buttons step through named stops rather than multiplying by a constant.
-// A ×1.2 ladder started from a fit of 43% reaches 52%, 62%, 75%, 90%, 107% — the
+// A ×1.2 ladder started from a fit of 43% reaches 52%, 62%, 75%, 90%, 107% - the
 // user can never land on the half or the full size they are asking for, and the
 // readout looks arbitrary because it is. These are the stops an image editor
 // offers, so "50%" is a thing you can actually be at.
@@ -2427,7 +2427,7 @@ export const zoomReset = () => setZoom(1);
 
 // ---------- raw zoom ----------
 // `app.rawZoom` is the reference sidebar's own scale, and 0 is Fit rather than a
-// zoom of nothing — the image is `width:100%` of the column at 0 and
+// zoom of nothing - the image is `width:100%` of the column at 0 and
 // `width:{100*rawZoom}%` at anything else. Both the buttons and the sidebar's
 // wheel go through this one multiply so the two cannot drift, and so the Fit
 // floor is written once.
@@ -2439,7 +2439,7 @@ export const zoomReset = () => setZoom(1);
 export const RAW_ZOOM_MAX = 8;
 export function rawZoomBy(factor) {
   // Fit IS the floor, so a zoom out from it has nowhere to go. Without this the
-  // `=== 0 ? 1` below reads Fit as 1x and steps down to 0.8 — the sidebar
+  // `=== 0 ? 1` below reads Fit as 1x and steps down to 0.8 - the sidebar
   // visibly *shrinking* below the fit it was already at, on the one press whose
   // whole meaning is "smaller than this", and then jumping back to Fit on the
   // press after. Only the shrinking half returns early: zooming in from Fit
@@ -2455,8 +2455,8 @@ export const rawZoomOut = () => rawZoomBy(1 / 1.25);
 
 // ---------- fonts ----------
 // The family a `style.font` string actually renders as. A document can name a
-// font this machine has not got — a chapter authored elsewhere, or a font the
-// user has since removed from the library — and everything downstream then
+// font this machine has not got - a chapter authored elsewhere, or a font the
+// user has since removed from the library - and everything downstream then
 // silently draws the fallback instead. Callers that have to describe what was
 // drawn (the PSD exporter names a face and says whether it was synthesised)
 // need the same answer the renderer got, so the substitution happens here, once,

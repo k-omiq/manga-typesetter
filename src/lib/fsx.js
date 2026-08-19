@@ -31,14 +31,14 @@ export const fsx = {
     return (await fs()).writeTextFile(p, contents);
   },
   // The record files are rewritten every 800ms while the user types, and a
-  // crash or a power cut partway through a plain write leaves truncated JSON —
+  // crash or a power cut partway through a plain write leaves truncated JSON -
   // which the scan reports as "Unreadable" and openChapter refuses, losing the
   // whole chapter's typesetting. Written to a temp file and renamed over the
   // target instead: rename within a directory is atomic on the filesystems this
   // app targets, so the target only ever holds the old contents or the new.
   //
   // The temp file is the target's own path plus a suffix, so it is a file, in
-  // the same directory, by construction — never a directory, and the scan only
+  // the same directory, by construction - never a directory, and the scan only
   // ever looks at directory entries, so a leftover cannot be mistaken for a
   // project or a chapter. It is removed on any failure regardless.
   async writeTextFileAtomic(p, contents) {

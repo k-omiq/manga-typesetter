@@ -1,11 +1,5 @@
 <script>
-  // Reachable from both the library root and a project screen, so it can create
-  // the project too — otherwise the library's primary button is dead on an
-  // empty library.
-  //
-  // Two modes, one dialog: `files` picks raws (plus optional cleaned pages and
-  // a translations JSON), `psd` rebuilds a whole chapter out of PSDs. Both need
-  // the same project/number/title, the same rollback, and the same routing.
+  // New chapter creation dialog (file import or PSD reconstruction).
   import { untrack } from 'svelte';
   import { library, createProject, createChapter, createChapterFromPages } from '../library.svelte.js';
   import { goEditor } from '../route.svelte.js';
@@ -14,8 +8,7 @@
   import { toast } from '../store.svelte.js';
   import { plural } from '../format.js';
 
-  // `busy` is bindable so the app-level Escape handler can refuse to dismiss the
-  // dialog mid-copy, matching the overlay and Cancel guards below.
+  // In-flight creation blocks dismissal.
   let { open = $bindable(), busy = $bindable(false), projectId = null, mode = 'files' } = $props();
 
   let target = $state('');
@@ -27,14 +20,9 @@
   let psdFiles = $state([]);
   let translations = $state(null); // { name, pages } from a picked JSON
   let error = $state('');
-  // The chapter's workflow mode, not this dialog's creation mode — `mode` above
-  // is already taken by files-vs-PSD. Only the files path offers it: a chapter
-  // rebuilt from PSDs arrives with its typesetting already on it, so calling it
-  // a translation job would be describing work that is finished.
+  // Chapter workflow mode.
   let workflow = $state('typeset');
-  // Only ever read on the "New project…" path: the layout belongs to the
-  // project, so an existing one already has an answer and this dialog has no
-  // business offering to change it.
+  // Project layout selection.
   let newProjectLayout = $state('pages');
 
   const isPsd = $derived(mode === 'psd');
@@ -44,10 +32,7 @@
     return p ? (p.chapters.at(-1)?.number ?? 0) + 1 : 1;
   }
 
-  // Only `open`, `projectId` and `mode` may reset the form. Everything the body
-  // touches is untracked: reading `target` here would make picking a different
-  // project in the select re-run this and silently throw away the files already
-  // chosen.
+  // Reset dialog state on open.
   $effect(() => {
     if (!open) return;
     const pid = projectId;
@@ -71,9 +56,7 @@
     number = nextNumberFor(target);
   }
 
-  // The pickers are Tauri-only; outside the desktop app the import throws and
-  // the click would otherwise be a silent unhandled rejection. `label` names
-  // the step that failed — an unreadable JSON is not a picker failure.
+  // Native file pickers (Tauri only).
   async function picking(label, fn) {
     try {
       await fn();
@@ -106,14 +89,11 @@
     picking('Could not read that translations file', async () => {
       const picked = await pickJsonFile();
       if (!picked || !picked[0]) return;
-      // Parsed here rather than at submit: a file that cannot be read should
-      // say so while the user is still choosing it.
+      // Validate translation JSON on selection.
       translations = { name: picked[0].name, pages: await readTranslations(picked[0]) };
     });
 
-  // Stated before the user commits, computed from the picked lists rather than
-  // after the copy — pairing is positional, so someone who picked the wrong
-  // folder has to find out while they can still change it.
+  // Preview positional page count.
   const summary = $derived.by(() => {
     if (isPsd) {
       if (!psdFiles.length) return [];
@@ -168,16 +148,14 @@
       error = 'Name the new project.';
       return;
     }
-    // An emptied number input binds null; that must mean 1, not chapter 000.
-    // An explicit 0 is still honoured — chapter 0 prologues are a real thing.
+    // Default chapter number to 1.
     const n = number === null || number === undefined || number === '' ? 1 : Number(number);
     if (!Number.isFinite(n) || n < 0) {
       error = 'Enter a valid chapter number.';
       return;
     }
     busy = true;
-    // Set only when this submit created the project, so a later chapter failure
-    // can name what it left behind in the library.
+
     let createdProject = null;
     try {
       if (target === '__new__') {
@@ -195,8 +173,7 @@
         chapter = await createChapterFromPages({ projectId: pid, number: n, title, pages });
         note = `${plural(pages.length, 'page')} from PSD (${lossless} lossless)`;
         if (problems.length) note += ` · skipped ${problems.length}`;
-        // The raw for these pages is the cleaned art — the PSD held no separate
-        // original. Said plainly, because detection on them will find nothing.
+        // PSD reconstruction uses raster layers.
         if (cleanedOnly) note += ` · ${cleanedOnly} with no separate raw`;
       } else {
         chapter = await createChapter({
@@ -215,13 +192,12 @@
       toast(`Created chapter ${chapter.number} · ${note}`);
       await goEditor(pid, chapter.id);
     } catch (e) {
-      // Deliberately not deleting `createdProject`: silently removing something
-      // the user just named is worse than telling them it is there.
+
       const orphan = createdProject
         ? ` The project "${createdProject.name}" was created and is now empty.`
         : '';
       error = `Could not create the chapter — ${e?.message ?? e}.${orphan}`;
-      // Also toasted, so the message survives the dialog being dismissed.
+
       toast(error);
     } finally {
       busy = false;
@@ -253,11 +229,7 @@
           <span>Project name</span>
           <input bind:value={newProjectName} placeholder="Series name" />
         </label>
-        <!-- Offered only while a project is being created, because that is the
-             only moment it can be answered: a project's layout is fixed for its
-             lifetime (see `createProject`), and every chapter in it inherits.
-             Longstrip stacks the whole chapter into one scrolling column with no
-             gaps — a webtoon — rather than a page at a time. -->
+
         <div class="field">
           <span>Layout</span>
           <div class="seg">
@@ -289,10 +261,7 @@
           PNGs. Every other page in your library keeps its original bytes.
         </div>
       {:else}
-        <!-- What this chapter is for, and it decides what the editor gives you
-             when it opens: Typeset is the whole app, Translate is the raw page
-             and the translation queue. Changeable afterwards from the project
-             screen, so this is a starting point rather than a commitment. -->
+
         <div class="field">
           <span>Mode</span>
           <div class="seg">

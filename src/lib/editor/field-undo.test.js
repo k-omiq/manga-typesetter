@@ -95,7 +95,7 @@ describe('coalescing', () => {
     const u = createFieldUndo('');
     const t = typer(u);
     t.type('bc'); // "bc"
-    t.key('abc'); // typed at the front instead — not adjacent to the last edit
+    t.key('abc'); // typed at the front instead - not adjacent to the last edit
     expect(undoField(u)).toBe('bc');
     expect(undoField(u)).toBe('');
   });

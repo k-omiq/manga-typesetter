@@ -1,28 +1,16 @@
 //! Manga reading-order sorting and text line-type assignment.
 //!
-//! Ported from the Python sidecar (`sorting.py` and `_assign_types` in `main.py`).
-//!
-//! Natural reading order in manga is hierarchical:
-//! 1. Macro layout: The page is divided into panels (frames) read right-to-left
-//!    and top-to-bottom in standard Japanese manga. Panels form a directed flow
-//!    where columns take precedence until a row neighbor is encountered.
-//! 2. Micro layout: Within each panel (or across the full page if no panels are
-//!    detected), text bubbles are grouped into horizontal bands (rows) and
-//!    vertical columns, and sorted right-to-left within rows and top-to-bottom
-//!    within columns.
-//!
-//! Line types (dialogue vs SFX) are determined by comparing each block's font
-//! size to the page-wide median: text with font size > 2.2x the median is marked
-//! as SFX, while all others are dialogue.
+//! Hierarchical reading order: macro (panel layout) + micro (spatial bubble banding).
+//! SFX vs dialogue classification via median font size heuristic.
 
 /// Classification of a detected text line into dialogue or sound effect (SFX).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LineType {
-    /// Normal spoken dialogue inside speech bubbles or captions.
+    /// Spoken dialogue inside speech bubbles or captions.
     #[default]
     Dialogue,
-    /// Sound effects, typically drawn larger or outside conventional bubbles.
+    /// Sound effects, typically drawn larger.
     Sfx,
 }
 
@@ -42,11 +30,7 @@ impl std::fmt::Display for LineType {
     }
 }
 
-/// Manga reading direction.
-///
-/// Japanese manga is conventionally read right-to-left (RTL), but western
-/// comics and some webtoons read left-to-right (LTR). Both are supported by
-/// mirroring the horizontal sorting comparisons.
+/// Manga reading direction (RTL Japanese vs LTR western).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReadingDirection {
     #[default]
@@ -56,10 +40,7 @@ pub enum ReadingDirection {
     Ltr,
 }
 
-/// A detected text block on a manga page.
-///
-/// Holds the bounding box coordinates, orientation, estimated font size,
-/// recognised Japanese text, and the assigned line type (SFX vs dialogue).
+/// Detected text block with bounding box, orientation, font size, text, and line type.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Block {
     /// Bounding rectangle `[x1, y1, x2, y2]` in page coordinates.

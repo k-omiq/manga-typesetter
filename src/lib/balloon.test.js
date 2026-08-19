@@ -12,8 +12,8 @@ import {
   shapeBounds,
 } from './balloon.js';
 
-// Every page in this file is built by hand as an `ImageData`-shaped object —
-// `{ width, height, data }` with a plain `Uint8ClampedArray` — because a canvas
+// Every page in this file is built by hand as an `ImageData`-shaped object -
+// `{ width, height, data }` with a plain `Uint8ClampedArray` - because a canvas
 // is exactly what this module is meant not to need. The pixel values are the
 // ones a scan actually has: paper near white, ink near black, with nothing in
 // between except where a helper deliberately puts it.
@@ -45,14 +45,14 @@ const fillRect = (img, x, y, w, h, v) => {
 };
 
 // A balloon: a light interior inside a dark outline. Drawn the way one is
-// inked — as a single closed shape — so that a tail is part of the same outline
+// inked - as a single closed shape - so that a tail is part of the same outline
 // rather than a second object laid over the first. Getting that right matters:
 // a tail pasted on top leaves the seam between the two open, and the fill pours
 // out through it, which says nothing about the module and everything about the
 // fixture.
 //
 //   `bumps` scallops the outline, which is what makes a thought cloud a cloud.
-//   `gap`   punches a hole in the outline afterwards — a bubble whose tail was
+//   `gap`   punches a hole in the outline afterwards - a bubble whose tail was
 //           drawn open, or one an inked sound effect runs into.
 function drawEllipse(img, cx, cy, rx, ry, { ring = 3, tail = null, gap = null, bumps = 0 } = {}) {
   // The scallop factor is taken at the same angle for the interior and for the
@@ -72,7 +72,7 @@ function drawEllipse(img, cx, cy, rx, ry, { ring = 3, tail = null, gap = null, b
     return Math.abs(x + 0.5 - (tail.bx + (tail.tipX - tail.bx) * t)) <= tail.halfw * (1 - t) + g;
   };
   // The scallops push the outline past the plain ellipse, so the area walked has
-  // to grow with them or the shape is drawn clipped — and a clipped outline is
+  // to grow with them or the shape is drawn clipped - and a clipped outline is
   // an open one.
   const ex = rx * (bumps ? 1.2 : 1) + ring + 2;
   const ey = ry * (bumps ? 1.2 : 1) + ring + 2;
@@ -98,7 +98,7 @@ function drawBox(img, x, y, w, h, { ring = 3 } = {}) {
 function drawGlyphColumn(img, x, y, w, h, { glyph = 22, gapY = 6 } = {}) {
   for (let gy = y; gy + glyph <= y + h; gy += glyph + gapY) {
     fillRect(img, x, gy, w, glyph, INK);
-    // A counter — the enclosed white of a 口 — so a seed that wanders into one
+    // A counter - the enclosed white of a 口 - so a seed that wanders into one
     // has somewhere to be trapped.
     fillRect(img, x + 4, gy + 4, Math.max(1, w - 8), Math.max(1, glyph - 8), PAPER);
   }
@@ -206,8 +206,8 @@ describe('fillInterior — recovering the balloon from the pixels', () => {
     drawGlyphColumn(img, 192, 150, 18, 100);
     const rows = interiorProfile(fillInterior(img, [192, 150, 210, 250])).rows;
     // The row through the middle of the column crosses the glyphs. Without the
-    // enclosed-hole pass its widest run would be one side of the column — about
-    // 100px — rather than the balloon's 220.
+    // enclosed-hole pass its widest run would be one side of the column - about
+    // 100px - rather than the balloon's 220.
     const mid = rows[Math.floor(rows.length / 2)];
     expect(mid[1] - mid[0]).toBeGreaterThan(200);
   });
@@ -217,7 +217,7 @@ describe('fillInterior — recovering the balloon from the pixels', () => {
     const block = [220, 220, 280, 280];
     const sealed = fillInterior(page500Ellipse(), block);
     expect(sealed.escaped).toBe(false);
-    // The same balloon with a hole punched in its outline — an open tail, or an
+    // The same balloon with a hole punched in its outline - an open tail, or an
     // inked sound effect running into the wall. The fill pours out onto the page.
     drawEllipse(img, 250, 250, 90, 60, { gap: { x: 330, y: 240, w: 24, h: 24 } });
     const leaked = fillInterior(img, block);
@@ -229,7 +229,7 @@ describe('fillInterior — recovering the balloon from the pixels', () => {
   });
 
   it('will not take a pocket inside a glyph for a balloon', () => {
-    // The whole page is ink except one 4x4 white pocket at the block's centre —
+    // The whole page is ink except one 4x4 white pocket at the block's centre -
     // a counter, the enclosed white of a 口. It is bounded, so it would win on
     // "did not escape" alone; it is far smaller than the text it is supposed to
     // contain, so it is not a candidate at all.
@@ -359,14 +359,14 @@ describe('fitBalloonShape — what shape is this, and how much of it to believe'
   it('refuses a wide slab hanging off the body, which is not a tail', () => {
     // The other side of the same rule: a narrow spike is a tail and is
     // tolerated, a slab as wide as the balloon means the fitted body was the
-    // wrong body — two bubbles joined, or a fill that got into the panel.
+    // wrong body - two bubbles joined, or a fill that got into the panel.
     const slab = Array.from({ length: 20 }, () => [180, 320]);
     const fit = fitBalloonShape(ellipseProfile(100, 250, 160, 90, 60, slab));
     expect(fit.kind).toBe('irregular');
   });
 
   it('refuses a fill that escaped, however well it would have fitted', () => {
-    // A perfect rectangle — the shape an escaped fill very often has, because
+    // A perfect rectangle - the shape an escaped fill very often has, because
     // what it found was the panel. Fitting it would be the one failure that
     // stops the caller's fallback from ever firing.
     const p = { ...rectProfile(40, 30, 120, 60), escaped: true };
@@ -590,8 +590,8 @@ describe('interiorLineWidths — the width each line actually has', () => {
 
 describe('detectBalloon — the whole pipeline on a synthetic page', () => {
   it('turns a vertical Japanese column into the wide oval around it', () => {
-    // The motivating case, end to end. The detected block is 20x150 — tall and
-    // narrow, the shape the English emphatically does not want — and the balloon
+    // The motivating case, end to end. The detected block is 20x150 - tall and
+    // narrow, the shape the English emphatically does not want - and the balloon
     // around it is 260x160.
     const img = page(500, 500);
     drawEllipse(img, 250, 250, 130, 80);
@@ -624,7 +624,7 @@ describe('detectBalloon — the whole pipeline on a synthetic page', () => {
 
     const block = [290, 220, 310, 380];
     const region = fillInterior(withTail, block);
-    // The tail is part of the balloon, so the fill runs down it — and stops.
+    // The tail is part of the balloon, so the fill runs down it - and stops.
     expect(region.escaped).toBe(false);
     expect(region.bounds.h).toBeGreaterThan(200);
 

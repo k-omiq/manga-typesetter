@@ -8,7 +8,7 @@
 
 <script>
   // The strip between the reference sidebar and the canvas. It carries the tool
-  // switcher and doubles as the sidebar's resize handle — the wireframe has no
+  // switcher and doubles as the sidebar's resize handle - the wireframe has no
   // separate resizer, the seam itself is the grab.
   import {
     app,
@@ -20,8 +20,8 @@
     isTranslateMode,
   } from '../store.svelte.js';
 
-  // A translate chapter has no reference sidebar — the canvas is already showing
-  // the raw — so the rail keeps only the hand, and the caret that would offer to
+  // A translate chapter has no reference sidebar - the canvas is already showing
+  // the raw - so the rail keeps only the hand, and the caret that would offer to
   // bring a sidebar back goes with it. `noSide` rather than `app.sidebarHidden`
   // everywhere the geometry is concerned: there is nothing to the left of the
   // rail in either case, so it sits at 0 and the resize is inert.
@@ -32,7 +32,7 @@
   // reasonable number of presses, fine enough to land where you meant to.
   const KEY_STEP = 16;
 
-  // Every gesture in flight, so an unmount can end them all — see the same set
+  // Every gesture in flight, so an unmount can end them all - see the same set
   // in FloatingPanel. The listeners live on `document`, and nothing guarantees
   // a further pointer event once this component is gone.
   const live = new Set();
@@ -41,28 +41,20 @@
     live.clear();
   });
 
-  // A press on the rail stays ambiguous until it travels: under 4px it is still
-  // a click on whatever it landed on, and only past that does it become a
-  // resize. The tool strip stops its own pointerdown from reaching here, so
-  // this never starts from a button — or from the padding between them, which
-  // is why the guard sits on the strip rather than on each button.
+  // Distinguish click from resize drag by threshold.
   function onRailPointerDown(e) {
     if (noSide) return; // nothing on screen to resize
-    // The primary button and nothing else: a right-click on the seam is on its
-    // way to a context menu, not a resize.
+    // Primary pointer button only.
     if (e.button !== 0) return;
     e.preventDefault();
-    // The resize follows the pointer even once it leaves the window — without
-    // the capture a button released outside gets no pointerup here at all, and
-    // the sidebar comes back stuck to the cursor. The listeners stay on
-    // `document`: a captured pointer's events still bubble to it.
+    // Pointer capture tracks drag outside window.
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const pid = e.pointerId;
     const startX = e.clientX;
     const startW = app.leftWidth;
     let dragging = false;
     const move = (ev) => {
-      // A second pointer — another touch, or a pen alongside the mouse — would
+      // A second pointer - another touch, or a pen alongside the mouse - would
       // otherwise drive this same closure from a start point it never measured
       // against.
       if (ev.pointerId !== pid) return;
@@ -70,10 +62,7 @@
       dragging = true;
       app.leftWidth = clampSidebarWidth(startW + (ev.clientX - startX));
     };
-    // One controller for all three listeners, the same net FloatingPanel keeps.
-    // pointercancel as well as pointerup: a gesture the browser takes away from
-    // us (a pan it decided to claim, a lost capture) never fires pointerup, and
-    // the listeners would outlive the drag.
+
     const ac = new AbortController();
     const end = (ev) => {
       if (ev.pointerId !== pid) return;
@@ -87,10 +76,7 @@
     document.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
-  // The window-splitter keyboard contract that goes with role="separator":
-  // arrows nudge, Home/End go to the stops. Each press persists, the same as
-  // each drag does — the writes are one short string and only happen on a key
-  // that actually moved the edge.
+  // Separator keyboard controls.
   function onRailKeyDown(e) {
     if (noSide) return;
     const w = app.leftWidth;
@@ -111,8 +97,7 @@
     saveSidebar();
   }
 
-  // The tool strip is not part of the drag surface: a press anywhere inside it,
-  // button or padding, belongs to the buttons.
+
   const keepClick = (e) => e.stopPropagation();
 </script>
 
@@ -129,7 +114,7 @@
   style="left:{noSide ? 0 : app.leftWidth}px"
   onpointerdown={onRailPointerDown}
 >
-  <!-- The band that advertises the resize — and, being the widget, the thing
+  <!-- The band that advertises the resize - and, being the widget, the thing
        that takes focus and the arrow keys. The seam is on its left edge, which
        is the edge the drag actually moves; the rest of the strip stays a plain
        pointer so it does not claim to be an edge it is not.

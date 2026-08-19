@@ -25,9 +25,9 @@ afterEach(() => {
 // KNOWN GAP: these call numberBoxIds directly, so they prove the numbering and
 // nothing about the call site. Deleting the numberBoxIds(pages) line from
 // chapterPagesFromPsdFiles restores the duplicate-id bug with this file still
-// green. The import path around it cannot run here — it reads PSD bytes through
+// green. The import path around it cannot run here - it reads PSD bytes through
 // blob URLs and needs ag-psd's canvas backend, neither of which exists in the
-// node test environment — so the wiring is checked by reading it, not by a test.
+// node test environment - so the wiring is checked by reading it, not by a test.
 
 // The shape toChapterPage hands the library: bytes and geometry elided, since
 // only the boxes matter here.
@@ -69,7 +69,7 @@ describe('numberBoxIds', () => {
 describe('serializePage', () => {
   it('carries a free-typed line and the box that points at it', () => {
     // A negative number is the only marker a free-typed line has (see
-    // `isFreeLine` in store.svelte.js), and it is `n` — a field nothing can
+    // `isFreeLine` in store.svelte.js), and it is `n` - a field nothing can
     // forget, because nothing works without it. The line also carries the box's
     // text, so losing the line loses the words on the page.
     const out = serializePage({
@@ -108,11 +108,11 @@ describe('serializePage', () => {
 });
 
 // ---------------------------------------------------------------------------
-// isRasterOnly / textLayerFor — curved and roughened boxes can't be
+// isRasterOnly / textLayerFor - curved and roughened boxes can't be
 // reproduced by Photoshop's own text engine (see the comment on isRasterOnly
 // in psd.js), so their layer has to carry pixels and no `text` object at all.
-// Neither function touches a canvas — textLayerFor is handed its rendered
-// pixels rather than computing them — so both are reachable straight from
+// Neither function touches a canvas - textLayerFor is handed its rendered
+// pixels rather than computing them - so both are reachable straight from
 // node, same as serializePage above.
 // ---------------------------------------------------------------------------
 
@@ -312,7 +312,7 @@ describe('textLayerFor', () => {
   });
 
   // The canvas draws the fallback family for a font this machine has not got,
-  // so the layer has to describe THAT family — asking one half of the question
+  // so the layer has to describe THAT family - asking one half of the question
   // about the name in the document and the other about the family on screen is
   // how a layer ends up claiming a font nobody rendered.
   it('describes the fallback family when the document names a font nobody has', () => {
@@ -527,11 +527,11 @@ describe('textLayerFor', () => {
 });
 
 // ---------------------------------------------------------------------------
-// export layer schema — what the file is allowed to contain
+// export layer schema - what the file is allowed to contain
 // ---------------------------------------------------------------------------
 //
 // pagePsdDocument and writePagePsd are the half of the exporter below the
-// canvas, where the layer schema — the thing that decided a 60–70 MB export —
+// canvas, where the layer schema - the thing that decided a 60-70 MB export -
 // is decided, and both run here on rasters handed in as plain ImageData.
 // buildPagePsd, the DOM half above them, gets its own block near the bottom of
 // this file for the narrow case that is still reachable from node.
@@ -575,8 +575,8 @@ function periodic(width, height) {
 const W = 240;
 const H = 360;
 // One full-page RGB raster, uncompressed. A real one in the file lands a few
-// percent over this — RLE pays a little to literal-copy incompressible bytes,
-// and an all-opaque alpha channel collapses to nearly nothing — so the bounds
+// percent over this - RLE pays a little to literal-copy incompressible bytes,
+// and an all-opaque alpha channel collapses to nearly nothing - so the bounds
 // below are stated as multiples of it rather than as byte counts.
 const RASTER = W * H * 3;
 const project = { key: 'mt:project', schema: 1, page: { id: 7, w: W, h: H, boxes: [], lines: [] } };
@@ -622,9 +622,9 @@ const rasterLayer = () => ({
 
 describe('pagePsdDocument', () => {
   it('writes a full-page flat white merged composite, carrying none of the art', () => {
-    // Absent, the composite is written as zeros and macOS — Finder, Preview,
+    // Absent, the composite is written as zeros and macOS - Finder, Preview,
     // Quick Look, sips, all of which read ONLY the merged image and ignore the
-    // thumbnail resource — renders every export as a solid black page. Real, it
+    // thumbnail resource - renders every export as a solid black page. Real, it
     // costs a whole second copy of the page. Flat white is the only option that
     // is neither, and Photoshop rebuilds the true composite from the layers on
     // open regardless.
@@ -634,8 +634,8 @@ describe('pagePsdDocument', () => {
   });
 
   it('writes no thumbnail image resource', () => {
-    // There was a hand-built 160px one. macOS never reads resource 1036 — a
-    // file with a valid thumbnail and one without Quick Look identically — and
+    // There was a hand-built 160px one. macOS never reads resource 1036 - a
+    // file with a valid thumbnail and one without Quick Look identically - and
     // no reader we can name and test on this machine reads it either, so its
     // ~15 KB and the extra full-page render that built it bought nothing.
     const res = fullDoc().imageResources;
@@ -690,7 +690,7 @@ describe('writePagePsd', () => {
     const [text, raster] = psd.children[0].children;
     expect(!!text.text).toBe(true);
     expect(!!raster.text).toBe(false);
-    // The raster layer's pixels and bounds still round-trip byte-for-byte —
+    // The raster layer's pixels and bounds still round-trip byte-for-byte -
     // dropping `text` doesn't cost it anything the other layers keep.
     const ref = noise(40, 30, 55).data;
     expect([raster.left, raster.top, raster.right, raster.bottom]).toEqual([5, 8, 45, 38]);
@@ -710,7 +710,7 @@ describe('writePagePsd', () => {
     // same on a run of 255s as on the run of 0s it would otherwise write, so
     // the white page is exactly as cheap as no page. Measured on a real
     // 800x1150 two-raster export: 5,490,174 bytes with the white composite,
-    // 5,490,174 with an all-black one, 5,490,174 with none — and 8,133,354 with
+    // 5,490,174 with an all-black one, 5,490,174 with none - and 8,133,354 with
     // the page's actual pixels in there. A composite that stops being constant
     // fails this by roughly a whole raster.
     const bare = fullDoc();
@@ -734,11 +734,11 @@ describe('writePagePsd', () => {
   it('writes RLE channel data, not ZIP', () => {
     // `compress: true` was tried and reverted: 52% smaller, but 638-642 ms per
     // page against RLE's 21-24 ms, awaited per page on the webview's main
-    // thread — twelve seconds of frozen UI for a twenty-page chapter. Nothing
+    // thread - twelve seconds of frozen UI for a twenty-page chapter. Nothing
     // about the file's contents changes when it comes back, which is exactly
     // why this needs guarding from the outside: `periodic` is content RLE can
     // only literal-copy and deflate takes to a few kilobytes. Measured on this
-    // very document — RLE 272,936 bytes, ZIP 8,504.
+    // very document - RLE 272,936 bytes, ZIP 8,504.
     const doc = pagePsdDocument({
       w: W,
       h: H,
@@ -753,7 +753,7 @@ describe('writePagePsd', () => {
     // Every extra full-page raster this schema has carried lands here as
     // another whole RASTER: the hidden `Flattened preview` layer, and the
     // merged composite the moment it stops being constant. The old schema wrote
-    // four of them at a 2x supersampled document — sixteen times the upper
+    // four of them at a 2x supersampled document - sixteen times the upper
     // bound below. The lower bound is the other half of the claim: the two that
     // ARE supposed to be here have to still be here, at full page size.
     const bytes = writePagePsd(fullDoc()).byteLength;
@@ -832,27 +832,27 @@ describe('writePagePsd', () => {
 });
 
 // ---------------------------------------------------------------------------
-// buildPagePsd — the DOM half
+// buildPagePsd - the DOM half
 // ---------------------------------------------------------------------------
 //
 // buildPagePsd renders every raster through a canvas, so it normally stops at
 // the browser. Exactly one page shape gets through here: no boxes, no raw, no
 // cleaned. Then the only DOM it touches is `document.fonts.ready` and one
 // scratch canvas nothing draws on, and it still decides the two things it is
-// worth failing a build over — the document's size and the merged composite.
+// worth failing a build over - the document's size and the merged composite.
 //
 // KNOWN GAP: a page WITH art or boxes is not reachable in this environment, so
 // nothing here proves the base layers go in unresampled or that a text layer
 // carries its box's pixels. That is what psdSelfTest is for, and it now has a
-// caller — the Developer group in the Settings modal, DEV builds only. It is a
+// caller - the Developer group in the Settings modal, DEV builds only. It is a
 // button somebody presses, not coverage; this gap is still a gap.
 const withStubDocument = async (fn) => {
   const prev = globalThis.document;
   globalThis.document = {
     fonts: { ready: Promise.resolve() },
     // The shared box-raster scratch canvas, which a page with no boxes never
-    // draws on. Anything that does draw — a thumbnail render coming back, say
-    // — fails loudly here rather than silently passing.
+    // draws on. Anything that does draw - a thumbnail render coming back, say
+    // - fails loudly here rather than silently passing.
     createElement: () => ({
       getContext: () => {
         throw new Error('buildPagePsd drew on a canvas; this environment has none');
@@ -870,20 +870,20 @@ const bareBuild = () => withStubDocument(() => buildPagePsd({ id: 7, w: 300, h: 
 describe('buildPagePsd', () => {
   it('sizes the document to the page rather than to a supersampled copy of it', async () => {
     // This file used to build at `scale = 2`, which put Raw and Cleaned in at
-    // 4x their pixel count — invented pixels, for scanned art that has no
-    // detail up there — and was most of a 39.94 MB page. Restoring the
+    // 4x their pixel count - invented pixels, for scanned art that has no
+    // detail up there - and was most of a 39.94 MB page. Restoring the
     // supersample doubles both numbers below.
     const psd = readPsd(await bareBuild(), READ);
     expect([psd.width, psd.height]).toEqual([300, 420]);
   });
 
   // A page is `w:0,h:0` from the moment `createChapter` copies it until
-  // something decodes its image, and only the canvas does that — one page at a
+  // something decodes its image, and only the canvas does that - one page at a
   // time, as the user opens them. Export All reaches every page, including the
   // ones nobody has looked at: 23 of the 28 pages in the author's own library
   // are saved at 0x0. `p.w ?? PAGE_W` let that straight through, and a 0x0 PSD
   // is a file nothing can open. With no image to measure either, the page has
-  // no honest size and the defaults are the only answer left — but they have to
+  // no honest size and the defaults are the only answer left - but they have to
   // be an answer, not a zero.
   it('never sizes the document to nothing, however unmeasured the page', async () => {
     const psd = readPsd(

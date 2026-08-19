@@ -1,4 +1,4 @@
-// Filesystem-name helpers for the project library. Pure — no fs, no Tauri —
+// Filesystem-name helpers for the project library. Pure - no fs, no Tauri -
 // so the naming rules can be tested on their own.
 
 const MAX_SLUG = 60;

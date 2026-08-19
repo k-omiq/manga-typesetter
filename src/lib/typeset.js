@@ -6,8 +6,8 @@
 // text is a shape the reader sees before they read a word of it. Letterers have
 // rules about that shape, and they are the rules this module implements:
 //
-//   · the block reads as a square [] or a beehive/oval () — line widths roughly
-//     equal, or narrow→wide→narrow. An hourglass )( — wide→narrow→wide — is the
+//   · the block reads as a square [] or a beehive/oval () - line widths roughly
+//     equal, or narrow→wide→narrow. An hourglass )( - wide→narrow→wide - is the
 //     one profile that is always wrong, because the pinched middle reads as a
 //     gap in the text.
 //   · a word of fewer than three letters never sits alone on a line.
@@ -17,14 +17,14 @@
 //
 // Nothing here measures anything itself. `measureFn(str) -> number` is injected,
 // which is what keeps the module pure, testable under node with a stand-in
-// metric, and — more importantly — keeps `measure.js` the single owner of real
+// metric, and - more importantly - keeps `measure.js` the single owner of real
 // text metrics. Two modules that both knew how to measure a string would be two
 // modules that could disagree about where a line breaks, and the editor and the
 // exporter would then draw different pictures of the same box.
 //
 // The user's text is never mutated. Every line handed back is a *slice* of the
 // input, so interior spacing survives exactly as typed and `box.text` is
-// untouched — the breaks are display and layout only. The single character this
+// untouched - the breaks are display and layout only. The single character this
 // module is ever allowed to add is the hyphen at the end of a split line, and it
 // exists only in the string that gets drawn.
 //
@@ -44,8 +44,8 @@
 // line count, so each candidate line count in the search below has its own array
 // of them, and every term in the cost function that used to divide by one W now
 // divides by that line's own allowance. That single change is what keeps the
-// shape rules meaning what they say: a line's *fill ratio* — how full it is
-// relative to the room it was given — is the quantity all three shape terms were
+// shape rules meaning what they say: a line's *fill ratio* - how full it is
+// relative to the room it was given - is the quantity all three shape terms were
 // always really about. An ellipse's first line is physically narrow, but filled
 // to the brim of its own narrow allowance its ratio is 1.0 like everyone else's,
 // so raggedness sees no deviation, the pinch term sees no shortfall, and the
@@ -69,7 +69,7 @@
 //     A word that fits somewhere is never carved up to tidy the block.
 //   · having been offered them, a hyphen still has to win on price. `hyphen` is
 //     large next to the raggedness scale, so the split has to be paid for by a
-//     real defect elsewhere — and the defect it is there to pay for is
+//     real defect elsewhere - and the defect it is there to pay for is
 //     `overflow`, the new cost of a line hanging over the edge of its balloon.
 //     Because that cost is quadratic, a word a hair too wide keeps its overflow
 //     and a word half again too wide gets the hyphen.
@@ -79,7 +79,7 @@
 //     rule for the end of a paragraph: the last word's tail IS the last line.
 //   · a word that already contains a hyphen breaks at that hyphen by preference
 //     (`existingHyphen` is a fraction of `hyphen`), and when it does, nothing is
-//     inserted — the line already ends in one, and a second would be an error.
+//     inserted - the line already ends in one, and a second would be an error.
 //   · two hyphenated lines in a row cost `hyphenPair` on top of everything else,
 //     so it happens only where there is no alternative. That rule is decomposable
 //     and lives inside the dynamic program, because "the previous line ended in a
@@ -90,8 +90,8 @@
 // pattern set (`hypher` + `hyphenation.en-us`). Its own leftmin/rightmin are 2
 // and 3, the usual scanlation minimums, and this module re-checks both in
 // letters afterwards rather than trusting them. Patterns are only consulted for
-// a run of plain A-Z; anything else — a word with an apostrophe in the middle,
-// an accented spelling, Cyrillic, kana, an SFX like "KRRSHH!!" — is left whole,
+// a run of plain A-Z; anything else - a word with an apostrophe in the middle,
+// an accented spelling, Cyrillic, kana, an SFX like "KRRSHH!!" - is left whole,
 // because a wrong hyphenation is worse than none and en-US patterns have nothing
 // true to say about any of those.
 
@@ -105,7 +105,7 @@ import enUsPatterns from 'hyphenation.en-us';
 // it is near zero for any line count that can be balanced, and `lineCost` is
 // what then picks the fewest of those. Raising `lineCost` makes the algorithm
 // accept a ragged two-line block rather than a tidy three-line one; lowering it
-// does the reverse. Those two, and nothing else, choose the line count — see
+// does the reverse. Those two, and nothing else, choose the line count - see
 // `pick`.
 //
 // The hourglass rule is enforced twice, and the split is the interesting part.
@@ -126,19 +126,19 @@ import enUsPatterns from 'hyphenation.en-us';
 //
 // That is a change of role, and it is why the weight can be this large. The term
 // used to be added to each line count's total, where it competed with `lineCost`
-// — so cranking it up stopped rejecting pinches and started rejecting line
+// - so cranking it up stopped rejecting pinches and started rejecting line
 // counts, and the block grew two extra lines to dodge a dip nobody would have
 // noticed. At the weight that could not do that (6) it also could not do
 // anything else. Measured over a 3000-string corpus: zeroing it changed 20
 // outputs, and 151 blocks shipped with a pinched profile. Confined to a fixed
-// line count it cannot buy a line at ANY weight — the two breakings it chooses
-// between have the same number of them — so the deadband is what keeps it off
+// line count it cannot buy a line at ANY weight - the two breakings it chooses
+// between have the same number of them - so the deadband is what keeps it off
 // ordinary text and the weight is free to be big enough to matter. At 300 the
 // same corpus ships 133 pinched blocks against 167 with the term switched off,
 // and 133 is very nearly the floor: an exhaustive search of every breaking at
 // each block's own line count says 130 of them have no unpinched breaking at
 // all. The mean line count is identical either way (3.198), and the mean spread
-// between a block's widest and narrowest line moves from 0.235 to 0.238 — the
+// between a block's widest and narrowest line moves from 0.235 to 0.238 - the
 // repairs are not being bought with raggedness.
 //
 // `orphanCost` is the other constraint-as-cost. See the two passes at the bottom
@@ -158,7 +158,7 @@ export const TYPESET_DEFAULTS = {
 
   // Overflow. A line wider than its own allowance hangs over the edge of the
   // balloon, which before this pass was something the module could notice and do
-  // nothing about — an over-long word had to go somewhere and every breaking put
+  // nothing about - an over-long word had to go somewhere and every breaking put
   // it in the same place, so pricing it would have been pricing a constant. It
   // is only now, with a hyphen on the table, that there are two different
   // answers to compare, and the term exists to make the comparison. Quadratic in
@@ -175,23 +175,23 @@ export const TYPESET_DEFAULTS = {
   // "A constant cannot move an argmin" is true in arithmetic and one bit short
   // of true in float64, and the corpus says exactly how short. Over 54,000
   // breakings (3000 strings x 9 widths x 2 metrics), turning this term on with
-  // hyphenation off changes 30 of them — 0.056% — and every one of the 30 is a
+  // hyphenation off changes 30 of them - 0.056% - and every one of the 30 is a
   // pair of breakings that cost the SAME. Twenty-nine have the identical
   // multiset of line widths; the thirtieth, `ANTIDISESTABLISHMENTARIANISM ...`
   // at width 22, is 0.45836776859504130 against 0.45836776859504136, a gap of
   // one unit in the last place. Carrying a constant of ~4 through four
   // additions costs about three ULPs of the running total, which is more than
   // that gap, so the tie lands on the other side. Which of two identically
-  // priced breakings won was never a decision this module made — it was the
-  // order the same numbers happened to be added in — and it is not one worth
+  // priced breakings won was never a decision this module made - it was the
+  // order the same numbers happened to be added in - and it is not one worth
   // buying back with a tolerance on the DP's comparison: a relative epsilon of
   // 1e-9 there does pin the ties down, and moves 96 other outputs while doing
   // it, which is a worse trade than the 30.
   overflow: 60,
 
-  // Hyphenation. `hyphen` is set well above the raggedness scale — a per-line
+  // Hyphenation. `hyphen` is set well above the raggedness scale - a per-line
   // deviation cost is (r - T)^2 with both around 1, so a whole point is already
-  // an enormous defect — which is what makes a split a last resort rather than a
+  // an enormous defect - which is what makes a split a last resort rather than a
   // habit. `existingHyphen` is the price of breaking at a hyphen the user
   // already typed: not free, because it is still a word coming apart across two
   // lines, but a small fraction of the cost of inventing one.
@@ -207,7 +207,7 @@ export const TYPESET_DEFAULTS = {
 
 // A hair of slack on the fit test. Widths come back from a canvas as floats and
 // a line that measures 0.0001px over the box is not an overflow the user could
-// ever see — refusing it would push a word onto the next line for nothing.
+// ever see - refusing it would push a word onto the next line for nothing.
 const FIT_EPS = 0.5;
 
 // "Letters" rather than characters, so `it.` counts as two and is still an
@@ -251,7 +251,7 @@ function hyphenator() {
 // The regexp is the conservatism, and it is deliberately blunt: the chunk has to
 // be leading punctuation, then a run of plain A-Z, then trailing punctuation,
 // and nothing else. That admits `MURAMATA`, `SAN!` and `"WONDERFUL`, and refuses
-// `DON'T`, `CAFÉ`, `MP3`, `КОНЕЦ`, `ドン` and `KRRSHH!!` — every one of which is a
+// `DON'T`, `CAFÉ`, `MP3`, `КОНЕЦ`, `ドン` and `KRRSHH!!` - every one of which is a
 // string the en-US pattern set has nothing true to say about. Refusing is the
 // right failure here: `MURAMA-TASAN` is a typesetting error a reader notices,
 // and a word left whole is only a word left whole.
@@ -285,7 +285,7 @@ function segmentSplits(seg) {
 // the word, ascending.
 //
 // A hyphen the user typed is a break point in its own right, and it also cuts
-// the word into chunks that are hyphenated independently — running the pattern
+// the word into chunks that are hyphenated independently - running the pattern
 // trie across a hyphen would be asking en-US about a string that is not an
 // English word. That is what turns `MURAMATA-SAN!` into the three-line block the
 // reference image wants: the typed hyphen offers `MURAMATA-|SAN!`, and the
@@ -320,7 +320,7 @@ function hyphenPointsFor(word, o) {
   //
   // And then the vowel rule, which is the one that keeps sound effects out of
   // this. `KRRSHHHHHHHHHH` is all A-Z, so the regexp above lets it through, and
-  // the en-US patterns — which have never met it — cheerfully offer `KRRSH|HHHH`
+  // the en-US patterns - which have never met it - cheerfully offer `KRRSH|HHHH`
   // and `KRRSHHHHH|HHHHH`, giving `KRRSH-` / `HHHH-` / `HHHHH`. Neither piece is
   // a syllable, and the tell is that neither piece can be pronounced: a syllable
   // has a vowel in it. So an INVENTED hyphen has to leave a vowel on both sides.
@@ -351,8 +351,8 @@ function hyphenPointsFor(word, o) {
 // The one shape rule that cannot be expressed as a per-line cost: it is about
 // the profile as a whole. An hourglass is both ends fuller than the middle, so
 // the measure is `min(first, last) - min(interior)`, and it is only ever
-// positive for a genuine pinch. A block whose last line is short — the ordinary,
-// desirable case — has a small `edge` and scores zero here, which is the point:
+// positive for a genuine pinch. A block whose last line is short - the ordinary,
+// desirable case - has a small `edge` and scores zero here, which is the point:
 // this must not become a tax on normal text.
 //
 // The inputs are fill ratios, each line's ink over that line's own allowance,
@@ -373,7 +373,7 @@ function hourglassPenalty(ratios, weight, tol) {
 // an array of that many positive widths. A scalar becomes a constant array,
 // which is what makes every pre-existing call site mean exactly what it meant
 // before. A callback that hands back a short array, a hole, or a nonsense number
-// has that line fall back to the previous line's width — defensive rather than
+// has that line fall back to the previous line's width - defensive rather than
 // meaningful, but a NaN loose in the cost function would poison a whole block
 // silently and this at least keeps the failure local.
 function widthsResolver(spec) {
@@ -399,7 +399,7 @@ function widthsResolver(spec) {
   return (L) => new Array(L).fill(w);
 }
 
-// One paragraph — no newlines — as an array of lines.
+// One paragraph - no newlines - as an array of lines.
 function balanceParagraph(para, widthSpec, measureFn, o) {
   const words = [];
   const re = /\S+/g;
@@ -429,7 +429,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
   // falls back to, and what answers when every candidate has been rejected. It
   // can never fail, which is the only property required of a fallback.
   //
-  // It fills lines in order, so it uses each line's own allowance as it goes —
+  // It fills lines in order, so it uses each line's own allowance as it goes -
   // but it cannot know the line count before it has finished, and the widths
   // depend on it. So it guesses, wraps, and asks again with the count it got,
   // which settles immediately for a constant width and within a couple of passes
@@ -471,7 +471,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
 
   // ===== the positions a line may begin and end at =====
   //
-  // Word boundaries, plus — for a word that has earned them — the points inside
+  // Word boundaries, plus - for a word that has earned them - the points inside
   // it. A position carries two offsets because the two sides of a space are not
   // the same character index: a line ENDING at a word boundary stops at the end
   // of the previous word, and one STARTING there begins at the next word. A
@@ -485,7 +485,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
   const hyphenPoints = [];
   if (o.hyphenate) {
     // The gate. A word is offered break points only when it fits on no line this
-    // block could ever hand it — measured against the widest allowance across
+    // block could ever hand it - measured against the widest allowance across
     // every candidate line count, because if some line is wide enough, the
     // search below is free to put the word there and nothing needs splitting.
     //
@@ -556,7 +556,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
   };
 
   // A line is admissible if it fits its own allowance, or if it is a single
-  // unbreakable token — an over-long word with no usable syllable points goes
+  // unbreakable token - an over-long word with no usable syllable points goes
   // onto its own line whole and hangs over the edge rather than vanishing. What
   // that costs is `overflow`'s business, below; whether it is allowed at all is
   // this.
@@ -565,7 +565,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
   // Rule 2. Only meaningful when the block has more than one line: a two-letter
   // paragraph has nowhere else to be.
   //
-  // Scoped to a lone WHOLE word — a line that begins or ends mid-word is a
+  // Scoped to a lone WHOLE word - a line that begins or ends mid-word is a
   // fragment, and a fragment is not a word that has been left on its own, it is
   // part of one that is being carried across. What stops a fragment being a stub
   // is `minHyphenHead`/`minHyphenTail`, which is the rule written for that job.
@@ -580,7 +580,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
 
   // `T` is the fill ratio every line would have if the block were perfectly
   // balanced at this line count, and it is what every per-line cost is measured
-  // against. Total ink over total allowance — which is the generalisation that
+  // against. Total ink over total allowance - which is the generalisation that
   // makes the ratios comparable at all when the allowance varies down the block,
   // and which collapses back to `totalW / (L * W)` the moment it does not. Fixed
   // for the whole candidate, which is what keeps the cost separable and the DP
@@ -597,7 +597,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
   // this breaking better", and the search would be optimising something the
   // comparison did not believe.
   //
-  // `pinchW` is a parameter for one reason only — the second, harder search in
+  // `pinchW` is a parameter for one reason only - the second, harder search in
   // `shaped` below. Every scoring call passes `o.pinch`.
   const lineCostOf = (a, b, k, L, T, w, pinchW) => {
     const W = w[k - 1];
@@ -610,7 +610,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
     //            weighted a little further here.
     //   interior the pinch that makes an hourglass. Weighted far harder, because
     //            a short line in the middle of a block is the one profile that
-    //            is always wrong — and because this is what pushes the shortfall
+    //            is always wrong - and because this is what pushes the shortfall
     //            to the end of the block instead.
     if (r < T) c += (k === L ? o.lastShort : k > 1 ? pinchW : 0) * (T - r) ** 2;
     // And the other direction, once. `FIT_EPS` is subtracted for the same reason
@@ -637,7 +637,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
   };
 
   // Optimal break points for exactly `L` lines, by dynamic programming over
-  // (line index, positions consumed) — Knuth-style, rather than greedy, because
+  // (line index, positions consumed) - Knuth-style, rather than greedy, because
   // a break that looks best locally routinely forces a terrible one two lines
   // later. The strings here are one speech bubble long, so the cubic worst case
   // is not a cost worth trading correctness for.
@@ -660,7 +660,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
           if (!fits(a, b, k, w)) continue;
           if (!allowOrphan && !orphanOk(a, b, L)) continue;
           const tot = prev[a] + lineCostOf(a, b, k, L, T, w, pinchW);
-          // Strict `<` while `a` climbs, so a tie keeps the smallest `a` — the
+          // Strict `<` while `a` climbs, so a tie keeps the smallest `a` - the
           // one that put more words on the earlier line. That is the whole of
           // the tie-breaking rule inside a candidate, and it is why two runs on
           // the same input can never differ.
@@ -714,7 +714,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
   // enough to force the short line somewhere else, and keeps that answer only if
   // it is cheaper *under the ordinary weights plus the profile penalty*.
   //
-  // So the heavy weight never prices anything — it only proposes. A proposal
+  // So the heavy weight never prices anything - it only proposes. A proposal
   // that dodges the dip by making a mess of the raggedness loses on its own
   // merit, which is the property that makes the big `hourglass` weight safe.
   const shaped = (cand, allowOrphan) => {
@@ -731,7 +731,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
   //
   // The ceiling is the number of break positions rather than the number of
   // words, because a single hyphenatable word is a paragraph that can legally
-  // occupy three lines — which is the whole of the reference case.
+  // occupy three lines - which is the whole of the reference case.
   const maxL = Math.min(M, o.maxLines);
   const pick = (allowOrphan) => {
     let winner = null;
@@ -750,8 +750,8 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
   // is to relax it rather than to hand back nothing.
   //
   // Relaxed is not the same as dropped, and that distinction is the whole of the
-  // second pass. Dropped, one genuinely unplaceable short word — a scrap between
-  // two words too long to share a line with it — turned the rule off for every
+  // second pass. Dropped, one genuinely unplaceable short word - a scrap between
+  // two words too long to share a line with it - turned the rule off for every
   // other line in the paragraph: `I DIE UNDERSTAND A MONSTER A NO` in a
   // six-unit box stranded `I` on a line of its own although `I DIE` fits and
   // obeys the rule, because once `A` had proved the constraint unsatisfiable
@@ -763,7 +763,7 @@ function balanceParagraph(para, widthSpec, measureFn, o) {
 }
 
 // The public entry. `text` may contain newlines; each is a hard paragraph break
-// the user typed, and each paragraph is balanced on its own — a shape is a
+// the user typed, and each paragraph is balanced on its own - a shape is a
 // property of a paragraph, and balancing across a deliberate break would move
 // words over a line the user put there.
 //
@@ -801,8 +801,8 @@ export function neededHeight(lineCount, style, pad = 2) {
 //
 // Never shrinks. A box the user sized by hand and left roomier than its text is
 // theirs, and an "auto" that quietly took that room back would be a second
-// editor fighting the first. Growth is the half that fixes a bug — text spilling
-// out of its own rectangle — and shrinking is the half that would create one.
+// editor fighting the first. Growth is the half that fixes a bug - text spilling
+// out of its own rectangle - and shrinking is the half that would create one.
 //
 // `pageH` is the page's coordinate height. The result is capped at it and then
 // clamped inside it, for the same reason every drag handler clamps: geometry

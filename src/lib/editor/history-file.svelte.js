@@ -1,7 +1,7 @@
 // ===== The history file =====
 // Only the page on screen keeps its undo stack in memory. Every other page's
 // lives here, in the chapter's own directory, so a chapter with two hundred
-// pages costs five entries of RAM rather than a thousand — and so undo survives
+// pages costs five entries of RAM rather than a thousand - and so undo survives
 // a relaunch.
 //
 //   <chapter-dir>/logs/history.json
@@ -24,7 +24,7 @@ import {
 export const emptyDoc = () => ({ version: 1, pages: {} });
 
 // A document of a version this build does not know is not repaired, it is
-// replaced — a file whose shape we cannot read is worth less than the undo it
+// replaced - a file whose shape we cannot read is worth less than the undo it
 // would cost to start over.
 export function mergeStack(doc, pageId, stack) {
   const next =
@@ -39,7 +39,7 @@ export function mergeStack(doc, pageId, stack) {
   // The one thing this drops that a user might miss: `loadStack` discards
   // entries of a kind this build cannot apply, so a stack written by a NEWER
   // build comes back empty and is then deleted rather than left for the build
-  // that understands it. Accepted knowingly — `version` is what is supposed to
+  // that understands it. Accepted knowingly - `version` is what is supposed to
   // guard a format change, and a downgrade keeping records it can neither apply
   // nor show would be the worse trade.
   if (!undo.length && !redo.length) delete next.pages[key];
@@ -49,7 +49,7 @@ export function mergeStack(doc, pageId, stack) {
 
 // One entry onto the stack of a page whose stack is not in memory. Everything
 // the live stack does to a new entry, done to a stored one: appended to the
-// undo side, capped at the same depth, and the redo tail forfeited — a page the
+// undo side, capped at the same depth, and the redo tail forfeited - a page the
 // user had undone their way back through and then left has no branch forward
 // once something new lands on it, exactly as it would have had none if they
 // had been standing on it at the time.
@@ -68,8 +68,8 @@ export function stackFrom(doc, pageId) {
 }
 
 // Records made while a read was in flight sit on top of whatever that read
-// brought back: the disk half is older by definition — it was written before
-// this session started — so it goes underneath, and the newer half's redo
+// brought back: the disk half is older by definition - it was written before
+// this session started - so it goes underneath, and the newer half's redo
 // branch is the one that stands, because anything recorded has already
 // forfeited a redo. An untouched stack takes the stored one whole, which is
 // what every ordinary open does.
@@ -82,7 +82,7 @@ let dir = null;
 let doc = emptyDoc();
 // Which visit to a chapter is in force. Bumped every time a chapter is
 // installed or torn down, and captured by anything that has to survive an
-// await — because `dir` cannot answer the question those callers are actually
+// await - because `dir` cannot answer the question those callers are actually
 // asking. Two visits to the SAME chapter are two sessions and share a path, so
 // a close comparing paths found its own path still in place after a reopen had
 // landed underneath it and tore the new session down: stack wiped, `dir`
@@ -94,7 +94,7 @@ let told = false;
 // first, so an edit reaches disk on its own debounce rather than waiting for a
 // page switch that may never come.
 let livePageId = null;
-// True once this chapter has a history file to keep up to date — one found when
+// True once this chapter has a history file to keep up to date - one found when
 // it was opened, or one this session has written. Until then an empty document
 // is not worth writing: a chapter the user opened, looked at and left has to
 // leave nothing behind to explain, and this is the whole reason `logs/` is
@@ -117,7 +117,7 @@ setHistorySink((pageId) => {
 // Refused in two cases, both of which mean "there is no stored stack for this",
 // and both of which leave the entry on the live stack where it has always been:
 // no chapter open (nothing to merge into, and `flushHistory` would drop it), and
-// no live page claimed — the test seam and the moment before a chapter's first
+// no live page claimed - the test seam and the moment before a chapter's first
 // page is loaded, where the module cannot say which page the stack in memory
 // belongs to and must not guess.
 setOffscreenSink((pageId, entry) => {
@@ -163,7 +163,7 @@ function complainOnce(e) {
 export async function openHistory(chapterDir, pageId) {
   // Whatever chapter is open has a document nobody else will write, and
   // everything below resets it. Flushed first, so a chapter left inside the
-  // debounce window does not lose its records — a page turn is not the only
+  // debounce window does not lose its records - a page turn is not the only
   // thing that can end a chapter, and this module cannot rely on the caller
   // having closed the old one first.
   //
@@ -187,7 +187,7 @@ export async function openHistory(chapterDir, pageId) {
   if (!dir) return;
   let loaded = emptyDoc();
   // A file that is there is one to keep up to date from here on, whatever was
-  // in it — a corrupt one included, since the next write is what repairs it.
+  // in it - a corrupt one included, since the next write is what repairs it.
   let found = false;
   try {
     // The argument rather than `dir`, which can change under every await below.
@@ -207,7 +207,7 @@ export async function openHistory(chapterDir, pageId) {
   // everything the read was for has been thrown away and replaced.
   if (session !== mine) return;
   // Nothing above waited on the user. A page turn, an off-screen record, an
-  // edit on this very page — all of them can have happened while the disk was
+  // edit on this very page - all of them can have happened while the disk was
   // answering, and all of them are NEWER than what it answered with. So the
   // read lands underneath what is already here rather than over the top of it:
   // assigning `doc = loaded` was how a page turned during a chapter's load lost
@@ -222,7 +222,7 @@ export async function openHistory(chapterDir, pageId) {
   // The page on screen NOW, which is not necessarily the one this open was
   // called for. Whatever is in there is replayed optimistically: an entry that
   // no longer fits the document is reported and dropped by history.svelte.js at
-  // the moment it is pressed, not weeded out here — validating a stack against
+  // the moment it is pressed, not weeded out here - validating a stack against
   // a document would cost a walk of every page to save a message nobody may
   // see.
   loadStack(livePageId, graft(stackFrom(doc, livePageId), peekStack()));
@@ -240,7 +240,7 @@ export async function switchHistoryPage(fromPageId, toPageId) {
 }
 
 // The same interval the document's own autosave uses, and the same constant
-// rather than the same number written twice — the two describe one document, and
+// rather than the same number written twice - the two describe one document, and
 // a history file written on a different beat than the pages it addresses is the
 // one way they can reach disk disagreeing about how many edits have happened.
 // Its own timer all the same: the two never wait on each other, so a page turn
@@ -255,7 +255,7 @@ function schedule() {
 
 // Writes are serialised. A debounce that has just fired and a close that flushes
 // on the way out can both be in flight, each carrying its own snapshot of the
-// document — and without a queue the older snapshot can land last and take the
+// document - and without a queue the older snapshot can land last and take the
 // newer one's records with it.
 let writing = Promise.resolve();
 
@@ -288,10 +288,10 @@ export async function flushHistory() {
 // Both halves of the write are arguments, so nothing here can be overtaken by a
 // chapter opened underneath it: the path names the chapter this write was
 // started for and the body is the document that chapter had at that moment.
-// That is why there is no re-check of `dir` between the awaits — abandoning
+// That is why there is no re-check of `dir` between the awaits - abandoning
 // would not protect any state, it would only throw away a correct write. What
 // the checks would have enforced is enforced at the source instead: every path
-// that moves `dir` — openHistory and closeHistory — flushes first.
+// that moves `dir` - openHistory and closeHistory - flushes first.
 async function write(mine, body) {
   try {
     const { logs, file } = await pathsFor(mine);
@@ -316,14 +316,14 @@ export async function closeHistory(pageId) {
   // Bound before the await, like everything else here that survives one. This
   // is called fire-and-forget by closeChapter, so a chapter can be opened while
   // the flush is still in flight: `openHistory` would finish first and this
-  // would then wipe its document, its stack and its `dir` — and with `dir` null
+  // would then wipe its document, its stack and its `dir` - and with `dir` null
   // every later flush returns early, so that chapter's undo would silently
   // never reach disk again. A close whose chapter has already been replaced has
   // nothing left to tear down; the flush above has already written it.
   //
   // The session and not the path, because the case that matters most is the one
-  // a path cannot see: closing a chapter and going straight back into it — the
-  // reader's own back button — installs a NEW session on the same directory. On
+  // a path cannot see: closing a chapter and going straight back into it - the
+  // reader's own back button - installs a NEW session on the same directory. On
   // `dir !== mine` that read as "nothing happened here" and the teardown ran
   // over the top of the session the user was now in.
   const mine = session;

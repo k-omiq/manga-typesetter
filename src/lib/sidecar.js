@@ -1,7 +1,7 @@
 // Frontend bridge to the detection engine.
 //
 // Under Tauri this is the in-process ONNX engine in `src-tauri/src/detect/`,
-// reached through the `detect_*` commands — there is no separate process any
+// reached through the `detect_*` commands - there is no separate process any
 // more, so nothing here has a lifecycle to manage. In a plain browser (vite dev
 // / preview) there's no Tauri runtime, so these become no-ops and the app
 // degrades to manual workflows.
@@ -42,11 +42,11 @@ export async function analyzeImage(imageUrl, { ocr = true } = {}) {
 
 // Detect + OCR one page object and apply results to it. Returns { lines } on
 // success or { error } on failure. Shared by the single-page and whole-chapter
-// paths. Pins the write to `p` — detection may resolve after the user navigates.
+// paths. Pins the write to `p` - detection may resolve after the user navigates.
 async function detectOnePage(p, { ocr = true } = {}) {
   if (!hasRawImage(p)) return { skipped: true };
   // A batch runs over every page in the chapter, but only five pages' images
-  // are in memory at a time (see page-images.js) — so each page is minted for
+  // are in memory at a time (see page-images.js) - so each page is minted for
   // the length of its own detection and given back after it. The pin is what
   // keeps a page turn from revoking the image the engine is reading.
   return await withPageImages(p, async () => {

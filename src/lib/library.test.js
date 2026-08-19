@@ -50,7 +50,7 @@ vi.mock('./fsx.js', () => {
         }
       },
       // `{ recursive: true }` on a directory, and an ordinary unlink when the
-      // path is a file — removing a single cleaned page is the latter.
+      // path is a file - removing a single cleaned page is the latter.
       async remove(p) {
         for (const d of [...tree.dirs]) if (d === p || d.startsWith(p + '/')) tree.dirs.delete(d);
         for (const f of [...tree.files.keys()]) if (f === p || f.startsWith(p + '/')) tree.files.delete(f);
@@ -195,8 +195,8 @@ describe('scanLibrary', () => {
 
   it('keeps the boot failure on screen instead of scanning nowhere', async () => {
     // What a failed initRoot leaves behind: no root, and a message the library
-    // screen is already rendering. The scan the screen runs on mount — and the
-    // retry button that lands back here — must not wipe it.
+    // screen is already rendering. The scan the screen runs on mount - and the
+    // retry button that lands back here - must not wipe it.
     await setRoot('');
     library.error = 'Could not work out where your library lives — no home directory';
     await scanLibrary();
@@ -206,7 +206,7 @@ describe('scanLibrary', () => {
   });
 
   it('lets the newer scan win when a blocked one settles late', async () => {
-    // Scan A goes out against the old root and blocks — on this machine that was
+    // Scan A goes out against the old root and blocks - on this machine that was
     // a macOS folder-permission prompt sitting unanswered at boot.
     fsx._tree.dirs.add('/old');
     await setRoot('/old');
@@ -221,8 +221,8 @@ describe('scanLibrary', () => {
     const scanA = scanLibrary();
 
     try {
-      // The user takes the app's own documented recovery — Settings ▸ Change
-      // folder — and scan B reads the new root successfully.
+      // The user takes the app's own documented recovery - Settings ▸ Change
+      // folder - and scan B reads the new root successfully.
       seedProject('kept', PROJECT('p1', 'Kept'));
       await setRoot('/lib');
       await scanLibrary();
@@ -293,7 +293,7 @@ describe('createProject', () => {
   it('never writes into an existing directory the scan never saw', async () => {
     // The user's own folder, holding the only copies of their raws. It carries
     // no project.json, so the scan ignores it and the catalogue has no idea it
-    // is there — which is exactly why the check has to reach the disk.
+    // is there - which is exactly why the check has to reach the disk.
     fsx._tree.dirs.add('/lib/one-piece');
     fsx._tree.files.set('/lib/one-piece/ch1-p001.png', new Uint8Array([7]));
 
@@ -321,7 +321,7 @@ describe('deleteProject', () => {
 const { withinHome } = await import('./library.svelte.js');
 
 // $HOME/** is the only filesystem scope this app is granted, so a root outside
-// it is refused — which makes the comparison the one thing standing between a
+// it is refused - which makes the comparison the one thing standing between a
 // Windows user and a library they cannot choose.
 describe('withinHome', () => {
   it('accepts the home directory and what is under it, and nothing else', async () => {
@@ -504,7 +504,7 @@ describe('createChapter', () => {
 
 // The project's cover art is one chapter's first page, and `buildChapter`
 // decides whether to offer a new one on `!p.coverChapterId` alone. So an id left
-// naming a chapter that has been deleted is not a stale field — it is a project
+// naming a chapter that has been deleted is not a stale field - it is a project
 // that can never have a thumbnail again, however many chapters are imported into
 // it afterwards.
 describe('deleting the chapter the project cover came from', () => {
@@ -517,7 +517,7 @@ describe('deleting the chapter the project cover came from', () => {
 
     await deleteChapter(p.id, c.id);
 
-    // In memory and on disk both — a catalogue that agreed and a project.json
+    // In memory and on disk both - a catalogue that agreed and a project.json
     // that did not would come back wrong on the next scan.
     expect(projectById(p.id).coverChapterId).toBeNull();
     expect(projectJson(p).coverChapterId).toBeNull();
@@ -550,7 +550,7 @@ describe('deleting the chapter the project cover came from', () => {
 
   it('keeps the layout when it does have to rewrite project.json', async () => {
     // The rewrite is whole-record, and the layout is chosen once at creation and
-    // can never be chosen again — losing it here would silently turn a webtoon
+    // can never be chosen again - losing it here would silently turn a webtoon
     // project back into a paged one.
     const p = await createProject('Webtoon', { layout: 'longstrip' });
     const c = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
@@ -685,7 +685,7 @@ describe('cover thumbnail lifecycle and rollback', () => {
 // size their documents to it, and the store treats `0` as "nobody has measured
 // this yet" rather than as a size (see `hasPageSpace`). Until createChapter
 // measured, the ONLY thing in the app that ever decoded an image was the canvas,
-// one page at a time as the user opened it — so a 28-page chapter had 23 pages
+// one page at a time as the user opened it - so a 28-page chapter had 23 pages
 // stored 0x0, and Export All ran the whole chapter through a zero.
 //
 // The measurement runs through `createImageBitmap`, which this environment has
@@ -749,7 +749,7 @@ describe('createChapter measures its pages', () => {
       [1080, 1535],
       [0, 0],
     ]);
-    // The page is still a page — an undecodable file is copied and kept, and
+    // The page is still a page - an undecodable file is copied and kept, and
     // the canvas gets another go at measuring it when the user opens it.
     expect(JSON.parse(fsx._tree.files.get(`${c.dir}/chapter.json`)).pages).toHaveLength(2);
   });
@@ -820,7 +820,7 @@ const {
 const { route, goEditor, goLibrary, resetRoute } = await import('./route.svelte.js');
 
 // The editor store is module-global, so no case may inherit another's open
-// chapter — a stale chapterRef would let a save land in the wrong file.
+// chapter - a stale chapterRef would let a save land in the wrong file.
 beforeEach(() => closeChapter());
 
 // A chapter with two same-named picked files, so the on-disk names are deduped
@@ -879,7 +879,7 @@ describe('openChapter', () => {
     closeChapter();
     // What the PSD importer wrote before it numbered ids across the document:
     // page two answers to the same ids as page one. The loader repairs that on
-    // the way in, but the repair is only worth anything if it reaches the file —
+    // the way in, but the repair is only worth anything if it reaches the file -
     // otherwise which id a box gets depends on how many chapters were opened
     // first, and it changes every session.
     const record = chapterJson(c);
@@ -892,7 +892,7 @@ describe('openChapter', () => {
     const ids = app.pages.flatMap((pg) => pg.boxes.map((b) => b.id));
     expect(new Set(ids).size).toBe(3);
     // A repair is unsaved work. An open that changed nothing still comes up
-    // saved — that case is covered above.
+    // saved - that case is covered above.
     expect(app.saved).toBe(false);
     await saveOpenChapter();
     expect(chapterJson(c).pages.flatMap((pg) => pg.boxes.map((b) => b.id))).toEqual(ids);
@@ -987,7 +987,7 @@ describe('saveOpenChapter', () => {
     const orig = fsx.writeTextFileAtomic;
     let writes = 0;
     // Only the first write waits, so a pair left to race would land in the
-    // wrong order — the second document first, the first one over the top of it.
+    // wrong order - the second document first, the first one over the top of it.
     fsx.writeTextFileAtomic = async function (p, contents) {
       if (++writes === 1) {
         entered();
@@ -1029,7 +1029,7 @@ describe('saveOpenChapter', () => {
     markUnsaved();
     const b = saveOpenChapter(); // queued behind `a` before `a` has written anything
     await a;
-    // `a`'s snapshot reached disk, but `b`'s — the newer one — has not yet;
+    // `a`'s snapshot reached disk, but `b`'s - the newer one - has not yet;
     // the indicator must not claim everything is saved while a save is still
     // outstanding.
     expect(app.saved).toBe(false);
@@ -1081,7 +1081,7 @@ describe('saveOpenChapter', () => {
 });
 
 // Cleaned pages pair with raws by position after the natural sort, which is the
-// only rule that imposes no naming convention — and the reason every count
+// only rule that imposes no naming convention - and the reason every count
 // mismatch has to be stated rather than absorbed.
 describe('cleaned pages at creation', () => {
   const line = (n, en) => ({ n, type: 'dialogue', jp: 'あ', en });
@@ -1119,7 +1119,7 @@ describe('cleaned pages at creation', () => {
       [fakeFile('x.png', 9), fakeFile('y.png', 8)],
     );
     expect(record.pages).toHaveLength(1);
-    // The extra was never copied — a file with no page is a file nothing can
+    // The extra was never copied - a file with no page is a file nothing can
     // ever remove.
     expect(fsx._tree.files.has(`${c.dir}/cleaned/y.png`)).toBe(false);
   });
@@ -1137,7 +1137,7 @@ describe('cleaned pages at creation', () => {
     );
     expect(record.pages.map((pg) => pg.file)).toEqual(['01.png', '01-2.png']);
     expect(record.pages.map((pg) => pg.cleaned)).toEqual(['01.png', '01-2.png']);
-    // Same name, different directory, different bytes — neither overwrote the other.
+    // Same name, different directory, different bytes - neither overwrote the other.
     expect(fsx._tree.files.get(`${c.dir}/raws/01.png`)).toEqual(new Uint8Array([1]));
     expect(fsx._tree.files.get(`${c.dir}/cleaned/01.png`)).toEqual(new Uint8Array([3]));
   });
@@ -1168,7 +1168,7 @@ describe('cleaned pages at creation', () => {
         cleanedFiles: [broken],
       }),
     ).rejects.toThrow();
-    // Not a chapter with raws and no cleaned pages — no chapter at all.
+    // Not a chapter with raws and no cleaned pages - no chapter at all.
     expect(fsx._tree.dirs.has(`${p.dir}/001`)).toBe(false);
     expect(fsx._tree.files.has(`${p.dir}/001/raws/a.png`)).toBe(false);
     expect(projectById(p.id).chapters).toHaveLength(0);
@@ -1214,7 +1214,7 @@ describe('cleaned pages survive the round trip', () => {
     } finally {
       fsx.readFile = orig;
     }
-    // Falls back to the raw for rendering, but the reference survives — a save
+    // Falls back to the raw for rendering, but the reference survives - a save
     // that dropped it would unlink a file the user only has to put back.
     expect(app.pages[0].cleaned).toBeNull();
     expect(app.pages[0].cleanedFile).toBe('x.png');
@@ -1286,7 +1286,7 @@ describe('the chapter sources sheet', () => {
 
   it('keeps the pages it managed to replace when a copy fails part-way', async () => {
     const { p, c } = await seedThree([fakeFile('x.png', 9), fakeFile('y.png', 8), fakeFile('z.png', 7)]);
-    // Named so the natural sort puts the unreadable one second — this order is
+    // Named so the natural sort puts the unreadable one second - this order is
     // the whole point of the case.
     const broken = { name: '2-bad.png', arrayBuffer: async () => { throw new Error('read failed') } };
     await expect(
@@ -1321,13 +1321,13 @@ describe('the chapter sources sheet', () => {
 
   it('never hands a new copy a name a page still claims, even a missing one', async () => {
     const { p, c } = await seedThree([fakeFile('x.png', 9), fakeFile('y.png', 8)]);
-    // Page 1's image has gone missing from disk — one of the states this sheet
-    // exists to repair — while the record still names it.
+    // Page 1's image has gone missing from disk - one of the states this sheet
+    // exists to repair - while the record still names it.
     fsx._tree.files.delete(`${c.dir}/cleaned/x.png`);
     await replaceCleanedPages(p.id, c.id, [fakeFile('x.png', 30)]);
     const cleaned = chapterJson(c).pages.map((pg) => pg.cleaned);
     // Page 1 gets its own file. If the free name had been chosen from the disk
-    // alone it would have been `x.png` again — and page 1 would then be sharing
+    // alone it would have been `x.png` again - and page 1 would then be sharing
     // one image with whatever else still claimed that name.
     expect(cleaned[0]).not.toBe('x.png');
     expect(new Set(cleaned.filter(Boolean)).size).toBe(cleaned.filter(Boolean).length);
@@ -1336,7 +1336,7 @@ describe('the chapter sources sheet', () => {
 
   it('keeps a file two pages point at until the last of them lets go', async () => {
     const { p, c } = await seedThree([fakeFile('x.png', 9)]);
-    // A record can name one file from two pages — a hand edit, or a chapter
+    // A record can name one file from two pages - a hand edit, or a chapter
     // folder copied and re-pointed. Unlinking on the first release would leave
     // the second page pointing at nothing.
     const record = chapterJson(c);
@@ -1374,7 +1374,7 @@ describe('the chapter sources sheet', () => {
     const id = chapterJson(c).pages[0].id;
     const name = await setPageCleaned(p.id, c.id, id, fakeFile('x.png', 30));
     // Same name as the one already there, so it lands beside it and the old one
-    // goes — never overwritten in place.
+    // goes - never overwritten in place.
     expect(name).toBe('x-2.png');
     expect(fsx._tree.files.has(`${c.dir}/cleaned/x.png`)).toBe(false);
     expect(fsx._tree.files.get(`${c.dir}/cleaned/x-2.png`)).toEqual(new Uint8Array([30]));
@@ -1415,7 +1415,7 @@ describe('the chapter sources sheet', () => {
   });
 
   // A translations file says what is on pages 1..N. It says nothing about
-  // whether the chapter has pages after that, so it never shortens one — the
+  // whether the chapter has pages after that, so it never shortens one - the
   // bug that deleted a chapter's trailing pages and every box on them.
   it('applies lines without shortening or extending the chapter', async () => {
     const { p, c } = await seedThree();
@@ -1447,12 +1447,12 @@ describe('the chapter sources sheet', () => {
 
     const out = await applyTranslations(p.id, c.id, [{ lines: [line(7, 'New')] }]);
     expect(out.orphaned).toBe(1);
-    // Nothing was deleted — the boxes are all still there to be re-pointed.
+    // Nothing was deleted - the boxes are all still there to be re-pointed.
     expect(chapterJson(c).pages[0].boxes).toHaveLength(2);
   });
 
   // A translations file has never carried tags, and the re-import replaces a
-  // page's lines wholesale — so it used to leave the boxes standing and strip
+  // page's lines wholesale - so it used to leave the boxes standing and strip
   // every tag they had been placed under, with nothing said about it.
   it('carries hand-applied tags across a re-import, by line number', async () => {
     const { p, c } = await seedThree();
@@ -1493,7 +1493,7 @@ describe('the chapter sources sheet', () => {
     const { p, c } = await seedThree();
     const out = await applyTranslations(p.id, c.id, parsed('1', '2', '3', '4', '5'));
     expect(out.ignored).toBe(2);
-    // No page arrives with file:'' — unrenderable, and impossible to get rid of.
+    // No page arrives with file:'' - unrenderable, and impossible to get rid of.
     expect(chapterJson(c).pages.map((pg) => pg.file)).toEqual(['a.png', 'b.png', 'c.png']);
   });
 });
@@ -1660,7 +1660,7 @@ describe('a failed save is visible', () => {
   });
 
   // A disk that will never write must not be able to pin the user in the editor
-  // — or, via the same guard on the window, inside a window that will not close.
+  // - or, via the same guard on the window, inside a window that will not close.
   describe('the second-attempt escape', () => {
     // Swap in a filesystem that cannot write, for the duration of `fn`.
     async function withBrokenDisk(fn) {
@@ -1698,7 +1698,7 @@ describe('a failed save is visible', () => {
       expect(app.chapterRef).toBeNull();
       // The message names the cost rather than repeating the error.
       expect(second.msg).toMatch(/never written to disk/i);
-      // Nothing reached the file — which is exactly what the user was told.
+      // Nothing reached the file - which is exactly what the user was told.
       expect(chapterJson(c).pages[0].lines).toHaveLength(0);
       resetRoute();
     });
@@ -1867,8 +1867,8 @@ describe('autosave debounce', () => {
 // The window between "app.pages is chapter B's" and "app.chapterRef says B" is
 // the most expensive bug in this file: everything that writes reads the ref, and
 // chapter.json is the only copy of a chapter's typesetting. A save landing in
-// that window — the 800ms debounce, a quit, or the goBack the App runs when an
-// open fails — used to serialise chapter B's document straight over chapter A.
+// that window - the 800ms debounce, a quit, or the goBack the App runs when an
+// open fails - used to serialise chapter B's document straight over chapter A.
 const { flushSave } = await import('./store.svelte.js');
 
 describe('switching from one chapter to another', () => {
@@ -1888,7 +1888,7 @@ describe('switching from one chapter to another', () => {
   }
 
   // Runs `hook` once, at the exact moment `app.pages` has become chapter B's
-  // document — `page-images.js` reads the pages around the one being opened
+  // document - `page-images.js` reads the pages around the one being opened
   // through this seam, which is the await the old code left the ref standing
   // across. Reports whether the window was ever actually entered, so a case
   // cannot pass by never reaching the thing it is about.
@@ -2005,7 +2005,7 @@ describe('switching from one chapter to another', () => {
     const gate = new Promise((r) => (release = r));
     const orig = fsx.readFile;
     // One chapter's read sits; the other comes back at once. That is the real
-    // ordering — a user who clicks one chapter, changes their mind, and clicks
+    // ordering - a user who clicks one chapter, changes their mind, and clicks
     // another before the first has finished decoding.
     fsx.readFile = async (path) => {
       if (path.endsWith('slow.png')) await gate;
@@ -2036,7 +2036,7 @@ describe('switching from one chapter to another', () => {
 
   it('refuses a sources edit to a chapter that is still opening', async () => {
     // `app.chapterRef` is null for the whole of a load, so the refusal that
-    // keeps the sheet off an open chapter has to know about one on its way in —
+    // keeps the sheet off an open chapter has to know about one on its way in -
     // the open finishes holding its own copy of the pages, and the first autosave
     // would put that straight back over whatever the sheet wrote.
     const { p, b } = await twoChapters();
@@ -2091,7 +2091,7 @@ describe('the undo history follows the chapter', () => {
 
   // The journal used to be started and left to arrive. The user can act the
   // instant the open resolves, and `openHistory` overwrites the document
-  // unconditionally when it lands — so a page turn or an edit inside that window
+  // unconditionally when it lands - so a page turn or an edit inside that window
   // met a read that wiped the in-flight records and loaded page one's stack over
   // whichever page they had moved to.
   it('has the page-one stack in hand the moment the open resolves', async () => {
@@ -2165,7 +2165,7 @@ describe('the undo history follows the chapter', () => {
   });
 
   // The history module reports and swallows every failure, so the one thing
-  // left that can go wrong in it is a call that never comes back — a volume
+  // left that can go wrong in it is a call that never comes back - a volume
   // that has gone away, a wedged mount. The close-request path is single-flight,
   // so a window held open by that could not even be retried.
   it('does not let a history write that never returns pin the window open', async () => {
@@ -2202,7 +2202,7 @@ describe('the undo history follows the chapter', () => {
 // Pages imported before `createChapter` measured them sit on disk as w:0,h:0.
 // The canvas repairs one per visit, so a chapter nobody has flipped through end
 // to end still exports blank sheets. The open is where the whole chapter can be
-// repaired at once — and the repair has to be marked unsaved, or every open
+// repaired at once - and the repair has to be marked unsaved, or every open
 // redoes it and never writes it.
 describe('openChapter backfills unmeasured pages', () => {
   // A chapter written before the measuring import: both pages 0x0 on disk.
@@ -2223,7 +2223,7 @@ describe('openChapter backfills unmeasured pages', () => {
     await withDecoder({ 1: { width: 1080, height: 1535 }, 2: { width: 2160, height: 1535 } }, () =>
       openChapter(p.id, c.id),
     );
-    // Per page, off each page's own bytes — a spread must not inherit its
+    // Per page, off each page's own bytes - a spread must not inherit its
     // neighbour's width.
     expect(app.pages.map((pg) => [pg.w, pg.h])).toEqual([
       [1080, 1535],
@@ -2242,7 +2242,7 @@ describe('openChapter backfills unmeasured pages', () => {
   });
 
   it('does not re-decode a chapter whose pages are already measured', async () => {
-    // Seeded through a decoder, so `createChapter` measured it — unlike
+    // Seeded through a decoder, so `createChapter` measured it - unlike
     // `seedOpenChapter`, which runs in node's no-decoder case and therefore
     // writes exactly the 0x0 pages the two cases above are about.
     const sizes = { 1: { width: 1080, height: 1535 }, 2: { width: 2160, height: 1535 } };
@@ -2265,8 +2265,8 @@ describe('openChapter backfills unmeasured pages', () => {
       }),
       () => openChapter(p.id, c.id),
     );
-    // The open pays nothing on a measured chapter and — the point of the
-    // `repaired` flag — does not schedule a write of what it just read.
+    // The open pays nothing on a measured chapter and - the point of the
+    // `repaired` flag - does not schedule a write of what it just read.
     expect(decodes).toBe(0);
     expect(app.saved).toBe(true);
     closeChapter();
@@ -2275,7 +2275,7 @@ describe('openChapter backfills unmeasured pages', () => {
 
 // ===== the chapter's workflow mode =====
 // A chapter is either being typeset or translated, and the answer lives in its
-// own chapter.json — not in a preference, so two chapters in one project can
+// own chapter.json - not in a preference, so two chapters in one project can
 // disagree and each open the way its own file says.
 const { setChapterMode } = await import('./library.svelte.js');
 const { setTool } = await import('./store.svelte.js');
@@ -2422,13 +2422,13 @@ describe('switching a chapter mode from the project screen', () => {
     expect(app.saved).toBe(true);
 
     await setChapterMode(p.id, c.id, 'translate');
-    // The state changes immediately — the editor is on screen and has to
-    // restripe now — and the write is the ordinary autosave, so it cannot race
+    // The state changes immediately - the editor is on screen and has to
+    // restripe now - and the write is the ordinary autosave, so it cannot race
     // the open document's own next save into the same file.
     expect(app.chapterMode).toBe('translate');
     expect(app.tool).toBe('pan');
     expect(app.saved).toBe(false);
-    expect(chapterJson(c).mode).toBe('typeset'); // not yet — the debounce owns it
+    expect(chapterJson(c).mode).toBe('typeset'); // not yet - the debounce owns it
 
     await saveOpenChapter();
     expect(chapterJson(c).mode).toBe('translate');
@@ -2451,7 +2451,7 @@ describe('switching a chapter mode from the project screen', () => {
 
 // ===== translations.json =====
 // A second file beside chapter.json, rewritten by every save in both modes. It
-// is derived — chapter.json is still the only copy of anything — so nothing
+// is derived - chapter.json is still the only copy of anything - so nothing
 // reads it back; it exists so the chapter's text is a plain JSON document on
 // disk at all times rather than only after an export.
 const { buildTextJson } = await import('./text-json.js');
@@ -2506,14 +2506,14 @@ describe('the translations file', () => {
 
     expect(translationsJson(c).pages[0].lines[0].en).toBe('Ah');
     // Byte for byte the document `exportTextJson` writes, because it is the
-    // same serialiser — two copies of one file format would drift the moment
+    // same serialiser - two copies of one file format would drift the moment
     // either was touched.
     expect(fsx._tree.files.get(`${c.dir}/translations.json`)).toBe(buildTextJson(app.pages));
   });
 
   // Every edit made from the project screen goes through `commitPages`, which
   // used to write chapter.json alone. The derived file then sat there describing
-  // the chapter as it had been before the re-import — for as long as nobody
+  // the chapter as it had been before the re-import - for as long as nobody
   // happened to open the chapter in the editor and trip the autosave.
   it('follows an edit made while the chapter is closed', async () => {
     const p = await createProject('Series');
@@ -2573,7 +2573,7 @@ describe('the translations file', () => {
 // ===========================================================================
 // The project's page layout
 // ===========================================================================
-// Fixed when the project is created and never again — a longstrip project's
+// Fixed when the project is created and never again - a longstrip project's
 // pages are slices of one continuous drawing, and reading them back as separate
 // pages describes art that does not exist. So what matters is that the flag
 // survives everything that rewrites the record it lives in.

@@ -1,6 +1,5 @@
 <script>
-  // Settings. Model cache, the default export directory, and engine status.
-  // Reuses the detection bridges + Tauri dialog.
+
   import { app, saveExportPrefs, toast } from './store.svelte.js';
   import { checkSidecar, modelsCacheInfo, clearModelsCache } from './sidecar.js';
   import { theme, setTheme } from './theme.svelte.js';
@@ -16,19 +15,7 @@
   let confirmClear = $state(false); // inline two-step confirm (webviews may block window.confirm)
   let confirmResetPanels = $state(false); // same two-step; a reset cannot be undone
 
-  // ---------- PSD export self-test (dev builds only) ----------
-  // `psdSelfTest` builds a PSD from the open page, parses it back, and compares
-  // the serialized page, the layer rasters, the merged composite and the group
-  // structure. It needs a real canvas, so no test in the suite can run it — from
-  // node, psd.test.js can only reach a page with no art and no boxes, which is
-  // to say it cannot check the two things most likely to break: that the base
-  // layers go in unresampled and that each text layer carries its box's pixels.
-  //
-  // Behind a button rather than run on export, because it costs a whole extra
-  // build and parse of the page, and a check the user pays for on every export
-  // is a check that gets removed. Behind DEV, because it reports in a
-  // developer's vocabulary — `rasterMaxChannelDiff`, group names — and there is
-  // nothing here a reader of the app could act on.
+  // PSD export self-test (dev builds only).
   const DEV = !!import.meta.env?.DEV;
   let selfTesting = $state(false);
   let selfTest = $state(null); // the last report, or { error }
@@ -41,8 +28,7 @@
     selfTesting = true;
     selfTest = null;
     try {
-      // Dynamic, so a production bundle that has already dropped this branch
-      // does not keep the module alive on this modal's account.
+
       const { psdSelfTest } = await import('./psd.js');
       selfTest = await psdSelfTest(app.pages[app.pageIndex]);
       toast(selfTest.ok ? 'PSD self-test passed' : 'PSD self-test FAILED — see Settings');
@@ -54,12 +40,7 @@
     }
   }
 
-  // ---------- live memory ----------
-  // What this app is actually costing, counting the processes it does not look
-  // like it owns. The web view is a separate process on macOS — it is where the
-  // page, the scripts and every decoded page image live — and any ML child the
-  // app spawns is another. Activity Monitor lists them under different names,
-  // so the app's own row there has never been the answer.
+  // Process memory tracking.
   let mem = $state(null); // MemoryReport | null (null = not the desktop app)
   let memLive = $state(false);
 
@@ -67,18 +48,14 @@
     mem = await processMemory();
   }
 
-  // Polled only while the modal is open AND the user asked for it. Reading it
-  // is a walk of every process on the machine, which is cheap but not free, and
-  // a settings panel left open should not spin on it — so the poll is opt-in
-  // and the interval is cleared by the same effect that started it, whether the
-  // toggle went off or the modal closed.
+  // Poll memory only while modal is open and live toggle is on.
   $effect(() => {
     if (!open || !memLive) return;
     const t = setInterval(loadMemory, 2000);
     return () => clearInterval(t);
   });
 
-  // One reading whenever the modal opens, so the section is never blank.
+
   $effect(() => {
     if (open) loadMemory();
   });
@@ -122,21 +99,14 @@
     }
   }
 
-  // The panels are windows the user drags, and a layout dragged off the edge or
-  // shrunk to nothing is the one state they cannot get out of by dragging. This
-  // is that way out, and it belongs here rather than in the editor because the
-  // layout it repairs may be exactly what makes the editor unusable.
+  // Reset floating panel layout.
   function onResetPanels() {
     if (!confirmResetPanels) {
       confirmResetPanels = true;
       return;
     }
     confirmResetPanels = false;
-    // The live window, because that is what the layout has to fit — and this
-    // modal opens from the library screen too, where there is no panel on screen
-    // to measure. `resetPanels` clamps to it and persists through the same
-    // storage the editor loads from, so a reset done with no editor mounted is
-    // still there when one is.
+
     resetPanels(window.innerWidth, window.innerHeight);
     toast('Panel layout reset');
   }
@@ -163,8 +133,7 @@
       toast('Choosing a folder needs the desktop app');
       return;
     }
-    // Rescanning replaces library.projects wholesale, which would orphan the open
-    // chapter's ref and turn every later autosave into a silent no-op.
+
     if (app.chapterRef) {
       toast('Close the open chapter before changing the library folder');
       return;
@@ -173,10 +142,7 @@
       const { open: pick } = await import('@tauri-apps/plugin-dialog');
       const dir = await pick({ directory: true, defaultPath: library.root });
       if (!dir) return;
-      // Both filesystem scopes are $HOME/** in this slice (see
-      // src-tauri/capabilities/default.json). Outside it, every read and write
-      // is denied, and the library would appear simply broken — say so here
-      // instead, where the choice is being made.
+      // Library folder must be inside home directory.
       if (!(await withinHome(dir))) {
         toast('The library has to live inside your home folder for now.');
         return;
@@ -189,7 +155,7 @@
     }
   }
 
-  // Refresh live engine status + cache size each time the panel opens.
+
   $effect(() => {
     if (open) {
       confirmClear = false;
@@ -200,9 +166,7 @@
   });
 
   const sidecarOk = $derived(app.sidecar?.status === 'ok');
-  // `engine` says what is doing the work, `device` what it is running on — the
-  // two things that changed when detection moved in-process, and the two a user
-  // reporting a slow or wrong detection is asked for.
+
   const sidecarLabel = $derived(
     app.sidecar?.status === 'ok'
       ? `Ready · ${app.sidecar.info?.engine ?? 'onnx-rust'} · ${app.sidecar.device ?? '—'}`
@@ -231,11 +195,7 @@
         <div class="settings-title">APPEARANCE</div>
         <div class="field">
           <span>Theme</span>
-          <!-- `theme.mode` is the choice, `theme.resolved` is what is on screen.
-               System is lit like any other state rather than being an absence of
-               one, and it says which way it currently resolves — otherwise the
-               only way to know what "System" means right now is to look at the
-               app it is describing. -->
+
           <div class="seg">
             <button class:on={theme.mode === 'light'} onclick={() => setTheme('light')}>Light</button>
             <button class:on={theme.mode === 'dark'} onclick={() => setTheme('dark')}>Dark</button>
@@ -277,8 +237,7 @@
         {/if}
       </div>
 
-      <!-- Detection engine status. No restart control: the engine runs inside
-           this process, so there is nothing to respawn. -->
+
       <div class="srow">
         <span class="slabel">Detection engine</span>
         <span class="dot {sidecarOk ? 'ok' : app.sidecar?.status === 'error' ? 'err' : 'off'}"></span>
@@ -355,9 +314,7 @@
 
       <div class="group-label">Memory</div>
 
-      <!-- Live footprint, per process. The rows are the point: a single total
-           is what Activity Monitor already gives, and it is the split between
-           the web view and the app itself that tells you which one to go after. -->
+
       <div class="model-card">
         <div class="mc-top">
           <div class="mc-title">
@@ -398,11 +355,7 @@
         {#if mem?.incomplete}
           <div class="qhint">One or more processes went away while being measured — the total is short.</div>
         {/if}
-        <!-- A dev build launched from a terminal inherits its responsibility
-             from the shell, so its web view cannot be matched to it exactly and
-             is matched by launch session instead. Said out loud, because it is
-             the one row here that could in principle belong to something else
-             started from the same shell. A double-clicked app never shows it. -->
+
         {#if mem?.processes?.some((pr) => pr.via === 'session')}
           <div class="qhint">
             Web view rows matched by launch session — this is a development build started
@@ -412,9 +365,7 @@
 
         <div class="mc-actions">
           <button class="btn" disabled={!isTauri()} onclick={loadMemory}>Refresh</button>
-          <!-- `btn-accent` rather than an `on` class: the stylesheet has no
-               `.btn.on`, and a toggle whose only state change is invisible is
-               not a toggle. -->
+
           <button class="btn" class:btn-accent={memLive} disabled={!isTauri()} onclick={() => (memLive = !memLive)}>
             {memLive ? 'Stop live' : 'Live (2s)'}
           </button>
@@ -451,9 +402,7 @@
       {#if DEV}
         <div class="group-label">Developer</div>
 
-        <!-- The only caller of psdSelfTest, and the only place in the app where
-             buildPagePsd's layer output is checked at all — see the note above
-             it in psd.js for why no test can do this. -->
+
         <div class="model-card">
           <div class="mc-top">
             <div class="mc-title">
@@ -563,10 +512,7 @@
     color: var(--t2);
     margin: 10px 0 0;
   }
-  /* The self-test report, verbatim. A developer's output, so it is shown as
-     what it is rather than summarised into a sentence that would hide which of
-     the six checks failed. Scrolls in both directions so a long check list
-     cannot stretch the modal. */
+
   .mc-report {
     margin: 10px 0 0;
     padding: 8px 10px;
@@ -614,9 +560,7 @@
     font-size: 12.5px;
     cursor: pointer;
   }
-  /* Small button. Not pushed right by an `auto` margin — inside `.field-actions`
-     that would shove the two buttons of the confirm step apart. The row is
-     pushed to the right edge by the wrapper instead, once. */
+
   .btn.tiny {
     padding: 4px 10px;
     font-size: 12px;

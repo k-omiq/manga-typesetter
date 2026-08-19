@@ -41,8 +41,8 @@ function loadImage(src) {
 }
 
 // Decode any image source (object URL / data URL) to raw RGBA ImageData at its
-// natural size, unless (w,h) force a target size. Raw pixels — no lossy
-// re-encode — are what we hand to ag-psd.
+// natural size, unless (w,h) force a target size. Raw pixels - no lossy
+// re-encode - are what we hand to ag-psd.
 async function imageDataFromSrc(src, w, h) {
   const img = await loadImage(src);
   const cw = w || img.naturalWidth || img.width;
@@ -56,7 +56,7 @@ async function imageDataFromSrc(src, w, h) {
 }
 
 // The document's pixel space, and the space every layer's bounds are written
-// in. `pageSpace` lives in `exporter.js` — one rule, one copy: a page is
+// in. `pageSpace` lives in `exporter.js` - one rule, one copy: a page is
 // `w:0,h:0` until something decodes its image, Export All reaches pages nobody
 // has opened, and a 0x0 document is an unreadable PSD. Both exporters have to
 // answer that the same way or a page renders at one size and writes its layers
@@ -64,7 +64,7 @@ async function imageDataFromSrc(src, w, h) {
 
 // Re-encode a canvas/ImageData source into a PNG object URL (used to rebuild
 // page.raw / page.cleaned from PSD base layers on import).
-// toBlob hands back null when the encode fails — a PSB-sized canvas under
+// toBlob hands back null when the encode fails - a PSB-sized canvas under
 // memory pressure is exactly that case. Resolving on null would throw inside
 // the callback, leaving this promise neither settled nor rejected and every
 // awaiting import hung behind a busy state that has no way out.
@@ -92,7 +92,7 @@ function hexToRgb(hex) {
 }
 
 // ---------------------------------------------------------------------------
-// embedded JSON (XMP image resource) — the lossless source of truth
+// embedded JSON (XMP image resource) - the lossless source of truth
 // ---------------------------------------------------------------------------
 
 function b64EncodeUtf8(str) {
@@ -138,7 +138,7 @@ function extractProject(xmp) {
 }
 
 // Page → plain JSON with every field needed to rebuild it, minus volatile ids
-// (box.id — reassigned on import) and object URLs (page.raw/cleaned — rebuilt
+// (box.id - reassigned on import) and object URLs (page.raw/cleaned - rebuilt
 // from the base rasters).
 // Exported for psd.test.js, which is the only place the free-line and tag
 // fields below can be pinned from node: everything downstream of here wants a
@@ -159,7 +159,7 @@ export function serializePage(p) {
     // validates, so a line tagged `shout` came back from its own PSD as
     // `dialogue` and the user's vocabulary was lost on the round trip. Written
     // only where the line really has an array, because the array's *presence* is
-    // what tells `lineTags` the user has taken over from the legacy `type` —
+    // what tells `lineTags` the user has taken over from the legacy `type` -
     // materialising `[]` for every line would read as the user having
     // deliberately cleared every tag in the chapter.
     lines: (p.lines ?? []).map((l) => ({
@@ -179,7 +179,7 @@ export function serializePage(p) {
       style: JSON.parse(JSON.stringify(b.style)),
       // The balloon this box was fitted to. It has to be here or a PSD round
       // trip loses the box's shape and the text re-flows to a plain rectangle on
-      // re-import — the pixels would still show the shaped block while the
+      // re-import - the pixels would still show the shaped block while the
       // editable layers disagreed with them. Through `normalizeFit` on the way
       // out as well as on the way in, so a shape a future build wrote is
       // recorded as "no fit" rather than carried through as something this one
@@ -231,8 +231,8 @@ function postScriptName(family) {
 // The app now knows which faces a family really has (fonts.js registers each
 // file under the same family with its own weight/style descriptors), so a box
 // set to bold on a family that owns a bold file must reach Photoshop as the
-// bold FACE — PostScript names are per-face, "MangaTemple-Bold" and not
-// "MangaTemple" — with the faux flag off. Only a face nobody has a file for
+// bold FACE - PostScript names are per-face, "MangaTemple-Bold" and not
+// "MangaTemple" - with the faux flag off. Only a face nobody has a file for
 // keeps the flag on, because there the renderer here is synthesising it too and
 // the flag is the honest description of what the pixels already show.
 //
@@ -246,14 +246,14 @@ function postScriptName(family) {
 // only when no parsed name exists (such as built-in CSS fallbacks or fonts never
 // registered from a file).
 //
-// Both halves are asked about the SAME family — `fontNameFor` — and not about
+// Both halves are asked about the SAME family - `fontNameFor` - and not about
 // `s.font`: a document can name a font this machine has not got, in which case
 // the canvas already drew the fallback family, and asking one half about the
 // name in the document and the other about the family on screen produced a
 // layer describing a font nobody rendered.
 //
 // `resolveFace` answers per axis (see fonts.js), so the two flags below can
-// disagree with each other — a bold-italic box on a family with a real bold and
+// disagree with each other - a bold-italic box on a family with a real bold and
 // no italics is exactly that case, and it is the case this app makes most.
 export function fontRequestFor(s) {
   const family = fontNameFor(s.font);
@@ -281,21 +281,21 @@ function warpForCurve(curve) {
 // reproduce, so the layer it gets has to carry pixels instead of a live
 // `text` object. Two cases, both pixel-only effects with no PS type-layer
 // equivalent:
-//   curve   — our per-character circular-arc layout (arcLayout in measure.js)
+//   curve   - our per-character circular-arc layout (arcLayout in measure.js)
 //             is not the same shape as Photoshop's `arc` warp. Attaching the
 //             warp anyway made Photoshop re-render the glyphs along ITS arc,
 //             on open, over the cached pixels that were laid out along ours.
-//   roughen — a seeded pixel-displacement filter (roughen() in exporter.js)
+//   roughen - a seeded pixel-displacement filter (roughen() in exporter.js)
 //             with nothing in Photoshop's type engine that produces it at
 //             all; there is no warp/style value that could stand in for it.
-//   flip    — the mirror is baked into the pixels (paintBoxOnPage's ctx.scale
+//   flip    - the mirror is baked into the pixels (paintBoxOnPage's ctx.scale
 //             in exporter.js), but a type layer's transform below is
 //             [cos, sin, -sin, cos, tx, ty], which has determinant +1 and so
 //             cannot express a reflection at all. Left as a type layer, a
 //             mirrored box re-rendered the right way round over the mirrored
-//             pixels — the same failure as the curve, for the same reason.
-// A raster-only box still round-trips losslessly through this app — the
-// embedded project JSON (see buildPagePsd) is what re-import actually reads —
+//             pixels - the same failure as the curve, for the same reason.
+// A raster-only box still round-trips losslessly through this app - the
+// embedded project JSON (see buildPagePsd) is what re-import actually reads -
 // so this predicate only ever affects what a foreign copy of Photoshop shows.
 // Single place this decision is made; exported so it can be unit-tested from
 // node without a canvas.
@@ -317,15 +317,15 @@ export const RASTER_MARK = ' [raster, not editable in Photoshop]';
 // remaining editable (the `text` object below). For a raster-only box (see
 // isRasterOnly) there is no `text` object at all: Photoshop always re-renders
 // a type layer from its own engine data and ignores the cached pixels, so a
-// curved or roughened box came back as a corrupted blob — Photoshop's
+// curved or roughened box came back as a corrupted blob - Photoshop's
 // re-render of a shape our engine never produced, painted over the correct
 // pixels underneath it. Dropping `text` makes Photoshop treat the layer as a
 // plain image instead, and it just shows the bytes we hand it.
 //
 // Exported for psd.test.js alongside isRasterOnly: this function is where the
 // predicate actually turns into "no `text` key", and unlike buildPagePsd's
-// other DOM-bound helpers it touches no canvas — `rendered` is handed in
-// pre-computed — so the decision is reachable from node without one.
+// other DOM-bound helpers it touches no canvas - `rendered` is handed in
+// pre-computed - so the decision is reachable from node without one.
 export function textLayerFor(p, box, rendered) {
   const s = box.style;
   const raw = boxTextFor(p, box);
@@ -337,7 +337,7 @@ export function textLayerFor(p, box, rendered) {
     // skip emitting an image layer when there is no raster data.
     if (!rendered || !rendered.imageData) return null;
 
-    // Marked in the layer name — rather than left silent — so a user opening
+    // Marked in the layer name - rather than left silent - so a user opening
     // this PSD in Photoshop understands why this one layer doesn't behave
     // like the others (no type tool, no re-render on font change) instead of
     // reading it as a bug in the export. The marker is also what the foreign
@@ -381,8 +381,8 @@ export function textLayerFor(p, box, rendered) {
   // stopped being harmless the moment it started shaping blocks (see
   // typeset.js: square or beehive, never an hourglass, no short word alone on a
   // line). Left as one paragraph, a box the canvas shows as three shaped lines
-  // re-wraps to Photoshop's own three the first time the layer re-renders — a
-  // font substitution, or the user so much as touching it with the type tool —
+  // re-wraps to Photoshop's own three the first time the layer re-renders - a
+  // font substitution, or the user so much as touching it with the type tool -
   // and the typesetting the letterer did is gone. The cached pixels carry the
   // shaped breaks, but they are exactly what a re-render discards.
   //
@@ -413,7 +413,7 @@ export function textLayerFor(p, box, rendered) {
   // `padding: BOX_PAD`, the app wraps at `box.w - BOX_PAD * 2`, and the raster
   // exporter now anchors the block that same BOX_PAD in from every edge. A type
   // layer flush with the box rect would put Photoshop's own re-render 2px left
-  // of and above the pixels underneath it for a left- or top-aligned box —
+  // of and above the pixels underneath it for a left- or top-aligned box -
   // invisible until the layer re-renders, and then a 2px jump. `boxBounds`
   // loses the padding on both sides for the same reason: it is the box the text
   // re-flows inside, so it has to be the content box, not the frame.
@@ -484,7 +484,7 @@ export function textLayerFor(p, box, rendered) {
     // The cached pixels keep the outline and shadow baked in for non-Photoshop
     // readers and fallback viewing when the font is not installed. curve is 0
     // here (a non-zero curve routes through the raster-only branch above), so
-    // warpForCurve always returns the 'none' style — it stays as a real call
+    // warpForCurve always returns the 'none' style - it stays as a real call
     // rather than an inlined constant so nothing has to change if a future
     // curve shape turns out to be representable after all.
     text: {
@@ -520,22 +520,22 @@ export function textLayerFor(p, box, rendered) {
 // and it is not optional.
 //
 // Photoshop rebuilds the composite from the layers on open and never reads
-// this. macOS does the exact opposite: ImageIO — Finder icons, Preview, Quick
-// Look, `sips` — reads ONLY the merged image, and it ignores image resource
+// this. macOS does the exact opposite: ImageIO - Finder icons, Preview, Quick
+// Look, `sips` - reads ONLY the merged image, and it ignores image resource
 // 1036 (the thumbnail) entirely, so with no composite every export renders as a
 // solid black page outside Photoshop. Measured here: `qlmanage -t -s 400` on a
 // file with a white composite gave a white thumbnail, and on the identical file
 // without one gave solid black.
 //
 // White rather than the real page render because the real one costs a whole
-// extra full-page raster of pixels the layers already carry — measured at
+// extra full-page raster of pixels the layers already carry - measured at
 // +2,643,180 bytes on an 800x1150 page, the same delta under RLE and under ZIP
-// — and the user's decision was that the merged composite stays out. A
+// - and the user's decision was that the merged composite stays out. A
 // constant-value raster, by contrast, is free: ag-psd emits the composite
 // section whether or not it is handed one, and a run-length code spends the
 // same bytes on a run of 255s as on the run of 0s it would otherwise write.
 // Measured on that same page: 5,490,174 bytes with a white composite, with an
-// all-black one, and with none at all — byte-identical, all three.
+// all-black one, and with none at all - byte-identical, all three.
 //
 // White and not black because a manga page is white paper: the file reads in
 // Finder as a blank sheet, which is what a file whose picture lives in its
@@ -546,14 +546,14 @@ function flatWhiteComposite(w, h) {
 
 // Assemble the ag-psd document from rasters the DOM half below has already
 // produced. Split out because everything that decides how big the file gets is
-// decided here — which layers exist, how big each one is, what the merged
-// composite costs — and buildPagePsd needs a canvas per raster, so with the
+// decided here - which layers exist, how big each one is, what the merged
+// composite costs - and buildPagePsd needs a canvas per raster, so with the
 // decisions in there a test could only reach them on a page with no art at all.
 //
 // No thumbnail image resource. There used to be a hand-built 160px one, ~15 KB
 // plus a full extra renderPageCanvas pass per page, justified by a comment
 // claiming it was what made the file "look like the page" in Finder. That was
-// false — macOS never reads it, see above — and no reader we can name and test
+// false - macOS never reads it, see above - and no reader we can name and test
 // on this machine reads it either (Adobe Bridge is the usual claim; unverified
 // here). Removed rather than kept on a story.
 export function pagePsdDocument({ w, h, textLayers = [], baseLayers = [], project }) {
@@ -586,11 +586,11 @@ export function pagePsdDocument({ w, h, textLayers = [], baseLayers = [], projec
 // Serialize a document built above, with ag-psd's default RLE channel data.
 //
 // `compress: true` (ZIP/deflate) was tried and reverted. It is a real 52% size
-// win — 2.52 MB vs 5.24 MB on an 800x1150 two-raster page — but it costs 638–642
-// ms per page against RLE's 21–24 ms, near thirty times slower, and exportImages
+// win - 2.52 MB vs 5.24 MB on an 800x1150 two-raster page - but it costs 638-642
+// ms per page against RLE's 21-24 ms, near thirty times slower, and exportImages
 // awaits this per page in a plain loop on the webview's main thread: a 20-page
 // chapter froze the UI for about twelve seconds with no way to tell it apart
-// from a hang. RLE keeps most of the win that mattered anyway — the size fight
+// from a hang. RLE keeps most of the win that mattered anyway - the size fight
 // was against a 39.94 MB per-page baseline, and dropping the supersampled
 // document and the duplicated full-page rasters is what won it. Do not turn ZIP
 // back on without moving the export loop off the main thread first.
@@ -602,13 +602,13 @@ export function writePagePsd(doc) {
 // Build a layered, editable PSD (ArrayBuffer) for one page, with the complete
 // project embedded as JSON for lossless re-import. Group/layer schema (top of
 // list = top in Photoshop):
-//   Text  — one editable text layer per box
-//   Base  — Cleaned (if any) over Raw
+//   Text  - one editable text layer per box
+//   Base  - Cleaned (if any) over Raw
 //
 // The document is the page's OWN pixel size. It used to be supersampled 2x so
 // the text layers' cached pixels stayed sharp when zoomed; the cost was that
-// Raw and Cleaned were upscaled 2x as well — 4x the pixels, invented ones, for
-// art that has no detail up there to find — which put each of them in the file
+// Raw and Cleaned were upscaled 2x as well - 4x the pixels, invented ones, for
+// art that has no detail up there to find - which put each of them in the file
 // at ~4.4x what it costs stored natively. A PSD layer cannot carry its own
 // scale, so a native-resolution base raster and a supersampled document are
 // mutually exclusive, and base art is what the size is being spent on, so the
@@ -617,7 +617,7 @@ export function writePagePsd(doc) {
 // The text pays for that, and the amount is exactly half its linear resolution.
 // renderBox builds a box at SS=2 and paintBoxOnPage's drawImage lands it at the
 // box's native footprint, so at the old scale 2 that bitmap mapped 1:1 onto
-// document pixels and now it is downsampled 2:1 — cleanly antialiased, but one
+// document pixels and now it is downsampled 2:1 - cleanly antialiased, but one
 // device pixel per page pixel where there were two. It only shows in the case
 // the cached raster exists for at all: Photoshop missing the manga font and
 // falling back to these pixels instead of re-rendering the (still editable)
@@ -627,7 +627,7 @@ export async function buildPagePsd(p) {
   await document.fonts.ready;
   const { w: W, h: H } = await pageSpace(p);
 
-  // Text layers — one editable type layer per box, each backed by the box's
+  // Text layers - one editable type layer per box, each backed by the box's
   // exact pixels, trimmed by renderBoxLayer to the glyphs it actually painted
   // (a shared scratch canvas avoids per-box allocations).
   // Boxes with raster-only styling that paint nothing return null from textLayerFor
@@ -637,10 +637,10 @@ export async function buildPagePsd(p) {
     .map((b) => textLayerFor(p, b, renderBoxLayer(b, W, H, scratch, p)))
     .filter(Boolean);
 
-  // Base layers — Cleaned over Raw (bottom), both forced to the document's (=
+  // Base layers - Cleaned over Raw (bottom), both forced to the document's (=
   // the page's) size, which is a resample rather than a copy whenever the two
-  // disagree. Forcing it is the right trade — the box coordinates are in the
-  // page's space and the art has to line up with them — but it is worth knowing
+  // disagree. Forcing it is the right trade - the box coordinates are in the
+  // page's space and the art has to line up with them - but it is worth knowing
   // when it can happen, and there is now exactly one case left.
   //
   // It used to be routine: applyDetection wrote the detector's
@@ -649,7 +649,7 @@ export async function buildPagePsd(p) {
   // every export, silently. The store now maps the detector's geometry into the
   // page's space instead of adopting its size (see applyDetection), and the
   // page's space is measured from the image the canvas actually draws (see
-  // setPageDims), so `p.cleaned` — the one this export prefers — matches the
+  // setPageDims), so `p.cleaned` - the one this export prefers - matches the
   // document by construction.
   //
   // What remains: a chapter that has BOTH rasters at different resolutions. The
@@ -674,7 +674,7 @@ export async function buildPagePsd(p) {
     }
   }
 
-  // Embedded lossless project state — ORIGINAL page coordinates.
+  // Embedded lossless project state - ORIGINAL page coordinates.
   const project = { key: PROJECT_KEY, schema: SCHEMA, page: serializePage(p) };
 
   return writePagePsd(pagePsdDocument({ w: W, h: H, textLayers, baseLayers, project }));
@@ -760,8 +760,8 @@ export async function reconstructForeign(psd) {
   // the name is the only place its words survive. That is lossy above 40
   // characters, which is where textLayerFor truncates a layer name, and it is
   // still better than dropping a curved or mirrored box and its text on the
-  // floor. This path only runs for a PSD whose embedded project is gone —
-  // Photoshop rewriting the XMP packet — since the lossless path reads the JSON
+  // floor. This path only runs for a PSD whose embedded project is gone -
+  // Photoshop rewriting the XMP packet - since the lossless path reads the JSON
   // and never looks at layers for text at all.
   const boxes = [];
   const collectText = (nodes) => {
@@ -817,7 +817,7 @@ export async function reconstructForeign(psd) {
         // was only ever right while this app set those flags from `style.bold`
         // unconditionally. They now describe what Photoshop has to SYNTHESISE
         // (see fontRequestFor), so a box in a real bold face carries
-        // `fauxBold:false` — and reading the flags alone brought every one of
+        // `fauxBold:false` - and reading the flags alone brought every one of
         // them back unbolded. The face named in the layer is the other half of
         // the answer, and between them they cover a foreign PSD too: some
         // authoring tools set the flags, all of them name the face.
@@ -874,7 +874,7 @@ export function parsePagePsd(bytes) {
 // ---------------------------------------------------------------------------
 
 // A PSD describes a whole typeset chapter, so it creates one rather than being
-// merged into an existing one — importing into an open chapter substituted the
+// merged into an existing one - importing into an open chapter substituted the
 // document and orphaned every raw in raws/, which is why the editor no longer
 // has this button at all.
 //
@@ -930,7 +930,7 @@ async function toChapterPage(page, index) {
 // the whole document and not merely within a page. Numbering per page would
 // hand page two ids page one already owns; the loader would remint the repeats,
 // and which ones it minted would depend on what else had been opened that
-// session — an id that moves between sessions is exactly what the history
+// session - an id that moves between sessions is exactly what the history
 // cannot survive. Assigned in one sweep, after every page has been built, so a
 // PSD that failed to yield an image does not leave a gap.
 export function numberBoxIds(pages) {
@@ -973,7 +973,7 @@ export async function chapterPagesFromPsdFiles(files) {
 }
 
 export async function pickPsdFiles() {
-  // Native dialog under Tauri — a detached <input type=file> never opens in the
+  // Native dialog under Tauri - a detached <input type=file> never opens in the
   // packaged app (WKWebView runOpenPanel silently fails). Browser keeps the
   // input fallback.
   if (isTauri()) {
@@ -991,19 +991,19 @@ export async function pickPsdFiles() {
 }
 
 // ---------------------------------------------------------------------------
-// self-test (verification) — build → parse → deep-compare the serialized page.
+// self-test (verification) - build → parse → deep-compare the serialized page.
 // Ignores volatile ids/URLs by construction (serializePage omits them). Also
 // checks the stored pixels layer by layer, and PSD editability/structure.
 //
 // This used to be dead code, and the note here said so: nothing called it, so
-// every claim it makes had gone unverified since it was written — including the
+// every claim it makes had gone unverified since it was written - including the
 // per-layer parity rework below. It has a caller now, in the Settings modal's
 // Developer group (SettingsModal.svelte), and the shape of that caller is the
 // argument for keeping the function rather than deleting it:
 //
 //   it needs a real canvas. Base and text layers are compared against decoded
 //   art and against the app's own render of each box, so this cannot run in the
-//   node test environment — and psd.test.js says as much: from node it can only
+//   node test environment - and psd.test.js says as much: from node it can only
 //   reach an art-less, box-less page. Deleting this would leave `buildPagePsd`'s
 //   base-layer and text-layer correctness covered by nothing at all.
 //   it is expensive. It builds a whole PSD and parses it back. So it is a button
@@ -1022,7 +1022,7 @@ function layerPixels(layer) {
 }
 
 // 255 (i.e. "no parity at all") when either side is missing or the two disagree
-// about their size — a size mismatch is the loudest failure there is, and
+// about their size - a size mismatch is the loudest failure there is, and
 // comparing the overlap would quietly hide it.
 function maxChannelDiff(a, b) {
   if (!a || !b || a.width !== b.width || a.height !== b.height) return 255;
@@ -1062,13 +1062,13 @@ export async function psdSelfTest(p) {
       }
 
       // 2) Raster parity, layer by layer. This used to compare the PSD's merged
-      // composite against the app render, which was true by construction — that
+      // composite against the app render, which was true by construction - that
       // render WAS the merged image we wrote. The composite is now flat white and
       // carries no page pixels at all, so there is nothing there to check parity
       // against; per-layer is the stronger claim anyway, since the layers are what
       // Photoshop actually draws. Base against the decoded source art, each text
       // layer against the app's own render of its box.
-      // The same space `buildPagePsd` wrote the file in — `?? PAGE_W` let a 0
+      // The same space `buildPagePsd` wrote the file in - `?? PAGE_W` let a 0
       // through, and this check would then have decoded the art to 0x0 and reported
       // a parity failure against a reference with no pixels in it. A self-test that
       // fails on a page nobody has opened is worse than none.
@@ -1107,7 +1107,7 @@ export async function psdSelfTest(p) {
       // This used to assert "every layer in the Text group is editable text",
       // which the raster-only fix below makes false on purpose: a curved or
       // roughened box now deliberately gets a layer with no `text` at all (see
-      // isRasterOnly). The true invariant is narrower — one layer per box (skipping
+      // isRasterOnly). The true invariant is narrower - one layer per box (skipping
       // empty raster-only boxes), and each layer's `text` presence matches its box's style exactly.
       const srcBoxes = src.boxes ?? [];
       const expectedLayerBoxes = srcBoxes.filter(
@@ -1122,7 +1122,7 @@ export async function psdSelfTest(p) {
       // 4) The shaped line breaks survived into the editable layer. Checked here
       // and not in psd.test.js because it is the one claim in this file that needs
       // a real measurer: node has no canvas, `canMeasure()` is false there, and
-      // textLayerFor writes the paragraph unbroken — so from node this check can
+      // textLayerFor writes the paragraph unbroken - so from node this check can
       // only ever pass vacuously. What it guards against is a re-render in
       // Photoshop silently re-wrapping the block greedily and undoing the
       // letterer's shaping (see the comment in textLayerFor).

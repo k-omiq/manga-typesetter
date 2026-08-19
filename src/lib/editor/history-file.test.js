@@ -84,7 +84,7 @@ describe('the file on disk', () => {
     return { release: () => release(), restore: () => spy.mockRestore() };
   };
 
-  // Every test starts from a closed chapter, an empty stack and an empty disk —
+  // Every test starts from a closed chapter, an empty stack and an empty disk -
   // the module keeps all three across a test file.
   beforeEach(async () => {
     const { __setDir } = await mod();
@@ -217,8 +217,8 @@ describe('the file on disk', () => {
 
   // closeChapter fires the close and does not wait on it. A chapter opened
   // while that write is in flight must survive the close resuming underneath
-  // it: reset unconditionally, the new chapter loses its stack and — with `dir`
-  // cleared — every later flush returns early, so nothing it records ever
+  // it: reset unconditionally, the new chapter loses its stack and - with `dir`
+  // cleared - every later flush returns early, so nothing it records ever
   // reaches disk again for the rest of the session.
   it('leaves a chapter opened during its close alone', async () => {
     const { __setDir, closeHistory, flushHistory } = await mod();
@@ -227,7 +227,7 @@ describe('the file on disk', () => {
     __setDir(CH1);
     record(anEntry(1));
     const closing = closeHistory(); // in flight, deliberately not awaited yet
-    // What an `openHistory` landing under that flush leaves behind — the seam
+    // What an `openHistory` landing under that flush leaves behind - the seam
     // exists to put the module in exactly the state an open would. Driving the
     // real `openHistory` here cannot reproduce the interleave: it flushes on
     // the way in, so it queues behind this very write and always finishes
@@ -290,7 +290,7 @@ describe('the file on disk', () => {
 
     // The page the open was called for is not necessarily the page the user is
     // on by the time the read comes back. Loaded blindly, page 1's stack landed
-    // in memory while page 2 was on screen — every press from then on rewinding
+    // in memory while page 2 was on screen - every press from then on rewinding
     // a box the user could not see.
     it('loads the page the user is on now, not the one it was called for', async () => {
       await seed({ 1: { undo: [anEntry(1)], redo: [] }, 2: { undo: [anEntry(2)], redo: [] } });
@@ -310,7 +310,7 @@ describe('the file on disk', () => {
     });
 
     // And an edit made in that window is the newest thing there is. It used to
-    // be thrown away by the load landing on top of it — an undo the user had
+    // be thrown away by the load landing on top of it - an undo the user had
     // already earned, gone, with nothing to say it had ever existed.
     it('keeps an edit made while it was still loading, on top of what came off disk', async () => {
       await seed({ 1: { undo: [anEntry(1)], redo: [] } });
@@ -330,7 +330,7 @@ describe('the file on disk', () => {
       }
     });
 
-    // The same page merged into the document rather than the live stack — an
+    // The same page merged into the document rather than the live stack - an
     // off-screen record filed while the read was in flight.
     it('keeps an off-screen record made while it was still loading', async () => {
       await seed({ 2: { undo: [anEntry(1)], redo: [] } });
@@ -361,7 +361,7 @@ describe('the file on disk', () => {
       try {
         const opening = openHistory(CH1, 1);
         await closeHistory();
-        __setDir(CH1); // back into the same chapter — a new session, same path
+        __setDir(CH1); // back into the same chapter - a new session, same path
         record(anEntry(9));
         read.release();
         await opening;
@@ -376,7 +376,7 @@ describe('the file on disk', () => {
   // and does not wait on it, and the reader's own back button puts them straight
   // back into the chapter they just left: the close then resumed, found its own
   // path still in place, and tore down the session that had landed underneath it
-  // — stack wiped and `dir` nulled, so nothing that session recorded ever
+  // - stack wiped and `dir` nulled, so nothing that session recorded ever
   // reached disk again.
   it('leaves a reopen of the same chapter alone while its close is still flushing', async () => {
     const { __setDir, closeHistory, flushHistory } = await mod();
@@ -385,7 +385,7 @@ describe('the file on disk', () => {
     __setDir(CH1);
     record(anEntry(1));
     const closing = closeHistory(); // in flight, deliberately not awaited yet
-    __setDir(CH1); // the same chapter, opened again — see the note above
+    __setDir(CH1); // the same chapter, opened again - see the note above
     record(anEntry(2));
     await closing;
     // The new session still has its stack…
@@ -397,7 +397,7 @@ describe('the file on disk', () => {
 
   // The desync this seam exists to prevent, end to end. Before it, an entry
   // naming an off-screen page went onto the LIVE stack and then told this module
-  // that page was live — so the next write filed the page on screen's whole
+  // that page was live - so the next write filed the page on screen's whole
   // stack under the other page's key. Two pages' undo, gone, in one press of
   // Apply.
   it('files an entry naming an off-screen page onto that page, not the live one', async () => {
@@ -428,7 +428,7 @@ describe('the file on disk', () => {
     const { openHistory, flushHistory } = await mod();
     const { record, MAX_STEPS } = await hist();
     const { files } = await disk();
-    // Page 2 comes off disk with a redo branch and no undo — a page the user
+    // Page 2 comes off disk with a redo branch and no undo - a page the user
     // undid their way back through and then left.
     files.set(PATH, JSON.stringify({ version: 1, pages: { 2: { undo: [], redo: [anEntry(1)] } } }));
     await openHistory(CH1, 1); // page 1 is the live one
@@ -444,7 +444,7 @@ describe('the file on disk', () => {
   });
 
   // A chapter this module is not keeping a document for has nothing to merge
-  // into — the entry stays where it has always been.
+  // into - the entry stays where it has always been.
   it('refuses an off-screen entry when no chapter is open', async () => {
     const { __setDir } = await mod();
     const { record, peekStack } = await hist();

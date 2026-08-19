@@ -73,7 +73,7 @@ describe('clampPanel', () => {
 
   // A hidden panel is drawn as a 34px icon, so 34px is the whole of what has to
   // stay on screen. Clamped against the panel's 120px strip instead, the stub
-  // could not be put in the right ~86px of the window at all — dropped in the
+  // could not be put in the right ~86px of the window at all - dropped in the
   // top-right corner it was yanked back inward, and the drag the user just made
   // was undone in front of them.
   it('keeps a hidden panel reachable by its stub, not by the panel it is not showing', () => {
@@ -96,7 +96,7 @@ describe('clampPanel', () => {
   });
 
   // Hiding is not a drag, so nothing re-clamps between the two. The next
-  // clampAll — a window resize, or the drag that follows — is what has to hold
+  // clampAll - a window resize, or the drag that follows - is what has to hold
   // the stub to the stub's rule, and the geometry it is handed is whatever the
   // panel was last at.
   it('re-clamps a panel to the stub rule once it is hidden', () => {
@@ -169,7 +169,7 @@ describe('the live state', () => {
   // Clamping only ever shrinks, so a resize that wrote its result would make a
   // moment of small window permanent: the geometry the user chose is squeezed,
   // saved, and does not come back when the window does. The live layout still
-  // clamps — only the store is left alone.
+  // clamps - only the store is left alone.
   it('does not let a window resize overwrite the stored layout', () => {
     const s = fakeStorage(null);
     loadPanels(s, 1400, 900);
@@ -278,11 +278,11 @@ describe('persistence', () => {
   });
 
   // The interval is the store's shared preference beat, not a number this module
-  // picked for itself — the sidebar's write coalesces on the same one. What this
+  // picked for itself - the sidebar's write coalesces on the same one. What this
   // pins is the duration: `PREF_SAVE_MS` is 199 and 200 by the time the case
   // runs, so a module that went back to a hard-coded 200 of its own would pass
   // it, and only reading the source tells those apart. What it does catch is the
-  // divergence that matters — change the shared constant and a writer still
+  // divergence that matters - change the shared constant and a writer still
   // sitting on the old number fails here.
   it('writes on the shared preference interval rather than one of its own', () => {
     const s = fakeStorage(null);
@@ -296,7 +296,7 @@ describe('persistence', () => {
 
   // `resetPanels` is a Settings action, and Settings opens from the library
   // screen as readily as from the editor. Nothing in it may need a mounted
-  // panel, a DOM or an open document — and the reset has to reach storage, or
+  // panel, a DOM or an open document - and the reset has to reach storage, or
   // the next editor mount loads the layout the user just threw away straight
   // back over the top.
   it('resets to the defaults for the live window and persists them', () => {
@@ -333,7 +333,7 @@ describe('persistence', () => {
 
 // The debounce given back on the way out. ⌘Q destroys the window with no unload
 // the page can await, so a panel dragged inside the last PREF_SAVE_MS would be
-// lost — the same hole `flushSidebar` closes one module over.
+// lost - the same hole `flushSidebar` closes one module over.
 describe('flushPanels', () => {
   beforeEach(() => {
     resetPanels(1400, 900);
@@ -351,7 +351,7 @@ describe('flushPanels', () => {
 
   // Draining twice must not write twice: the second call has nothing pending,
   // and a flush that wrote anyway would put a layout on disk the user never
-  // arranged — the sentinel is what a spurious second write would clobber.
+  // arranged - the sentinel is what a spurious second write would clobber.
   it('does nothing on a second flush with nothing pending', () => {
     const s = fakeStorage(null);
     loadPanels(s, 1400, 900);

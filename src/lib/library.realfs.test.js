@@ -5,7 +5,7 @@
 // on: do the bytes that come out of a copy equal the bytes that went in?
 //
 // So this file swaps the same seam for node:fs and runs the real code over real
-// PNGs in a temp directory — including a 16-bit greyscale one, which is what a
+// PNGs in a temp directory - including a 16-bit greyscale one, which is what a
 // manga raw frequently is and what a decode/re-encode would quietly flatten.
 // It is the disk half of slice 2a's acceptance pass; the half that needs eyes
 // on a window (the pairing summary before you commit, the PSD re-encode notice,
@@ -107,7 +107,7 @@ function pngBytes(w, h, depth, level) {
   ihdr.writeUInt32BE(w, 0);
   ihdr.writeUInt32BE(h, 4);
   ihdr[8] = depth;
-  ihdr[9] = 0; // colour type 0 — greyscale
+  ihdr[9] = 0; // colour type 0 - greyscale
   const px = depth === 16 ? 2 : 1;
   const rows = [];
   for (let y = 0; y < h; y++) {
@@ -243,7 +243,7 @@ describe('six raws and four cleaned, on a real disk', () => {
     try {
       // Opening awaits the page being opened and starts its neighbours, so the
       // far end of the chapter is the honest assertion: it has a file on disk
-      // and no picture in memory. This is the whole point — a 200-page chapter
+      // and no picture in memory. This is the whole point - a 200-page chapter
       // used to mint all 200 before it drew one.
       expect(!!app.pages[0].raw).toBe(true);
       expect(!!app.pages[5].raw).toBe(false);
@@ -253,7 +253,7 @@ describe('six raws and four cleaned, on a real disk', () => {
       await setResidentWindow(app.pages, 5);
       expect(!!app.pages[5].raw).toBe(true);
       expect(!!app.pages[0].raw).toBe(false);
-      // The name is untouched by any of it — a released page is a page that can
+      // The name is untouched by any of it - a released page is a page that can
       // be read again, not a page that has lost its image.
       expect(app.pages[0].file).toBeTruthy();
     } finally {
@@ -342,7 +342,7 @@ describe('changing a chapter’s sources afterwards, on a real disk', () => {
     const after = await record(c);
     expect(after.pages[0].cleaned).toBe('clean-01.png');
     expect(after.pages[2].cleaned).toBe('clean-01-2.png');
-    // Page 1's image is untouched — the second copy landed beside it.
+    // Page 1's image is untouched - the second copy landed beside it.
     expect(await readFile(join(c.dir, 'cleaned', 'clean-01.png'))).toEqual(
       await readFile(join(srcDir, 'clean-01.png')),
     );
@@ -357,7 +357,7 @@ describe('changing a chapter’s sources afterwards, on a real disk', () => {
     expect(out.replaced).toBe(2);
     const rec = await record(c);
     // The picked list is natural-sorted before it is paired, so clean-04 goes
-    // to page 1 and swap to page 2 — not the order they were passed in. That is
+    // to page 1 and swap to page 2 - not the order they were passed in. That is
     // the rule, and it is why the dialog states the pairing before committing.
     // clean-04.png is still claimed by page 4, so the copy lands beside it.
     expect(rec.pages.map((pg) => pg.cleaned)).toEqual([
@@ -376,7 +376,7 @@ describe('changing a chapter’s sources afterwards, on a real disk', () => {
     const { pages } = await readChapterSources(p.id, c.id);
     expect(pages.map((pg) => pg.missing)).toEqual([false, false, true, false, false, false]);
 
-    // Opening falls back to the raw, and the name is still on the page — so the
+    // Opening falls back to the raw, and the name is still on the page - so the
     // next save cannot unlink a file the user only has to put back.
     await openChapter(p.id, c.id);
     try {

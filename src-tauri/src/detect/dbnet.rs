@@ -1,14 +1,6 @@
-//! DBNet's differentiable-binarization head, turned back into text-line quads.
+//! Recovers text-line quads from DBNet's shrunk probability map via polygon unclip.
 //!
-//! The network predicts a *shrunk* probability map: each text line shows up as a
-//! blob narrower than the line itself, which is what stops adjacent lines from
-//! merging into one region. Recovering the line means finding each blob, fitting
-//! a rectangle to it, and then growing that rectangle back out by an amount
-//! derived from its own area and perimeter — the "unclip" step. The 1.5 ratio
-//! is the inverse of the shrink the model was trained against.
-//!
-//! Port of `SegDetectorRepresenter.boxes_from_bitmap` in
-//! `comic_text_detector/utils/db_utils.py`.
+//! Port of `SegDetectorRepresenter.boxes_from_bitmap` in `comic_text_detector`.
 
 use super::cvops::{box_score_fast, find_contours};
 use super::minrect::{mini_box, offset_round};
@@ -22,20 +14,14 @@ pub const MAX_CANDIDATES: usize = 1000;
 /// Minimum short side, in model pixels, for a candidate to be considered.
 pub const MIN_SHORT_SIDE: f32 = 2.0;
 
-/// One text-line candidate: a quad in model-input pixels and its mean
-/// probability.
+/// One text-line candidate: a quad in model-input pixels and its mean probability.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LineQuad {
     pub pts: [[i32; 2]; 4],
     pub score: f32,
 }
 
-/// numpy's rounding, which is half-to-even rather than half-away-from-zero.
-///
-/// It shows up on exactly the values a shrink-map rectangle produces — a quad
-/// grown by 4.875 px from an integer edge lands on `.875` and `.125`, but one
-/// grown by 5.5 lands on a tie, and rounding it the other way moves a line's
-/// edge by a pixel.
+/// Half-to-even rounding matching numpy.
 fn round_half_even(v: f32) -> f32 {
     let r = v.round();
     if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
@@ -45,13 +31,7 @@ fn round_half_even(v: f32) -> f32 {
     }
 }
 
-/// Extract line quads from one DBNet shrink map.
-///
-/// `pred` is the raw probability map, `w * h`, and quads come back in model-input
-/// coordinates clamped to it. Candidates are returned in contour order with
-/// their scores; the caller applies the score threshold, because the original
-/// does so a stage later and the ordering it produces is what feeds line-to-block
-/// assignment.
+/// Extracts line quads from a DBNet probability map in model coordinates.
 pub fn boxes_from_bitmap(pred: &[f32], w: usize, h: usize) -> Vec<LineQuad> {
     let bitmap: Vec<bool> = pred.iter().map(|&v| v > BITMAP_THRESH).collect();
     let contours = find_contours(&bitmap, w, h);
@@ -63,8 +43,7 @@ pub fn boxes_from_bitmap(pred: &[f32], w: usize, h: usize) -> Vec<LineQuad> {
         if sside < MIN_SHORT_SIDE {
             continue;
         }
-        // Scored on the contour, not on the fitted rectangle: a rectangle around
-        // a diagonal line is mostly background, and would score below threshold.
+        // Scored on the contour rather than the bounding box.
         let score = box_score_fast(pred, w, h, contour);
 
         let side_a = ((quad[1].0 - quad[0].0) as f64).hypot((quad[1].1 - quad[0].1) as f64);

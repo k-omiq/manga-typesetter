@@ -16,7 +16,7 @@ import { BUILTIN_FONTS, emptyFaces } from './data.js';
 
 // Only the pure half of fonts.js is exercised here: registration needs FontFace
 // and persistence needs IndexedDB, neither of which exists in the node test
-// environment. What that half decides is the interesting part anyway — which
+// environment. What that half decides is the interesting part anyway - which
 // file is which face of which family, and whether a real face exists at all,
 // which is what the exporter asks before it lets Photoshop fake one.
 
@@ -193,8 +193,8 @@ describe('resolveFace', () => {
     });
   });
 
-  // A family whose only file is a bold one renders EVERYTHING in that face —
-  // the browser has nothing else to match — so an unbolded box has to be
+  // A family whose only file is a bold one renders EVERYTHING in that face -
+  // the browser has nothing else to match - so an unbolded box has to be
   // described as the bold face and not as a regular nobody drew.
   it('names the only face a family owns, even for a style that did not ask for it', () => {
     app.fonts.user = [userFont('Heavyish', { bold: { file: 'Heavyish-Bold.ttf' } })];
@@ -202,7 +202,7 @@ describe('resolveFace', () => {
   });
 
   it('answers for built-ins from what the Google Fonts request actually loads', () => {
-    // Comic Neue is requested at 400/700 in both slants, Bangers at 400 only —
+    // Comic Neue is requested at 400/700 in both slants, Bangers at 400 only -
     // so bold Bangers is genuinely synthesised and has to admit it.
     expect(resolveFace('Comic Neue', { bold: true })).toEqual({ slot: 'bold', fauxBold: false, fauxItalic: false, known: true });
     expect(resolveFace('Comic Neue', { bold: true, italic: true }).slot).toBe('boldItalic');

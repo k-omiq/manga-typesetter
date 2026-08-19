@@ -10,9 +10,9 @@ export const PAGE_H = 1200;
 // anything heavier than regular lands in `bold`.
 export const FACE_SLOTS = ['regular', 'bold', 'italic', 'boldItalic'];
 
-// A face map with nothing in it. A slot holds a descriptor `{ file }` — the
+// A face map with nothing in it. A slot holds a descriptor `{ file }` - the
 // name of the file the user dropped, or null for a built-in, whose bytes come
-// from Google rather than from disk — and a null slot means "no real face
+// from Google rather than from disk - and a null slot means "no real face
 // exists", which is the app's only licence to let the browser synthesise one.
 export function emptyFaces() {
   return { regular: null, bold: null, italic: null, boldItalic: null };
@@ -32,7 +32,7 @@ const googleFaces = (...slots) => {
 // PSD exporter reads it to decide whether Photoshop has to be told to fake a
 // face, and the Font Library shows the user which of their four faces are real.
 // So it mirrors, face for face, what the Google Fonts URL in index.html
-// actually requests — Bangers and the three handwriting families ship regular
+// actually requests - Bangers and the three handwriting families ship regular
 // only, so their bold and italic really are synthesised and are recorded as
 // absent. Extend one of the two and you must extend the other.
 export const BUILTIN_FONTS = [
@@ -81,7 +81,7 @@ export function defaultStyle() {
     // warp: per-character circular arc, -100..100 (negative = frown, positive = smile)
     curve: 0,
     // ---- typesetting (see typeset.js) ----
-    // How lines are broken. 'auto' is the scanlation shaping — square or oval
+    // How lines are broken. 'auto' is the scanlation shaping - square or oval
     // block, no hourglass, no orphaned short words, no word ever split. 'off'
     // hands the job back to plain greedy CSS wrapping.
     shape: 'auto',
@@ -90,8 +90,8 @@ export function defaultStyle() {
     // Whether a word that fits on no line of this block may be split with a
     // hyphen. On by default: a tall narrow balloon with a name in it is the case
     // the rule was written for, and without it the name simply hangs out of the
-    // bubble. `typeset.js` states the conditions — the word has to fit nowhere,
-    // the split has to win on price, and the pieces have to be pronounceable —
+    // bubble. `typeset.js` states the conditions - the word has to fit nowhere,
+    // the split has to win on price, and the pieces have to be pronounceable -
     // and they are narrow enough that ordinary dialogue never meets them.
     hyphenate: true,
     // Whether this box lays its text out to the balloon it was fitted to. The
@@ -103,7 +103,7 @@ export function defaultStyle() {
     // as every box did before fitting existed.
     balloon: true,
     // The box's HEIGHT follows its text: it grows so the wrapped block fits,
-    // anchored by `valign`. Width is never touched automatically — the width is
+    // anchored by `valign`. Width is never touched automatically - the width is
     // what the user aimed at the bubble.
     autoHeight: true,
   };
@@ -135,7 +135,7 @@ export function normalizeStyle(s) {
 // chapter.json a future version wrote with a third kind in it, a PSD's embedded
 // project, a hand-edited file. A shape that is not one of the two, or whose
 // numbers are not finite, or whose extent is not positive, is not an error to
-// throw on — it is a box with no fit, which is a state the whole layout path
+// throw on - it is a box with no fit, which is a state the whole layout path
 // already handles because it is what every box had before fitting existed.
 //
 // Returns a fresh plain object, so a caller cannot alias the document, and null

@@ -13,8 +13,8 @@ import { PAGE_W, PAGE_H, normalizeStyle } from './data.js';
 import { layoutLines, BOX_PAD, balloonWidthsFor } from './measure.js';
 import { neededHeight } from './typeset.js';
 
-// exportTextJson is the single writer of the detection JSON — the detect menu
-// and the export dialog both go through it — so what its two scopes select is
+// exportTextJson is the single writer of the detection JSON - the detect menu
+// and the export dialog both go through it - so what its two scopes select is
 // worth pinning down. Everything under test here is scope arithmetic: which
 // pages go in, and what the file is called.
 //
@@ -26,7 +26,7 @@ import { neededHeight } from './typeset.js';
 // The canvas half of the exporter wants two more: an element that answers to
 // `width`/`height`/`getContext`, and an `Image` that decodes. Both are stubs of
 // exactly the surface `renderPageCanvas` touches for a page with no boxes on it
-// — the geometry is what is under test, not the painting — and `naturalSizes`
+// - the geometry is what is under test, not the painting - and `naturalSizes`
 // below is what the fake decoder knows about each src.
 let downloaded;
 let naturalSizes;
@@ -42,7 +42,7 @@ const realRevoke = URL.revokeObjectURL;
 //
 // A box with no rotation is painted onto its own offscreen canvas and then
 // composited onto the page, so the page coordinate of a glyph run is the origin
-// of that bitmap plus the position inside it — `composited` is the first half.
+// of that bitmap plus the position inside it - `composited` is the first half.
 let painted;
 let placed;
 let composited;
@@ -90,7 +90,7 @@ beforeEach(() => {
             height: 0,
             getContext: stubContext,
             // The strip export asks each slice canvas for its file. Nothing
-            // reads the bytes — what is under test there is how many files come
+            // reads the bytes - what is under test there is how many files come
             // out and what they are called.
             toBlob(cb) {
               cb(new Blob([`${this.width}x${this.height}`]));
@@ -102,7 +102,7 @@ beforeEach(() => {
             },
           },
   };
-  // `loadImage` sets crossOrigin, then the handlers, then src — so firing off
+  // `loadImage` sets crossOrigin, then the handlers, then src - so firing off
   // the src setter is safe, and asynchronously, because a synchronous onload
   // would run before the promise it resolves exists.
   globalThis.Image = class {
@@ -141,7 +141,7 @@ describe('exportTextJson', () => {
   it("names the whole-chapter document once, without any page's id in it", async () => {
     await exportTextJson('all');
     expect(downloaded).toEqual(['ch01-text.json']);
-    // One document for three pages, not three files — the reason the export
+    // One document for three pages, not three files - the reason the export
     // dialog's 'all' still goes through the single-file save path.
     expect(app.toast.msg).toBe('Exported text for 3 page(s) as JSON (browser download)');
   });
@@ -155,7 +155,7 @@ describe('exportTextJson', () => {
 });
 
 // The text JSON is otherwise a full round trip, and `type` can only hold one of
-// the three names the importer validates — so without `tags` a line the user
+// the three names the importer validates - so without `tags` a line the user
 // tagged `shout` came back as `dialogue` and their own vocabulary was lost.
 describe('text JSON carries tags', () => {
   it('writes the tags a line carries alongside its legacy type', () => {
@@ -185,18 +185,18 @@ describe('text JSON carries tags', () => {
 // ---------------------------------------------------------------------------
 //
 // A page is `w:0,h:0` until something decodes its image, and until `createChapter`
-// started measuring at import the only thing that ever did was the canvas — one
+// started measuring at import the only thing that ever did was the canvas - one
 // page at a time, as the user opened it. Every chapter imported before that is
 // still on disk that way: 23 of the 28 pages in the author's own chapter.
 //
 // Export All reaches every page, looked at or not. `const W = p.w` handed the
 // unmeasured ones straight to `canvas.width`, and a 0x0 canvas is not a small
-// page — it is an empty file written under the page's name with a success toast
+// page - it is an empty file written under the page's name with a success toast
 // over it. (The PSD path had the same hole and failed louder: ag-psd throws
 // `Invalid document size`.)
 describe('pageSpace', () => {
   it('is the page itself once the page has been measured', async () => {
-    // No decode: a measured page already knows, and the raster is not asked —
+    // No decode: a measured page already knows, and the raster is not asked -
     // which is what keeps the box coordinates and the document in one space
     // even for a page whose art was replaced at a different resolution.
     naturalSizes = { 'blob:art': [4000, 4000] };
@@ -220,7 +220,7 @@ describe('pageSpace', () => {
 
   it('falls back to the default page rather than to nothing', async () => {
     // No size, and art that will not decode. Whatever number is chosen the file
-    // exports as a blank sheet — but 0 is the one that makes it unopenable.
+    // exports as a blank sheet - but 0 is the one that makes it unopenable.
     expect(await pageSpace({ w: 0, h: 0, raw: 'blob:gone' })).toEqual({ w: PAGE_W, h: PAGE_H });
     expect(await pageSpace({ w: 0, h: 0 })).toEqual({ w: PAGE_W, h: PAGE_H });
   });
@@ -240,7 +240,7 @@ describe('renderPageCanvas', () => {
 });
 
 // The editor and the export must break a box's text in the same places, and the
-// mechanism is that both ask `layoutLines` — the same function, with the same
+// mechanism is that both ask `layoutLines` - the same function, with the same
 // two arguments: the style's own size, and `box.w` less the padding on each
 // side. So what is pinned here is that the exporter draws exactly what that
 // function returns for exactly those arguments, which is the half of the parity
@@ -271,16 +271,16 @@ describe('shaped lines reach the page', () => {
 
   // The `shape: 'off'` half is pinned in typeset.test.js instead, against
   // `layoutLines` directly: taking it through the exporter would mean standing
-  // up the hidden-element measurement `wrapLinesDOM` performs — a div with real
-  // layout and a Range over it — which is a browser, not a stub.
+  // up the hidden-element measurement `wrapLinesDOM` performs - a div with real
+  // layout and a Range over it - which is a browser, not a stub.
 
-  // The box lays text out inside 2px of padding on every edge — `.tbox` carries
+  // The box lays text out inside 2px of padding on every edge - `.tbox` carries
   // it in the editor, and the wrapping width has always been `box.w - 4` on both
   // sides to match. The export honoured it when it broke the lines and then
   // ignored it when it placed them, anchoring the block at the box's own corner:
   // so a left-aligned box drew 2px further left in the PNG than on the canvas,
   // and a top-aligned block 2px higher. The auto-height made that worse than
-  // cosmetic — `neededHeight` sizes a box as its block plus the pad on BOTH
+  // cosmetic - `neededHeight` sizes a box as its block plus the pad on BOTH
   // edges, so every auto-fitted box exported with 4px of empty space under its
   // text that the editor did not show.
   //
@@ -296,7 +296,7 @@ describe('shaped lines reach the page', () => {
       const [x, y] = drawnAt();
       expect(x).toBe(box.x + BOX_PAD);
       // The baseline sits half the leading below the top of the line box, which
-      // is the same offset the un-padded version had — the padding is the only
+      // is the same offset the un-padded version had - the padding is the only
       // thing that moved.
       const lineH = box.style.size * box.style.lineHeight;
       expect(y).toBe(box.y + BOX_PAD + (lineH - box.style.size) / 2);
@@ -338,7 +338,7 @@ describe('shaped lines reach the page', () => {
 
   // The balloon a box was fitted to is the fifth argument to that same
   // function, and the export has to pass it or the PNG breaks its lines
-  // somewhere the canvas does not — which is the identical failure the padding
+  // somewhere the canvas does not - which is the identical failure the padding
   // above describes, one step further along. `balloonWidthsFor` is the single
   // helper all three layout sites call, so what is pinned here is that the
   // exporter calls it: with the fit in place the drawn strings are the ones that
@@ -381,8 +381,8 @@ describe('shaped lines reach the page', () => {
 });
 
 // A longstrip chapter exports as slices of one column rather than as its source
-// pages, so what has to be pinned down is the geometry of a slice — which pages
-// land in it and where — and the shape of the file set that comes out. The
+// pages, so what has to be pinned down is the geometry of a slice - which pages
+// land in it and where - and the shape of the file set that comes out. The
 // cut-planning arithmetic itself lives in editor/strip-cuts.js and is tested
 // there against nothing but numbers.
 describe('renderStripSliceCanvas', () => {

@@ -6,14 +6,14 @@
 // cleaned page in the chapter before it would show the first one, which made
 // the cost of opening a chapter linear in its length and permanent for the
 // session. A 200-page chapter at ~1.5 MB a page, raw and cleaned, is ~600 MB
-// held from the moment it opens until it closes — dwarfing everything else the
+// held from the moment it opens until it closes - dwarfing everything else the
 // editor keeps (the box JSON for the same chapter is ~5 MB, and the undo
 // history, which is delta-based, capped at five steps a page and already
 // spilled to `logs/history.json`, is under one).
 //
 // So the pictures live in a window instead: the page on screen, two either
 // side, and nothing else. Five pages is what makes a page turn instant in both
-// directions — the neighbour is already decoded before the arrow is pressed —
+// directions - the neighbour is already decoded before the arrow is pressed -
 // and it is the smallest number that does, which is the whole point. Everything
 // outside the window is revoked, and the page objects have their `raw` and
 // `cleaned` set back to null so nothing downstream is holding a URL that no
@@ -30,7 +30,7 @@
 //   wants it anyway.
 //
 //   Not every page's image is ours. A chapter imported from PSD carries blob
-//   URLs minted by `psd.js` from layer data, with no file on disk behind them —
+//   URLs minted by `psd.js` from layer data, with no file on disk behind them -
 //   revoking one would destroy an image that cannot be re-read. Those pages are
 //   left alone entirely: this module only ever touches a page it minted itself,
 //   or an empty page it can mint from a filename under the chapter's own
@@ -76,7 +76,7 @@ const pinned = (id) => (pins.get(id) ?? 0) > 0;
 // whoever made it.
 const ours = (p) => p != null && (minted.has(p.id) || (!p.raw && !p.cleaned));
 
-// Whether a raw page image exists at all — already in memory, or on disk under
+// Whether a raw page image exists at all - already in memory, or on disk under
 // a name this module can resolve. The batch paths ask this instead of `p.raw`,
 // which since the window exists only answers for the five pages nearest the
 // one on screen.
@@ -95,7 +95,7 @@ export const hasRawImage = (p) => !!(p?.raw || (dirs?.raws && p?.file));
 // the load event still fires, and the canvas is then holding a measurement for
 // a page whose fields no longer point at that URL, with no way to tell it from a
 // picture nobody minted. This is that way. Bounded, because it is a debugging
-// aid for a race rather than a ledger — a decode that lands this many mints
+// aid for a race rather than a ledger - a decode that lands this many mints
 // later is not a case worth remembering, and forgetting one only returns the
 // caller to the behaviour it had before.
 const SRC_MEMORY = 256;
@@ -162,7 +162,7 @@ export function releasePageImages(pageId) {
 
 // Make sure this page's images are in memory, minting them from disk if they
 // are not. Resolves once `p.raw` and `p.cleaned` are whatever they are going to
-// be — including both null, for a page whose files are missing.
+// be - including both null, for a page whose files are missing.
 export function ensurePageImages(p) {
   if (!dirs || !ours(p) || minted.has(p?.id)) return Promise.resolve(p);
   const running = inflight.get(p.id);
@@ -177,7 +177,7 @@ export function ensurePageImages(p) {
     // there first. Either way these URLs have no owner, and leaving them alive
     // is the leak this module exists to close.
     // Three ways this read is already stale by the time it lands, all of which
-    // end the same way — the URLs have no owner and are dropped here rather
+    // end the same way - the URLs have no owner and are dropped here rather
     // than left for someone else to notice:
     //
     //   the chapter changed under it (`epoch`);
@@ -187,7 +187,7 @@ export function ensurePageImages(p) {
     //   page 5, the user jumps to page 20, and by the time the file is read
     //   page 7 is four windows behind. Without this it would be filed in
     //   `minted` anyway and sit there until some later page turn happened to
-    //   sweep it — memory held by a page nobody asked for, which is the exact
+    //   sweep it - memory held by a page nobody asked for, which is the exact
     //   thing this module exists to stop. A pinned page is exempt: a batch job
     //   deliberately mints pages the window does not want.
     const wanted = resident.has(p.id) || pinned(p.id);
@@ -227,7 +227,7 @@ export function setResidentWindow(pages, index, radius = RESIDENT_RADIUS) {
 
 // Run `fn` with this page's images guaranteed present, then give them back
 // unless the window wants them. The pin is what makes it safe for a job that
-// takes seconds — a chapter export, a batch detect — to run while the user
+// takes seconds - a chapter export, a batch detect - to run while the user
 // turns pages underneath it.
 export async function withPageImages(p, fn) {
   if (!p) return fn();
@@ -242,7 +242,7 @@ export async function withPageImages(p, fn) {
   } finally {
     // The chapter changed while `fn` was running. `releaseAllPageImages` has
     // already cleared every pin and revoked every image, so there is nothing of
-    // this job's left to give back — and page ids are per-document counters that
+    // this job's left to give back - and page ids are per-document counters that
     // collide freely across chapters, so the counter under this id is now
     // another chapter's page. Decrementing it there would hand back a pin this
     // job never took and revoke the picture a live export is drawing.

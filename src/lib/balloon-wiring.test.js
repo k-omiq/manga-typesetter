@@ -7,8 +7,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // page's pixels. Nothing in either of them says the app ever asks. This file is
 // about the wiring: that a click places a box at the balloon's inscribed
 // rectangle, that the shape is kept on the box, that every layout path lays text
-// out inside it, that a save and a PSD round trip carry it, and — the half that
-// matters most — that all four of the ways a fit can fail land the user on
+// out inside it, that a save and a PSD round trip carry it, and - the half that
+// matters most - that all four of the ways a fit can fail land the user on
 // exactly the behaviour they had before any of this existed.
 //
 // Two mocks, both of them a permission rather than a fake.
@@ -24,8 +24,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 //   grants, and for the same reason: the stand-in metric
 //   (`chars * size * 0.55`) is deterministic and perfectly good for deciding
 //   where a line breaks, and the only thing this environment lacks is the
-//   licence to use it. Everything else — the real `layoutLines`, the real
-//   `balanceLines`, the real `interiorLineWidths` — runs.
+//   licence to use it. Everything else - the real `layoutLines`, the real
+//   `balanceLines`, the real `interiorLineWidths` - runs.
 let pixels = null;
 vi.mock('./page-pixels.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -101,7 +101,7 @@ function drawBox(img, x, y, w, h, ring = 3) {
   fillRect(img, x, y, w, h, PAPER);
 }
 
-// A column of vertical Japanese, so the detected block's centre lands on ink —
+// A column of vertical Japanese, so the detected block's centre lands on ink -
 // which is the whole reason the seed search in `fillInterior` exists.
 function drawGlyphColumn(img, x, y, w, h, glyph = 22, gapY = 6) {
   for (let gy = y; gy + glyph <= y + h; gy += glyph + gapY) {
@@ -162,7 +162,7 @@ describe('placement, when the page can be looked at', () => {
     placeActiveAt(250, 250);
     const b = page().boxes[0];
 
-    // The fit is stored, and it is the plain JSON the schema promises — two
+    // The fit is stored, and it is the plain JSON the schema promises - two
     // decimals, five keys, no mask anywhere near it.
     expect(b.fit.kind).toBe('ellipse');
     expect(Object.keys(b.fit).sort()).toEqual(['cx', 'cy', 'kind', 'rx', 'ry']);
@@ -170,7 +170,7 @@ describe('placement, when the page can be looked at', () => {
     expect(b.fit.cx).toBeCloseTo(250, -1);
     expect(b.fit.cy).toBeCloseTo(250, -1);
 
-    // And the box is that shape's inscribed rectangle — not the detector's rect
+    // And the box is that shape's inscribed rectangle - not the detector's rect
     // inset by 8%, which is what it would have been.
     const r = inscribedRect(b.fit);
     expect([b.x, b.y, b.w, b.h].map(round2)).toEqual([r.x, r.y, r.w, r.h].map(round2));
@@ -220,7 +220,7 @@ describe('placement, when the page can be looked at', () => {
     const g = fittedRect({ w: 300, h: 300 }, { kind: 'rect', x: 200, y: 200, w: 200, h: 200 });
     expect(g.x + g.w).toBeLessThanOrEqual(300);
     expect(g.y + g.h).toBeLessThanOrEqual(300);
-    // And a page nobody has measured is not clamped against at all — the same
+    // And a page nobody has measured is not clamped against at all - the same
     // rule `placementRect` follows, for the same reason.
     const un = fittedRect({ w: 0, h: 0 }, { kind: 'rect', x: 200, y: 200, w: 200, h: 200 });
     expect(un.x).toBeGreaterThan(190);
@@ -231,7 +231,7 @@ describe('placement, when the page can be looked at', () => {
 describe('placement, when there is no fit to be had', () => {
   // Every one of these has to produce EXACTLY what the app produced before
   // fitting existed. `balloon.js` refuses bad fits on purpose, so this is not a
-  // rare path — it is the path a thought cloud, an SFX burst and every
+  // rare path - it is the path a thought cloud, an SFX burst and every
   // un-decoded page take.
   const expectFallback = (block, vertical) => {
     const b = page().boxes[0];
@@ -347,7 +347,7 @@ describe('balloonWidthsFor — the one helper the three layout sites share', () 
   });
 
   // A rectangle has the same room on every line, which is precisely the flat
-  // number the breaker has always been given — so a narration box goes through
+  // number the breaker has always been given - so a narration box goes through
   // the fitted path and comes out where it started.
   it('is a constant width inside a rectangle', () => {
     const b = boxWith({ kind: 'rect', x: 0, y: 0, w: 120, h: 400 });
@@ -464,7 +464,7 @@ describe('the fit survives a save and a round trip', () => {
   });
 
   // A field that arrives from a future schema, a hand edit or a corrupted file
-  // has to degrade to "this box has no fit" — which is a state every layout path
+  // has to degrade to "this box has no fit" - which is a state every layout path
   // already handles, because it is what every box had before fitting existed.
   it('degrades a malformed or unknown fit to none, rather than throwing', () => {
     for (const bad of [{ kind: 'hexagon', a: 1 }, { kind: 'rect', x: 0, y: 0, w: 0, h: 5 }, 'oval', 7, undefined]) {
@@ -528,7 +528,7 @@ describe('the two new style knobs', () => {
   });
 
   // A style saved before either knob existed has no such key, and the default
-  // has to stand — `hyphenate: undefined` handed to `balanceLines` would turn
+  // has to stand - `hyphenate: undefined` handed to `balanceLines` would turn
   // the feature off rather than leave it alone.
   it('survive a style that predates them', () => {
     const s = normalizeStyle({ size: 20 });

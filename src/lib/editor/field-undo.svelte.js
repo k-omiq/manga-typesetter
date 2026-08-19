@@ -6,7 +6,7 @@
 // chain, and that action is the only route into WebKit's editor. That item is
 // exactly what `patchDefaultMenu` deletes so that ⌘Z can reach the DOM at all
 // (App.svelte explains why it had to go), so once it was gone nothing was left
-// to undo typing — the "falls through to WebKit's own field undo" the removal
+// to undo typing - the "falls through to WebKit's own field undo" the removal
 // was betting on does not exist.
 //
 // The Inspector's textarea could not have relied on it anyway: it renders
@@ -30,7 +30,7 @@ export const COALESCE_MS = 600;
 export const MAX_FIELD_STEPS = 50;
 
 // Input types that describe a source other than the keyboard. Each is one edit
-// of its own and must never be swallowed into the typing run it interrupts —
+// of its own and must never be swallowed into the typing run it interrupts -
 // undoing a paste has to give back exactly what was there before it, not the
 // half-sentence that was being typed around it.
 const ATOMIC_INPUT = /^(insertFrom|deleteBy|insertReplacement|history)/;
@@ -41,7 +41,7 @@ export function createFieldUndo(value = '') {
   return u;
 }
 
-// The field is showing something this stack did not put there — another box
+// The field is showing something this stack did not put there - another box
 // selected, an edit made on the canvas, the editor history rewinding the box's
 // text. Undoing back through a run that no longer describes the field's content
 // would restore text from a different box, so the stack starts again.
@@ -85,7 +85,7 @@ export function caretAfter(from, to) {
 // already on top (or changed nothing).
 //
 // Named for the field rather than `recordEdit`, which is what it was: the store
-// exports a `recordEdit` of its own — the fan-out to the editor's undo history —
+// exports a `recordEdit` of its own - the fan-out to the editor's undo history -
 // and the two have nothing to do with each other beyond the word. Both this and
 // the store are imported by Inspector.svelte and TextBox.svelte already, so the
 // collision was one import line away in either file, and it would have been a

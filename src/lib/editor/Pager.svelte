@@ -2,7 +2,7 @@
   // The page indicator doubles as a jump-to-page field: click the number, it
   // becomes a text box; type a page and press Enter. Anything that isn't a
   // whole page number in range is rejected rather than clamped, so a mistyped
-  // value never silently jumps somewhere the user didn't ask for — it just
+  // value never silently jumps somewhere the user didn't ask for - it just
   // reverts to the plain number, same as abandoning with Escape.
   import { app, gotoPage, nextPage, prevPage } from '../store.svelte.js';
 
@@ -16,7 +16,7 @@
   }
 
   // Guarded on `editing` because leaving the DOM (already resolved by Enter or
-  // Escape) blurs the input too — without the guard that would parse the
+  // Escape) blurs the input too - without the guard that would parse the
   // stale draft a second time.
   function commit() {
     if (!editing) return;

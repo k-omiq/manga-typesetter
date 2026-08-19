@@ -37,25 +37,12 @@
     return Math.max(a, Math.min(b, v));
   }
 
-  // ---------- one history entry per adjustment ----------
-  // `touch()` runs after every change this panel makes: every keystroke in a
-  // number field and every pixel of a slider drag. Recording there would spend
-  // the whole five-step history on one drag of the opacity slider, so the box is
-  // captured the first time a control is touched and the entry is written once
-  // the changes stop.
+  // Debounce history recording during continuous adjustments.
   const SETTLE_MS = 400;
   let pending = null;
   let settleT;
 
-  // The three kinds of edit this panel makes, in one snapshot: the style, the
-  // geometry the Transform group writes straight onto the box, and the content
-  // box's text. Each is compared on its own and recorded as its own kind. An
-  // edit left unrecorded is worse than one with no undo at all — the next press
-  // then rewinds something the user did not just do.
-  // `boxOwnText`, not `b.text`: a free-typed box's text lives on its queue line
-  // and `b.text` is null on both sides of every edit to it, so this panel would
-  // compare null against null, record nothing, and the next undo would rewind
-  // some earlier edit instead.
+  // Capture style, transform geometry, and text for undo history.
   const snapOf = (b) => ({
     style: cloneStyle(b.style),
     text: boxOwnText(b),
@@ -65,62 +52,27 @@
     h: b.h,
   });
   const geomOf = (snap) => ({ x: snap.x, y: snap.y, w: snap.w, h: snap.h });
-  // The two fields the auto-fit is allowed to move, which is all a `style` or
-  // `text` entry has any business restoring — the width and the x are the
-  // Transform group's, and the `resize` entry is what carries those.
+
   const fitOf = (snap) => ({ y: snap.y, h: snap.h });
 
-  // `opts.geom` is the panel saying it wrote x/y/w/h itself — the Transform
-  // group, and nothing else. It exists because the height is no longer the
-  // panel's alone: changing the font, the size or the line height now grows the
-  // box through `autoFitBox`, and comparing geometry unconditionally would file
-  // a `resize` entry beside the `style` one and charge two presses of undo for
-  // one adjustment. An auto-grow gets no entry of its own; it rides on the style
-  // entry, which carries the height either side of it (`fitOf` below).
-  //
-  // An object rather than a boolean because `touch` is also passed straight to
-  // `oninput`/`onchange` on several controls, and a bare positional flag would
-  // read the Event as "the panel wrote geometry".
+  // Explicit geometry edits record resize history.
   function touch(opts) {
-    // A different box than the one still pending settles that one first, rather
-    // than letting its entry stand in for an edit to this one.
+
     if (pending && pending.boxId !== box?.id) settle();
-    // The before-snapshot is taken BEFORE the fit, so a run that also moved the
-    // width records the height the box had when the run started rather than one
-    // the fit had already changed.
+
     if (box && !pending) pending = { pageId: page().id, boxId: box.id, before: snapOf(box) };
     if (pending && opts?.geom) pending.geom = true;
     if (box) autoFitBox(box);
     markUnsaved();
-    rememberStyle(box); // next placed box inherits the latest style tweaks
+    rememberStyle(box);
     clearTimeout(settleT);
     settleT = setTimeout(settle, SETTLE_MS);
   }
 
-  // Everything that would make a pending entry land somewhere it does not
-  // belong closes the window through this seam first: the page turn, the undo,
-  // the start of a drag. Registered rather than exported, so nothing else has to
-  // know this panel is on screen.
-  // The seam hands back an unsubscribe that drops this registration and no
-  // other, so teardown needs no notion of who currently owns the slot: with two
-  // of these mounted — a second inspector, a detached one — the one leaving
-  // releases itself and the one staying keeps hearing about settles.
+  // Hook to settle pending edits on navigation or undo.
   const releaseSettleHook = setEditSettleHook(settle);
   onDestroy(() => {
-    // Settled first, because this panel does not only go away when the editor
-    // does: hiding the Options panel unmounts it too — `FloatingPanel` renders
-    // its children in the branch the hide chevron leaves — and an edit made and
-    // hidden inside the settle window would otherwise stand in the document
-    // with no entry to rewind it, so the next undo would rewind the step
-    // before it instead. Safe on the teardown path for the same reason
-    // `settle` is safe anywhere: `page()` is the frozen stand-in by then, so
-    // the pending entry's page id cannot match and nothing is recorded.
-    settle();
-    releaseSettleHook();
-    // A settle that fires after this panel is gone would be reading whatever
-    // document is open by then. Page and box ids come off per-document
-    // counters and collide freely across chapters, so a stale entry could find
-    // a live box of the same name and record an edit nobody made.
+    // Settle pending changes on panel unmount.
     clearTimeout(settleT);
     pending = null;
   });
@@ -130,33 +82,20 @@
     const pend = pending;
     pending = null;
     if (!pend) return;
-    // Belt and braces beside that seam: `record` pushes onto whichever page's
-    // stack is live and has no page awareness of its own, so an entry for a
-    // page that has since been left would land on the page now on screen — and
-    // the next write would then file that page's whole stack under this one's
-    // key. The hook is what stops that happening; this is what keeps it from
-    // mattering should a path ever be added that does not call the hook.
+    // Ignore pending edits for previous pages.
     if (pend.pageId !== page().id) return;
-    // Resolved by id rather than read off `box`: the settle can land after the
-    // user has selected something else, and the entry belongs to the box that
-    // was edited either way.
+
     const b = pageById(pend.pageId)?.boxes.find((x) => x.id === pend.boxId);
-    if (!b) return; // deleted while the timer ran — its own record covers that
+    if (!b) return;
     const before = pend.before;
     const after = snapOf(b);
     const key = { pageId: pend.pageId, boxId: b.id };
-    // The height the auto-fit left the box at on either side of the run, so an
-    // undo of the style gives the geometry back rather than re-deriving a height
-    // a grow-only fit cannot shrink. Harmless beside the `resize` entry below
-    // when the panel wrote geometry itself: both pairs come off the same two
-    // snapshots, so whichever order the steps are walked in they agree.
+    // Record style edit with before/after geometry.
     const fit = { geomBefore: fitOf(before), geomAfter: fitOf(after) };
     if (JSON.stringify(before.style) !== JSON.stringify(after.style)) {
       record({ t: 'style', ...key, before: before.style, after: after.style, ...fit });
     }
-    // Only when the panel itself wrote geometry. Every other way `h` can differ
-    // between the two snapshots is the auto-fit following a style change, which
-    // belongs to the `style` entry above and is put back by it.
+
     if (pend.geom && ['x', 'y', 'w', 'h'].some((k) => before[k] !== after[k])) {
       record({ t: 'resize', ...key, before: geomOf(before), after: geomOf(after) });
     }
@@ -168,7 +107,7 @@
     box.style.size = clamp(+v || 6, 6, 200);
     touch();
   }
-  // normalize any angle into (-180, 180]
+
   function wrap180(v) {
     return (((v + 180) % 360) + 360) % 360 - 180;
   }
@@ -181,25 +120,17 @@
     touch();
   }
   function setText(v) {
-    // See `setBoxText`: which field a box's text lives in is the store's rule,
-    // and for a free-typed box it is the line's, not the box's.
+
     setBoxText(box, v);
     touch();
   }
 
-  // ---------- ⌘Z inside the Text field ----------
-  // The field owns its undo because nothing else does any more — see
-  // field-undo.svelte.js for what removing the Edit menu's Undo item cost, and
-  // why a controlled `value` would have broken WebKit's own stack regardless.
+  // Text field maintains its own undo stack.
   const fieldUndo = createFieldUndo();
-  // The box the stack is currently describing, so a reselect of the *same* box
-  // does not throw away a run the user can still walk back through.
+
   let fieldOwner = null;
 
-  // Anything that changes the field's text without going through `onTextInput`
-  // — another box selected, an edit typed on the canvas, the editor history
-  // rewinding this box — leaves the stack describing text that is no longer
-  // there, and undoing through it would paste a different box's words back in.
+  // Resync undo stack when box or text changes externally.
   $effect(() => {
     const id = box?.id ?? null;
     const v = box ? boxText(box) : '';
@@ -215,34 +146,22 @@
 
   function onTextKey(e) {
     if (!(e.metaKey || e.ctrlKey) || (e.key !== 'z' && e.key !== 'Z')) return;
-    // Claimed here rather than left to bubble. The window handler already bows
-    // out inside a field, but a build running in an ordinary browser still has
-    // a native stack of its own, and letting the default through would undo the
-    // same keystroke twice.
+    // Intercept Cmd+Z/Shift+Cmd+Z for field undo.
     e.preventDefault();
     const next = e.shiftKey ? redoField(fieldUndo) : undoField(fieldUndo);
-    if (next == null) return; // not `!next` — "" is a step like any other
+    if (next == null) return;
     const el = e.currentTarget;
     const caret = caretAfter(el.value, next);
-    // The node first, the store second. Svelte's `value` write is a no-op when
-    // the node already reads the same string, so the selection set here
-    // survives the re-render `setText` triggers.
+
     el.value = next;
     el.setSelectionRange(caret, caret);
-    // And it goes through `setText` like typing does, so the canvas follows the
-    // field and the change settles into the editor history as one text edit
-    // rather than none.
+
     setText(next);
   }
 
-  // The four hex lengths CSS actually has — #rgb, #rgba, #rrggbb, #rrggbbaa —
-  // and not a `{3,8}` range, which also admitted 5 and 7 digits. `#12345` is not
-  // a colour, and letting it through wrote an unparseable value onto the box.
-  // `BulkStylePanel` carries the same constant for the same reason.
+  // Validate CSS hex color strings.
   const HEX = /^#?(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-  // `el` is the input the value came from. On a reject its value is put back by
-  // hand: the state never changed, so nothing would re-render it, and the field
-  // would go on showing text the panel had silently refused.
+
   function setHex(obj, key, v, el) {
     if (HEX.test(v)) {
       obj[key] = v.startsWith('#') ? v : '#' + v;
@@ -274,11 +193,7 @@
   <div class="insp">
     <!-- Content -->
     <div class="grp">
-      <!-- A free-typed box's line number is negative and internal — see
-           `isFreeLine` — so it is named for what it is rather than shown. Both
-           the never-had-a-line box (`lineN == null`, saved before free boxes
-           joined the queue) and today's read the same way to the user, because
-           to the user they are the same thing. -->
+
       <label class="lbl">Text {isFreeBox(box) ? '· free' : `· line ${box.lineN}`}</label>
       <textarea value={boxText(box)} oninput={onTextInput} onkeydown={onTextKey} ondblclick={() => beginEdit(box.id)}></textarea>
     </div>
@@ -485,14 +400,7 @@
           <div class="switch" class:on={s.hyphenate} role="switch" aria-checked={s.hyphenate} tabindex="0" onclick={() => { s.hyphenate = !s.hyphenate; touch(); }} onkeydown={(e) => e.key === 'Enter' && ((s.hyphenate = !s.hyphenate), touch())}><span class="knob"></span></div>
           <span class="lbl2" title="A word that fits on no line of this block may be split with a hyphen">Hyphenate long words</span>
         </div>
-        <!-- The balloon. Two controls rather than one, because they answer two
-             different questions: the switch is "lay this box out to the shape it
-             was fitted to", which a user turns off when the fit is on the wrong
-             bubble or they simply want a rectangle; the button is "measure the
-             shape again from where the box is NOW", which is what a box dragged
-             onto another balloon — or a page cleaned after it was typeset —
-             needs. Turning the switch off deliberately keeps the shape, so
-             turning it back on costs nothing and does not need a re-measure. -->
+
         <div class="switch-row">
           <div class="switch" class:on={s.balloon} role="switch" aria-checked={s.balloon} tabindex="0" onclick={() => { s.balloon = !s.balloon; touch(); }} onkeydown={(e) => e.key === 'Enter' && ((s.balloon = !s.balloon), touch())}><span class="knob"></span></div>
           <span class="lbl2" title="Lay the text out to the balloon this box was fitted to, instead of to its rectangle">Fit text to balloon</span>
@@ -526,10 +434,7 @@
         </div>
         <div class="row2">
           <div class="field"><label class="lbl">Width</label><input type="number" min="40" value={Math.round(box.w)} oninput={(e) => { box.w = clamp(+e.target.value || 40, 40, 5000); touch({ geom: true }); }} /></div>
-          <!-- Typing a height smaller than the text needs is answered by the
-               auto-fit growing it straight back, which is the point: the box's
-               rectangle describes its text. Turn Auto-fit height off in the
-               Typeset group to size it by hand. -->
+
           <div class="field"><label class="lbl">Height</label><input type="number" min="30" value={Math.round(box.h)} oninput={(e) => { box.h = clamp(+e.target.value || 30, 30, 5000); touch({ geom: true }); }} /></div>
         </div>
         <div class="field">

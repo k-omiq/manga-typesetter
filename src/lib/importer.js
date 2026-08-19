@@ -1,7 +1,7 @@
 // Source material coming in from outside the library: the native file picker,
 // and the tolerant normalisation of a translations JSON.
 //
-// Nothing here touches the open document — it does not import the store at all.
+// Nothing here touches the open document - it does not import the store at all.
 // Imports belong to the home screen: a chapter's pages come from the library,
 // and the editor is for typesetting. `tags.svelte.js` is the one exception and
 // is not one in substance: it is the tag *model*, it imports nothing itself, and
@@ -18,7 +18,7 @@ function parseLineNumber(val) {
   return Number.isFinite(num) ? num : null;
 }
 
-// Normalize one line object/string → { n, jp, en, type } — plus `tags` on the
+// Normalize one line object/string → { n, jp, en, type } - plus `tags` on the
 // one input that actually carries them.
 // Back-compat: a bare string or a `{ text }`-only object becomes `en`; legacy
 // `natural`/`stylised` collapse to a single `en` (natural preferred).
@@ -33,7 +33,7 @@ function parseLineNumber(val) {
 // distinction matters: `tags` absent means "nobody has said", which is what lets
 // `lineTags` read the line's legacy `type` instead, and what lets a re-import
 // carry the tags the user applied by hand over the file's silence. An array
-// materialised here out of nothing — `[]` for every line — would look like the
+// materialised here out of nothing - `[]` for every line - would look like the
 // user having deliberately cleared every tag in the chapter, and a re-import
 // would then wipe them all. See `carryTagsForward`.
 function normLine(item, idx, shift = 0) {
@@ -54,8 +54,8 @@ function normLine(item, idx, shift = 0) {
     en: String(en),
     type: TYPES.includes(type) ? type : 'dialogue',
   };
-  // Vetted rather than trusted — this is the one place an arbitrary file reaches
-  // the document — and vetted by the document's own function rather than a fold
+  // Vetted rather than trusted - this is the one place an arbitrary file reaches
+  // the document - and vetted by the document's own function rather than a fold
   // spelled a second time here, which is also what makes `type` follow the tags:
   // a file carrying both, disagreeing, would otherwise land a line whose badge
   // and whose export said different things about it.
@@ -180,7 +180,7 @@ export async function pickFilesTauri({ name, extensions, multiple }) {
     }
   }
   // Everything downstream of this pairs the list with pages BY POSITION. A list
-  // that quietly skipped file 5 of 20 is not 19 good files — it is 15 pages
+  // that quietly skipped file 5 of 20 is not 19 good files - it is 15 pages
   // about to be given the wrong image, under a summary that reports the loss as
   // one missing page at the end. So a partial read is a failure, not a result.
   if (unreadable.length) {

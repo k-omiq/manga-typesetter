@@ -6,9 +6,7 @@
 
   let { onNewChapter, onImportPsd, onSources } = $props();
 
-  // Slice 1 knows two facts about a chapter: whether it has pages, and whether
-  // anything has been placed on them. Three states, no progress model — a
-  // percentage would be a number this app cannot honestly produce yet.
+  // Chapter progress state.
   function status(c) {
     if (!c.pageCount) return { mark: '·', label: 'No pages', on: false };
     if (!c.typeset) return { mark: '○', label: 'Raws only', on: false };
@@ -19,19 +17,10 @@
   const pageTotal = $derived((project?.chapters ?? []).reduce((n, c) => n + c.pageCount, 0));
 
   let confirmingId = $state(null);
-  // The row whose mode is being written, so a slow disk cannot be clicked twice
-  // into two writes of the same file.
+  // Track active row mode write.
   let switchingId = $state(null);
 
-  // The chapter's workflow mode, switched from the row rather than from inside
-  // the editor: it decides what the editor *is* when it opens, and a control
-  // that reshapes the window you are looking at belongs on the screen you choose
-  // the chapter from. Two states, so the badge is the switch — a menu for a
-  // binary would be one more click for no more choice.
-  //
-  // A chapter that is currently open takes a different path inside
-  // `setChapterMode` (the state changes and autosave persists it), so this works
-  // either way and the caller does not have to know which.
+  // Toggle chapter workflow mode.
   async function onToggleMode(c) {
     if (switchingId) return;
     switchingId = c.id;

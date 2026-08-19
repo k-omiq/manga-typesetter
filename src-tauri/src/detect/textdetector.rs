@@ -1,24 +1,6 @@
-//! The comic_text_detector, in Rust.
+//! Text detector running YOLOv5 (blocks), DBNet (lines), and U-Net (segmentation mask).
 //!
-//! One network, three heads, run once per page:
-//!
-//! - `blk` is a YOLOv5 detection head proposing text *blocks* — roughly, speech
-//!   bubbles — already decoded to boxes by the ONNX export.
-//! - `det` is a DBNet head predicting a shrunk probability map from which
-//!   individual text *lines* are recovered.
-//! - `seg` is a U-Net text mask, used here only to decide whether a proposal or
-//!   a stray line actually has ink under it. The original also refines it into
-//!   an inpainting mask; this app does not inpaint, so that half is not ported.
-//!
-//! The heads disagree about what a unit of text is, and `textblock::group_output`
-//! reconciles them. Everything before that point lives here: letterboxing the
-//! page, feeding the session, and mapping each head's output back onto page
-//! coordinates.
-//!
-//! Fidelity is the whole point of the module, so the arithmetic is deliberately
-//! unidiomatic in places — truncating casts where numpy truncates, half-to-even
-//! rounding where numpy rounds, `f32` where torch used `f32`. See `cvops.rs` for
-//! the OpenCV primitives underneath.
+//! Reconciles block proposals and line quads into reading-ordered text blocks.
 
 use image::{DynamicImage, GenericImageView, GrayImage};
 use ort::session::Session;
@@ -29,44 +11,40 @@ use super::dbnet::boxes_from_bitmap;
 use super::geometry::{nms, BBox};
 use super::textblock::{group_output, Language, Quad};
 
-/// The square input the detector was exported at.
+/// Square input size for comic text detector model (1024x1024).
 pub const INPUT_SIZE: usize = 1024;
-/// Objectness and class-confidence floor for the block head.
+/// Objectness and class-confidence floor for block head.
 pub const CONF_THRESHOLD: f32 = 0.4;
-/// IoU above which two same-class block proposals are considered duplicates.
+/// IoU threshold for NMS on block proposals.
 pub const NMS_THRESHOLD: f32 = 0.35;
-/// Detections kept after NMS, matching the YOLOv5 default.
+/// Maximum detections kept after NMS.
 pub const MAX_DETECTIONS: usize = 300;
-/// Mean shrink-map probability a line quad must reach to be kept.
+/// Mean shrink-map probability threshold for keeping line quads.
 pub const BOX_THRESHOLD: f32 = 0.6;
 
-/// One text block, in page coordinates, as the rest of the app consumes it.
+/// Detected text block in page coordinates.
 #[derive(Debug, Clone)]
 pub struct TextBlockOut {
     /// Bounding box, `[x1, y1, x2, y2]`.
     pub xyxy: [i32; 4],
     /// Line quads, each four points ordered around the line.
     pub lines: Vec<Quad>,
-    /// True when the text runs top-to-bottom, as most Japanese does.
+    /// True when text runs top-to-bottom.
     pub vertical: bool,
-    /// Glyph size in pixels: the mean line width for vertical text, the mean
-    /// line height otherwise.
+    /// Glyph size in pixels (mean line width for vertical, mean line height for horizontal).
     pub font_size: f64,
-    /// Rotation of the text in degrees, snapped to 0 below 3.
+    /// Rotation in degrees, snapped to 0 below 3.
     pub angle: i32,
     pub language: Language,
 }
 
-/// A loaded comic_text_detector session.
+/// Loaded comic_text_detector ONNX session.
 pub struct TextDetector {
     session: Session,
 }
 
 impl TextDetector {
-    /// Open the ONNX export, preferring CoreML and falling back to CPU.
-    ///
-    /// Silent fallback rather than an error: CoreML is an optimisation, and a
-    /// machine where it fails to register should still detect text, just slower.
+    /// Loads ONNX model, preferring CoreML on macOS with CPU fallback.
     pub fn load(model_path: &std::path::Path) -> ort::Result<TextDetector> {
         #[cfg_attr(target_os = "macos", allow(unused_mut))]
         let mut builder = Session::builder()?;
@@ -76,12 +54,7 @@ impl TextDetector {
         Ok(TextDetector { session })
     }
 
-    /// Detect text blocks on one page.
-    ///
-    /// Returns the blocks in reading order and the page-sized text mask. The
-    /// mask is handed back rather than dropped because the OCR stage needs it
-    /// again: splitting an over-long line into chunks looks for the columns of
-    /// lowest ink density, which is a question about this mask.
+    /// Detects text blocks and page-sized mask on an image.
     pub fn detect(&mut self, img: &DynamicImage) -> ort::Result<(Vec<TextBlockOut>, GrayImage)> {
         let (im_w, im_h) = img.dimensions();
         let lb = Letterbox::fit(im_w as usize, im_h as usize);
@@ -118,21 +91,16 @@ impl TextDetector {
     }
 }
 
-/// How the page was fitted into the model's square.
-///
-/// Not `geometry::Letterbox`: that one centres the padding, as Ultralytics does.
-/// This detector's letterbox pads only the right and bottom, and its inverse
-/// mapping is a plain ratio per axis rather than a shared scale — the two are
-/// different enough that sharing a type would only invite mixing them up.
+/// Asymmetric letterbox mapping (right and bottom padding only).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Letterbox {
-    /// Scaled size of the page inside the square.
+    /// Scaled size of page inside square input.
     pub inner_w: usize,
     pub inner_h: usize,
-    /// Padding on the right and bottom, in model pixels.
+    /// Right and bottom padding in model pixels.
     pub pad_w: usize,
     pub pad_h: usize,
-    /// Page pixels per model pixel, per axis.
+    /// Page pixels per model pixel per axis.
     pub ratio_x: f64,
     pub ratio_y: f64,
 }
@@ -155,7 +123,7 @@ impl Letterbox {
     }
 }
 
-/// Python's `round`, and numpy's: ties go to the even value.
+/// Half-to-even rounding matching Python/NumPy.
 fn round_half_even(v: f64) -> f64 {
     let r = v.round();
     if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
@@ -165,14 +133,7 @@ fn round_half_even(v: f64) -> f64 {
     }
 }
 
-/// Letterbox the page and pack it into the model's input tensor.
-///
-/// The channel order is BGR, not RGB. The Python path arrives there by
-/// accident — it converts BGR to RGB and then reverses the channel axis while
-/// transposing, undoing itself — but the weights were trained through that same
-/// accident, so BGR is what the model expects. Feeding RGB costs real accuracy
-/// on coloured pages and is invisible on greyscale ones, which is the worst way
-/// for a bug like this to behave.
+/// Preprocesses image into BGR planar float tensor (BGR matches training data).
 pub fn preprocess(img: &DynamicImage, lb: &Letterbox) -> Vec<f32> {
     let (w, h) = img.dimensions();
     let rgb = img.to_rgb8();
@@ -184,7 +145,7 @@ pub fn preprocess(img: &DynamicImage, lb: &Letterbox) -> Vec<f32> {
         for x in 0..lb.inner_w {
             let src = (y * lb.inner_w + x) * 3;
             let dst = y * INPUT_SIZE + x;
-            // Planes in BGR order: the source is RGB, so index it backwards.
+            // BGR planar order.
             out[dst] = scaled[src + 2] as f32 / 255.0;
             out[plane + dst] = scaled[src + 1] as f32 / 255.0;
             out[2 * plane + dst] = scaled[src] as f32 / 255.0;
@@ -193,13 +154,7 @@ pub fn preprocess(img: &DynamicImage, lb: &Letterbox) -> Vec<f32> {
     out
 }
 
-/// Decode the YOLO block head into page-coordinate proposals.
-///
-/// The export bakes the grid and anchor arithmetic in, so each row is already
-/// `[cx, cy, w, h, objectness, ...class scores]` in model pixels. Confidence is
-/// objectness times class score, thresholded twice — once on objectness alone,
-/// which is what the original does and which lets a confident-but-ambiguous
-/// detection through to the class comparison.
+/// Decodes YOLO block proposals in page coordinates.
 fn decode_blocks(data: &[f32], anchors: usize, channels: usize, lb: &Letterbox) -> Vec<([i32; 4], usize)> {
     if channels < 6 || anchors == 0 || data.len() < anchors * channels {
         return Vec::new();
@@ -239,10 +194,6 @@ fn decode_blocks(data: &[f32], anchors: usize, channels: usize, lb: &Letterbox) 
         .into_iter()
         .take(MAX_DETECTIONS)
         .map(|b| {
-            // Truncating casts, because numpy's `astype(np.int32)` truncates.
-            // Boxes are deliberately *not* clamped to the page: the original
-            // does not, and a proposal that overhangs the edge still needs to
-            // match the lines inside it.
             let (rx, ry) = (lb.ratio_x as f32, lb.ratio_y as f32);
             (
                 [
@@ -310,8 +261,7 @@ mod tests {
 
     #[test]
     fn letterbox_pads_only_the_right_and_bottom() {
-        // A tall page fills the height and pads the width — and the pad is all
-        // on one side, unlike the centred Ultralytics letterbox in geometry.rs.
+        // Pads on right and bottom only, unlike centered YOLO letterboxing.
         let lb = Letterbox::fit(1080, 1535);
         assert_eq!(lb.inner_h, 1024);
         assert_eq!(lb.inner_w, 720);
@@ -349,9 +299,6 @@ mod tests {
 
     #[test]
     fn preprocess_pads_with_black_and_orders_channels_bgr() {
-        // Red page: in a BGR tensor the *last* plane is the bright one. Getting
-        // this backwards is silent on a greyscale scan and wrong on a colour
-        // page, so it is worth a test rather than a comment.
         let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(600, 900, Rgb([200, 10, 0])));
         let lb = Letterbox::fit(600, 900);
         let t = preprocess(&img, &lb);
@@ -367,9 +314,7 @@ mod tests {
 
     #[test]
     fn decode_blocks_reads_row_major_rows_and_scales_to_the_page() {
-        // Two anchors of seven values each, laid out anchor-major — the opposite
-        // of the YOLO11 head in geometry.rs, and the reason this decoder is
-        // separate rather than shared.
+        // Two anchors of seven values each, laid out anchor-major.
         let lb = Letterbox::fit(2048, 2048);
         let data: Vec<f32> = vec![
             // cx, cy, w, h, obj, eng, ja
@@ -412,9 +357,7 @@ mod tests {
 
     #[test]
     fn page_mask_does_not_smear_the_padding_across_the_page() {
-        // The mask must be cropped to the unpadded region *before* it is scaled
-        // up. Skip the crop and the right-hand third of every page comes back
-        // blank, which silently deletes text blocks via the density gate.
+        // The mask must be cropped to the unpadded region *before* it is scaled up.
         let lb = Letterbox::fit(512, 1024);
         let seg = vec![1f32; INPUT_SIZE * INPUT_SIZE];
         let m = page_mask(&seg, &lb, 512, 1024).unwrap();
@@ -433,10 +376,7 @@ mod tests {
         let lines = decode_lines(&det, &lb);
         assert_eq!(lines.len(), 1);
         let xs: Vec<i32> = lines[0].iter().map(|p| p[0]).collect();
-        // The blob spans model x 100..139, which is page x 200..278 at this
-        // page's 2x ratio. The quad must straddle that — wider, because of the
-        // unclip — but not by more than the ~25 px (50 on the page) the blob's
-        // own area and perimeter allow.
+        // Model x 100..139 maps to page x 200..278 with 2x ratio, adjusted for unclip expansion.
         let (lo, hi) = (*xs.iter().min().unwrap(), *xs.iter().max().unwrap());
         assert!((150..200).contains(&lo), "left edge {lo}, quad {xs:?}");
         assert!((300..340).contains(&hi), "right edge {hi}, quad {xs:?}");

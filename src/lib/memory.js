@@ -3,7 +3,7 @@
 //
 // There is no web API that answers this. `performance.memory` is Chromium-only
 // and WKWebView does not implement it, and even where it exists it reports the
-// JS heap — not the decoded images, which is the part that matters here. The
+// JS heap - not the decoded images, which is the part that matters here. The
 // only honest number comes from outside the web view, which is why this is a
 // command and not a measurement the page takes of itself.
 
@@ -32,7 +32,7 @@ export const ROLE_LABELS = {
 
 // A `MemoryReport`, or null outside Tauri (a browser dev server has no host
 // process to ask). `supported: false` is the platform saying it cannot do the
-// responsible-process attribution the number depends on — a different thing
+// responsible-process attribution the number depends on - a different thing
 // from "no answer", and the UI says so differently.
 export async function processMemory() {
   const invoke = await getInvoke();

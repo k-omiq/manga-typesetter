@@ -6,7 +6,7 @@
 // decision for the app.
 //
 // The requirement that shapes everything here is that placement asks
-// SYNCHRONOUSLY. A click lands a box, and the box's size comes out of the fit —
+// SYNCHRONOUSLY. A click lands a box, and the box's size comes out of the fit -
 // so the fit has to be available in the same turn as the click, or placement
 // would have to become async and every caller of `placeActiveAt` (the canvas,
 // the tests, the history) would have to learn about promises for the sake of one
@@ -15,7 +15,7 @@
 // doing it once per page and remembering the answer is.
 //
 // Which raster. The canvas draws `p.cleaned ?? p.raw` and so does every
-// exporter, so that is what gets decoded here — the detector must run on the
+// exporter, so that is what gets decoded here - the detector must run on the
 // picture the user is looking at. It matters when the two differ, which is
 // exactly the case a clean creates: the raw still has the Japanese in it, and
 // the flood fill seeded inside a text block would meet glyphs the cleaned page
@@ -27,7 +27,7 @@
 // The bound is the other half. A 200-page chapter decoded page by page would
 // hold five gigabytes of `ImageData` alive, which is not a cache, it is a leak
 // with a lookup table in front of it. So the map holds two pages, evicting the
-// least recently used — two rather than one because the pager keeps a page and
+// least recently used - two rather than one because the pager keeps a page and
 // the one being turned to alive across a turn, and rather than ten because the
 // only thing a hit buys is a click that does not stall. A miss is not an error:
 // the caller falls back to the detector's rectangle, which is what it did before
@@ -43,7 +43,7 @@ const cache = new Map();
 
 // Whether this environment can decode anything at all. Node cannot, and every
 // function here answers null there, which puts placement straight onto its
-// fallback path — the same behaviour as a page nobody has looked at yet.
+// fallback path - the same behaviour as a page nobody has looked at yet.
 const canDecode = () => typeof document !== 'undefined';
 
 // The raster the canvas draws, and the one a fit must be measured against. One
@@ -64,7 +64,7 @@ function promote(pageId, entry) {
 // object URLs are minted per blob, so a page whose cleaned raster is replaced
 // gets a new URL, and a lookup that quotes the new URL against an entry holding
 // the old one misses instead of handing back the pixels of art that is no longer
-// on screen. That is the whole invalidation story for a clean landing — there is
+// on screen. That is the whole invalidation story for a clean landing - there is
 // no event to subscribe to and nothing to remember to call.
 export function rememberPagePixels(pageId, src, image) {
   if (pageId == null || !src || !canDecode()) return null;
@@ -81,8 +81,8 @@ export function rememberPagePixels(pageId, src, image) {
     ctx.drawImage(image, 0, 0);
     data = ctx.getImageData(0, 0, w, h);
   } catch {
-    // A decode that fails — a tainted canvas, a browser refusing the allocation
-    // — costs the fit and nothing else. The caller falls back.
+    // A decode that fails - a tainted canvas, a browser refusing the allocation
+    // - costs the fit and nothing else. The caller falls back.
     return null;
   }
   const entry = { src, image: data };
@@ -95,7 +95,7 @@ export function rememberPagePixels(pageId, src, image) {
 // answers from the map or it does not answer at all.
 //
 // The `src` check is what makes a hit safe. A page id is only unique within a
-// document — `loadProjectPages` keeps the ids a chapter was saved with — so the
+// document - `loadProjectPages` keeps the ids a chapter was saved with - so the
 // id alone would let one chapter's page 3 hand its pixels to another's.
 export function pagePixelsFor(p) {
   const id = p?.id;
@@ -108,8 +108,8 @@ export function pagePixelsFor(p) {
 }
 
 // Drop one page, or the lot. The src check above already covers a raster being
-// replaced; this is for the coarser event — a chapter closing or another one
-// opening — where the ids themselves stop meaning what they meant and the memory
+// replaced; this is for the coarser event - a chapter closing or another one
+// opening - where the ids themselves stop meaning what they meant and the memory
 // should go back immediately rather than at the next decode.
 export function forgetPagePixels(pageId) {
   if (pageId == null) cache.clear();

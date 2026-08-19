@@ -4,9 +4,9 @@
   // one cluster at the top right. Detect, Bulk style and Export used to float in
   // the middle of the band, over the page, where they read as four loose buttons
   // with no relationship to each other; they now sit in the same row as the font
-  // and settings drawers, split from them by a hairline — chapter verbs on the
+  // and settings drawers, split from them by a hairline, chapter verbs on the
   // left of it, app drawers on the right.
-  // Nothing here is laid out by a parent — every row pins itself to the window,
+  // Nothing here is laid out by a parent, every row pins itself to the window,
   // so the canvas underneath is never inset by chrome it does not know about.
   import { app, openBulk, closeBulk, isTranslateMode, toast } from '../store.svelte.js';
   import { goProject, goLibrary } from '../route.svelte.js';
@@ -19,7 +19,7 @@
 
   // What a translate chapter keeps: the way out, who you are, Detect, and the
   // JSON. Bulk style and the font library configure typesetting that is not
-  // happening here, and Settings is reachable from the home screens — so the
+  // happening here, and Settings is reachable from the home screens, so the
   // whole right-hand group goes with the hairline that separated it.
   const translate = $derived(isTranslateMode());
 
@@ -27,7 +27,7 @@
   // meaningful scope, so the dialog that asks about both is skipped and the
   // button does the thing. The busy flag and the catch are held here rather than
   // inside `exportTextJson`, exactly as `exportImages` and the detect menu's own
-  // JSON item hold them — see the note on that function.
+  // JSON item hold them, see the note on that function.
   async function saveJson() {
     app.exporting = true;
     try {
@@ -50,7 +50,7 @@
 
   // The save indicator rides on the project pill because it is a fact about the
   // open chapter. There is no manual save in this app, so a rejected autosave is
-  // the user's only signal that their work is not reaching the disk — hence the
+  // the user's only signal that their work is not reaching the disk, hence the
   // third state, and hence its staying up until a write lands.
   const saveTitle = $derived(
     app.saveFailed
@@ -78,8 +78,8 @@
     }
   }
 
-  // The pill is the only thing on screen while detection runs — the menu closes
-  // itself the moment an item is chosen — so it carries the whole progress
+  // The pill is the only thing on screen while detection runs, the menu closes
+  // itself the moment an item is chosen, so it carries the whole progress
   // report. `app.detecting` is what both scopes set, and it is what says
   // something is happening at all; the count is the extra a whole-chapter run
   // has to say and a single page does not.
@@ -97,7 +97,7 @@
   );
 
   // Handed to the menu so its outside-pointerdown check can spare the button
-  // that opened it — see the note there.
+  // that opened it, see the note there.
   let detectBtn = $state(null);
   let detectOpen = $state(false);
 

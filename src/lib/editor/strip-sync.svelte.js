@@ -1,7 +1,7 @@
 // ===== Where the canvas strip is, so the reference strip can follow =====
 //
 // In a longstrip chapter the reference sidebar is not one raw page any more, it
-// is the whole chapter's raws in a column beside the canvas's — and two columns
+// is the whole chapter's raws in a column beside the canvas's - and two columns
 // of the same chapter that scroll independently are worse than one, because the
 // reader has to keep re-finding their place in the one they are not driving.
 //
@@ -12,12 +12,12 @@
 //
 // A module of state rather than a prop or an event because the two components
 // are siblings under EditorRoot with no relationship to each other, and the
-// alternative — the canvas reaching into the sidebar's DOM — puts one
+// alternative - the canvas reaching into the sidebar's DOM - puts one
 // component's element in another component's file.
 //
 // The traffic is one-way by construction: nothing here is written by the
 // sidebar, so a scroll the user performs in the sidebar itself cannot echo back
-// into the canvas. That is also why there is no guard flag on the write — there
+// into the canvas. That is also why there is no guard flag on the write - there
 // is no second writer to guard against, and the sidebar's own wheel goes on
 // working until the next canvas scroll puts it back in step.
 export const stripScroll = $state({

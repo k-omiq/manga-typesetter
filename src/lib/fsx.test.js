@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // A filesystem that can be told to die partway through, so "what does the
 // target hold afterwards?" has an answer. `mode`:
-//   'ok'       — everything works
-//   'truncate' — the write flushes a prefix and then the device goes away
-//   'rename'   — the write lands, the rename does not
+//   'ok'       - everything works
+//   'truncate' - the write flushes a prefix and then the device goes away
+//   'rename'   - the write lands, the rename does not
 const h = vi.hoisted(() => ({ disk: new Map(), writes: [], mode: 'ok' }));
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
@@ -51,7 +51,7 @@ describe('writeTextFileAtomic', () => {
 
   it('writes the temp file beside the target, never over it', async () => {
     await fsx.writeTextFileAtomic(TARGET, NEXT);
-    // Same directory by construction — the target's own path plus a suffix —
+    // Same directory by construction - the target's own path plus a suffix -
     // and a file, so the scan (which only considers directory entries) can
     // never mistake a leftover for a project or a chapter.
     expect(h.writes).toHaveLength(1);

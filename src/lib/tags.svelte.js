@@ -1,6 +1,6 @@
 // ===== Tags =====
-// A tag is a name the user puts on a queued line — `sfx`, `narration`, whatever
-// else they invent — plus an optional default font and outline that a box picks
+// A tag is a name the user puts on a queued line - `sfx`, `narration`, whatever
+// else they invent - plus an optional default font and outline that a box picks
 // up at the moment it is placed.
 //
 // Two halves, deliberately kept apart, because they persist in different places
@@ -10,8 +10,8 @@
 //                     They are what the user marked up, and they mean nothing
 //                     without the chapter they were marked on.
 //   the registry      lives in localStorage, beside the panel geometry and the
-//                     export prefs. It is a working vocabulary — "sfx means
-//                     Bangers with a fat outline" — and it belongs to the person,
+//                     export prefs. It is a working vocabulary - "sfx means
+//                     Bangers with a fat outline" - and it belongs to the person,
 //                     not to the chapter. The decisive argument is that nothing
 //                     needs it to draw: a tag's defaults are baked into the box's
 //                     own style at placement time, so a chapter opened on a
@@ -20,13 +20,13 @@
 //                     copy of that vocabulary per chapter, drifting apart the
 //                     first time the user changed their mind.
 //
-// This module imports nothing. Not the store, not the filesystem — the functions
+// This module imports nothing. Not the store, not the filesystem - the functions
 // that touch the document take the pages they work on as an argument, which is
 // also what makes the whole model testable in node. The store imports *this*,
 // for the one thing that has to happen inside placement.
 
-// Every write here is a discrete click — created a tag, edited a tag, applied a
-// tag — never a drag or a key repeat, so there is nothing to coalesce and the
+// Every write here is a discrete click - created a tag, edited a tag, applied a
+// tag - never a drag or a key repeat, so there is nothing to coalesce and the
 // write is synchronous, exactly like `saveExportPrefs`. The debounced tier is for
 // writers driven by a gesture; this is not one.
 const KEY = 'mt.tags';
@@ -42,8 +42,8 @@ export const LEGACY_TAGS = ['sfx', 'narration'];
 // already in every chapter.json detection has ever written, and the migration
 // below buys nothing. Length is capped because the name is rendered in a badge on
 // a row in a narrow floating panel.
-// This function must be idempotent — `normalizeTagName(normalizeTagName(x))`
-// has to equal `normalizeTagName(x)` — because the two halves of the model
+// This function must be idempotent - `normalizeTagName(normalizeTagName(x))`
+// has to equal `normalizeTagName(x)` - because the two halves of the model
 // normalise at different moments and then compare the results by string
 // equality. `tagsInUse` reports the name stored on the line; `boxesWithTag`
 // re-normalises the name it is handed and matches against that. A name that
@@ -62,7 +62,7 @@ export function normalizeTagName(raw) {
 
 // ---------- the registry ----------
 // Ordered most-recently-used first. One array rather than a list plus a separate
-// recency order, because two of them can disagree — a name in the order that is
+// recency order, because two of them can disagree - a name in the order that is
 // not in the list is a slot in the picker that applies a tag with no defaults and
 // no way to edit it. The picker's first two slots are simply the first two
 // entries.
@@ -104,8 +104,8 @@ export function sanitizeTags(stored) {
 let store = null;
 
 // Bound by `loadTags` when a test hands over a fake; otherwise the browser's own.
-// Unlike the panel geometry there is no mount that could bind it — the picker is
-// inside the queue, which the library screen never renders — so this module reads
+// Unlike the panel geometry there is no mount that could bind it - the picker is
+// inside the queue, which the library screen never renders - so this module reads
 // itself in at load and falls back to `localStorage` on every write.
 const storage = () => store ?? globalThis.localStorage ?? null;
 
@@ -141,8 +141,8 @@ export const findTag = (name) => tags.list.find((t) => t.name === name) ?? null;
 
 // Registering and re-ranking are one operation because they are one event: the
 // user used this tag. A name that is not in the registry joins it at the front
-// with no defaults — which is how a tag that only ever existed in an imported
-// chapter.json becomes editable — and a name already in it moves to the front.
+// with no defaults - which is how a tag that only ever existed in an imported
+// chapter.json becomes editable - and a name already in it moves to the front.
 // `defaults` is only honoured on the way in; see `updateTag` for why an existing
 // entry is never overwritten from here.
 export function touchTag(name, defaults = null) {
@@ -162,7 +162,7 @@ export function touchTag(name, defaults = null) {
 
 // Creating a tag is `touchTag` with the defaults the creation form collected.
 // Naming it separately would be a parallel function; naming it at all is worth it
-// because the caller's intent — and the failure when the name is already taken —
+// because the caller's intent - and the failure when the name is already taken -
 // is different. An existing name is returned rather than re-defaulted, so the
 // create form can never silently overwrite the defaults of a tag the user forgot
 // they had.
@@ -174,7 +174,7 @@ export function createTag(name, defaults = null) {
 // this writes the registry and nothing else. It never walks the document, because
 // a box's style is a value that was copied out of this entry once, at placement,
 // and never a reference back into it. So a tag edited today cannot reach a box
-// placed yesterday — not by policy, but because there is no path from here to
+// placed yesterday - not by policy, but because there is no path from here to
 // that box. See `styleForLine` for the other half.
 //
 // `null` clears a default back to unset, which is the state that means "fall back
@@ -192,7 +192,7 @@ export function updateTag(name, patch = {}) {
 
 // What the settings form saves, and the reason it is not `updateTag` with a
 // fallback to `createTag`: the picker offers tags the open chapter uses that the
-// registry has never seen, and saving settings on one of those has to admit it —
+// registry has never seen, and saving settings on one of those has to admit it -
 // but admitting it through `touchTag` re-ranked it to slot 1, which is a third
 // case in a rule stated as "promote on apply, never on remove". The user was
 // configuring a tag, not using it, and the picker reordered under their cursor
@@ -214,8 +214,8 @@ export function saveTagDefaults(name, defaults = {}) {
 }
 
 // Renaming is deliberately not offered. A tag's name is the only thing joining an
-// entry here to the lines carrying it in every chapter on disk — including the
-// ones not open — so a rename would either orphan those lines or need a rewrite
+// entry here to the lines carrying it in every chapter on disk - including the
+// ones not open - so a rename would either orphan those lines or need a rewrite
 // this app has no way to perform across chapters it has not read.
 //
 // Deleting is offered, and it is a narrower thing than it looks: it forgets the
@@ -223,7 +223,7 @@ export function saveTagDefaults(name, defaults = {}) {
 // it, in this chapter and in every chapter on disk; the boxes keep the style
 // they were placed with, because that style is a value they own and never a
 // reference back here. What actually changes is that the tag stops proposing
-// defaults to boxes placed from now on, and stops appearing in the picker —
+// defaults to boxes placed from now on, and stops appearing in the picker -
 // except that a chapter still using it puts it back, unconfigured, via
 // `knownTags`. All of which the UI has to say out loud, because "delete" is a
 // word users read as "and take it off my document".
@@ -242,7 +242,7 @@ export function deleteTag(name) {
 // live here rather than in the queue because they are one round trip and their
 // bug was a disagreement between them: the form seeded its outline switch from
 // `outline` alone, while `sanitizeTags` vets `outline` and `outlineWidth`
-// independently — so an entry holding a width and no colour (which is exactly
+// independently - so an entry holding a width and no colour (which is exactly
 // what a stored entry with a bad colour sanitises down to) opened with the
 // switch off, and Save wrote the width away.
 //
@@ -259,7 +259,7 @@ export function tagFormFields(t) {
   };
 }
 
-// `null` for a default the user left unset — that is the value that means "fall
+// `null` for a default the user left unset - that is the value that means "fall
 // back to whatever the style would have been", and it is why a tag with nothing
 // configured changes nothing.
 export function tagFormDefaults(f) {
@@ -273,7 +273,7 @@ export function tagFormDefaults(f) {
 // ---------- tags on a line ----------
 // The migration, and it is a read-time one: nothing rewrites a file. A line that
 // has never been tagged has no `tags` array, and is read as carrying whatever its
-// legacy `line.type` said — so every chapter detection has ever written arrives
+// legacy `line.type` said - so every chapter detection has ever written arrives
 // already tagged, with no save, no schema bump and no chance of a load marking a
 // document dirty. The array's *presence* is the marker that the user has taken
 // over: once they have, an empty array means "no tags", not "fall back to type".
@@ -302,9 +302,9 @@ export function setLineTags(line, names) {
   return out;
 }
 
-// One click on a picker chip. Applying also promotes the tag in the registry —
+// One click on a picker chip. Applying also promotes the tag in the registry -
 // that is what makes the first two slots the two tags the user actually reaches
-// for — while removing does not: un-tagging one line is not a statement about how
+// for - while removing does not: un-tagging one line is not a statement about how
 // often the tag is used, and letting it re-rank would shuffle the picker under
 // the user's cursor as they correct a mistake.
 export function toggleLineTag(line, name) {
@@ -318,7 +318,7 @@ export function toggleLineTag(line, name) {
 }
 
 // ---------- surviving a re-import ----------
-// A translations file describes `{ n, jp, en, type }` and nothing else — the
+// A translations file describes `{ n, jp, en, type }` and nothing else - the
 // importer has never had a `tags` field to read, and re-importing replaces a
 // page's lines wholesale. So re-running a corrected translation over a chapter
 // that had been tagged by hand threw every hand-applied tag away while leaving
@@ -337,12 +337,12 @@ export function toggleLineTag(line, name) {
 // incoming `type: 'dialogue'` and the exporters, which still read `type`, would
 // disagree with the queue about the same line.
 //
-// Precedence, in full: an incoming line that carries its own `tags` array wins —
+// Precedence, in full: an incoming line that carries its own `tags` array wins -
 // the file said something explicit and a file the user chose to import is a
 // statement. Failing that, the previous page's array carries forward. Failing
 // both, the incoming `type` speaks, which is the pre-tag behaviour unchanged.
 //
-// It also keeps the page's free-typed lines — the ones a box made with the Text
+// It also keeps the page's free-typed lines - the ones a box made with the Text
 // tool brought into existence, numbered below zero (see `isFreeLine` in
 // store.svelte.js). A translations file describes the translator's lines and
 // says nothing whatever about these, so the wholesale replacement would take
@@ -350,13 +350,13 @@ export function toggleLineTag(line, name) {
 // box's text lives, plus the box's only queue row. The user would be left with a
 // box on the page rendering nothing, no row to type into, and no way back short
 // of re-importing the old file. They are appended after the incoming lines, in
-// their own order, which is where they already sit in the queue — free lines are
+// their own order, which is where they already sit in the queue - free lines are
 // pushed on the end as they are made, so a re-import does not shuffle the panel.
 //
 // A number the incoming file already claims is left to the file. It cannot
 // happen from any producer this app has met (translators number from 1) and if
 // it does, two lines answering to one number is the one outcome nothing
-// downstream survives — `lineByN` would hand the box whichever came first.
+// downstream survives - `lineByN` would hand the box whichever came first.
 export function carryTagsForward(prevLines = [], nextLines = []) {
   const kept = new Map();
   for (const l of prevLines) if (l && Array.isArray(l.tags)) kept.set(l.n, l.tags);
@@ -376,7 +376,7 @@ export function carryTagsForward(prevLines = [], nextLines = []) {
 }
 
 // ---------- defaults reaching a box ----------
-// Called once, by `placeActiveAt`, at the instant the box is created — the only
+// Called once, by `placeActiveAt`, at the instant the box is created - the only
 // moment a tag's defaults are ever read. What comes back is a plain style value
 // that the box then owns outright, which is why editing the tag later cannot
 // touch it.
@@ -387,7 +387,7 @@ export function carryTagsForward(prevLines = [], nextLines = []) {
 //
 // The leftmost tag wins. A later tag only fills in what the earlier ones left
 // unset, so the first tag on a line is its primary one and adding a second cannot
-// quietly restyle it. An unset default — the `null` — is what makes tags optional
+// quietly restyle it. An unset default - the `null` - is what makes tags optional
 // at all: it changes nothing, and the box keeps the style it would have had.
 export function styleForLine(line, base) {
   const out = { ...base };
@@ -434,7 +434,7 @@ export function tagsInUse(pages = []) {
 // What the picker offers: the registry in recency order, then any tag the open
 // chapter uses that the registry has never heard of, as an unconfigured entry.
 // The second half is what stops a freshly imported chapter full of `sfx` from
-// presenting an empty picker — those tags exist, the user just has not applied
+// presenting an empty picker - those tags exist, the user just has not applied
 // one by hand yet.
 export function knownTags(pages = []) {
   const out = tags.list.map((t) => ({ ...t }));
@@ -447,8 +447,8 @@ export function knownTags(pages = []) {
 // The picker's first two slots.
 export const recentTags = (pages = []) => knownTags(pages).slice(0, 2);
 
-// Every box carrying `name` within `pages`. The boxes come back live — the same
-// objects the document holds, not snapshots — because the caller's whole purpose
+// Every box carrying `name` within `pages`. The boxes come back live - the same
+// objects the document holds, not snapshots - because the caller's whole purpose
 // is to write styles onto them and record one history entry for the lot. The page
 // and line ride along so a caller can address the box by page id without going
 // looking for it again.
@@ -459,8 +459,8 @@ export const recentTags = (pages = []) => knownTags(pages).slice(0, 2);
 // has no line, tags live on lines, so it cannot be tagged and cannot be reached
 // by a tag-scoped bulk edit.
 //
-// A box typed onto the canvas *today* has a line — a negative-numbered one it
-// created (see `addEmptyBox`) — and is returned like any other. That is the
+// A box typed onto the canvas *today* has a line - a negative-numbered one it
+// created (see `addEmptyBox`) - and is returned like any other. That is the
 // whole point of giving it one: "everything is taggable" is a claim about this
 // function, and it used to be false for every box the Text tool made.
 export function boxesWithTag(name, pages = []) {

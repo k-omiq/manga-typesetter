@@ -8,8 +8,7 @@
   const thumb = $derived(convertFileSrc(joinPath(project.dir, 'thumb.png')));
   const chapterLine = $derived(plural(project.chapters.length, 'chapter'));
   const pageCount = $derived(project.chapters.reduce((n, c) => n + c.pageCount, 0));
-  // "12 pages · 3 days ago". A project written by a hand-edited or older
-  // project.json may carry no timestamp; then the separator goes too.
+  // Format chapter count and relative timestamp.
   const touched = $derived(relativeTime(project.updatedAt));
 </script>
 

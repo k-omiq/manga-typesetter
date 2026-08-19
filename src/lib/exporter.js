@@ -5,7 +5,7 @@ import { withPageImages } from './page-images.js';
 import { stripOffsets, maxPageWidth } from './editor/strip.js';
 import { planStripCuts, boxSpanY, SLICE_H_DEFAULT } from './editor/strip-cuts.js';
 // The detected-text JSON serialiser lives in a leaf module so the library can
-// write that document on every autosave without importing this file — see the
+// write that document on every autosave without importing this file - see the
 // note at the top of text-json.js. Re-exported here because this is where every
 // existing caller (and the export dialog's JSON format) asks for it.
 import { buildTextJson } from './text-json.js';
@@ -37,12 +37,12 @@ function loadImage(src) {
 //
 // `p.w`/`p.h` are it whenever the page has been measured. A page is `w:0,h:0`
 // until something decodes its image, and while `createChapter` now measures at
-// import, every chapter created before it did is still on disk unmeasured — 23
+// import, every chapter created before it did is still on disk unmeasured - 23
 // of the 28 pages in the author's own chapter. Export All reaches every page,
 // including those, and a 0 is not a small error: it is a zero-sized canvas that
 // `toBlob` returns an empty (or null) image for, saved under the page's name
-// with a success toast over it. The PSD path failed louder — ag-psd throws
-// `Invalid document size` — and nothing at all here.
+// with a success toast over it. The PSD path failed louder - ag-psd throws
+// `Invalid document size` - and nothing at all here.
 //
 // Asking the art is what the canvas would have done one page turn later, so it
 // is the same answer either way, and it is the answer the box coordinates on
@@ -113,7 +113,7 @@ function roughen(ctx, w, h, amount, detail, seed) {
 
 // Lay out a box's text and compute its canvas geometry WITHOUT drawing. The
 // footprint (cw×ch) grows to contain the full block incl. overflow beyond the
-// box rect on all sides — mirroring the editor's `overflow:visible` centered
+// box rect on all sides - mirroring the editor's `overflow:visible` centered
 // layout so nothing clips on export. (ox,oy) is where the box's top-left sits
 // inside that footprint. Split out from painting so rotated text can be drawn
 // directly onto the page canvas (sharp glyphs) instead of rotating a raster.
@@ -157,7 +157,7 @@ function layoutBox(box, p) {
     bottomExtra = Math.max(0, maxY - box.h / 2);
   } else {
     // `box.w - BOX_PAD * 2` is the content width (2px horizontal padding each
-    // side), so export breaks lines exactly where the editor does — and it is
+    // side), so export breaks lines exactly where the editor does - and it is
     // `layoutLines` on both sides, at the same unzoomed size and the same
     // content width, so "exactly" is by construction rather than by two
     // implementations agreeing. Shaping off, that function is still
@@ -165,7 +165,7 @@ function layoutBox(box, p) {
     // The fifth argument is the box's balloon, as one width per line. Same
     // helper, same arguments as the editor and as the PSD's type layers, which
     // is what keeps "the export breaks where the canvas breaks" a construction
-    // rather than a coincidence — and null for an unfitted box, so this path is
+    // rather than a coincidence - and null for an unfitted box, so this path is
     // byte for byte what it was.
     lines = layoutLines(text, s, s.size, box.w - BOX_PAD * 2, balloonWidthsFor(box, s, s.size));
     const blockH = lines.length * lineH;
@@ -178,12 +178,12 @@ function layoutBox(box, p) {
     //
     // The padding is what was missing. The editor's `.tbox` is `padding:2px` on
     // every edge, and wrapping has always been done at `box.w - BOX_PAD * 2` to
-    // match — but the block was then anchored at the box's own edge, so a
+    // match - but the block was then anchored at the box's own edge, so a
     // left-aligned box exported 2px further left and a top-aligned one 2px
     // higher than the canvas showed. The auto-height maths made that worse
     // rather than merely visible: `neededHeight` sizes a box as the block plus
     // BOX_PAD on both sides, so every auto-fitted box exported with 4px of slack
-    // under its text. Centred alignments were always right and still are — the
+    // under its text. Centred alignments were always right and still are - the
     // padding is symmetric, so it cancels.
     blockY =
       s.valign === 'middle'
@@ -267,7 +267,7 @@ function paintBox(ctx, box, L) {
     if ('letterSpacing' in ctx) ctx.letterSpacing = `${s.letterSpacing}px`;
     // Both from `layoutBox`, which is where the padding is applied and the only
     // place it should be. `textAlign` decides which edge of the line `anchorX`
-    // names, so the padded content box's own edge is the anchor — its left for
+    // names, so the padded content box's own edge is the anchor - its left for
     // left-aligned text, its right for right-aligned, and the box's centre for
     // centred text, which the symmetric padding leaves where it was.
     const startY = L.oy + L.blockY;
@@ -326,7 +326,7 @@ const QUALITY = { PNG: undefined, JPG: 0.95, WebP: 0.92, PSD: undefined };
 // raster (PNG/JPG/WebP) export path is what's left.
 // `scale` supersamples the whole page (2 = 2x pixel dims); because text is
 // already rendered 2x internally, an outer scale maps that bitmap 1:1 to device
-// pixels — so 2x output stays genuinely sharp, not a soft upscale.
+// pixels - so 2x output stays genuinely sharp, not a soft upscale.
 export async function renderPageCanvas(p, scale = 1) {
   // Never `p.w` directly: an unmeasured page is 0, and a 0x0 canvas exports as
   // a broken file with a success toast over it. See `pageSpace`.
@@ -339,7 +339,7 @@ export async function renderPageCanvas(p, scale = 1) {
   // white base (JPG has no alpha; manga pages are white anyway)
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
-  // Background: the cleaned page when there is one, else the raw — mirroring
+  // Background: the cleaned page when there is one, else the raw - mirroring
   // what the editor shows, so a raws-only chapter doesn't export as a blank
   // white sheet.
   const base = p.cleaned ?? p.raw;
@@ -362,7 +362,7 @@ export async function renderPageCanvas(p, scale = 1) {
 }
 
 // Draw one box's glyphs onto `ctx` at page coordinates, exactly as the page
-// composite does — sharp direct-angle draw for rotated opaque text, raster
+// composite does - sharp direct-angle draw for rotated opaque text, raster
 // fallback for roughened/translucent. Opacity is applied by the caller (via
 // ctx.globalAlpha or a layer opacity), NOT here, so the same pixels can back a
 // translucent PSD layer.
@@ -421,7 +421,7 @@ function paintBoxOnPage(ctx, box, p) {
 }
 
 // Render a single box to its own compact, transparent canvas with the exact
-// sharp pixels the page composite would show for it (opacity NOT baked in —
+// sharp pixels the page composite would show for it (opacity NOT baked in -
 // returned as `opacity`). Used as the cached rasterization of an editable PSD
 // text layer so it displays pixel-identical to the app even when the manga
 // font is missing in Photoshop. Returns null for a box that paints nothing.
@@ -493,14 +493,14 @@ async function renderPageBlob(p, fmt) {
 // it stitches the column and re-slices it at the user's height, with every cut
 // moved clear of lettering by `planStripCuts`.
 //
-// Everything below works in strip pixels — page pixels stacked with no gap,
+// Everything below works in strip pixels - page pixels stacked with no gap,
 // which is exactly what `stripOffsets(pages)` answers at zoom 1.
 
 // The strip's arithmetic needs every page's real size, and a page that has never
 // been on screen is `w:0,h:0` (see `pageSpace`). Left unmeasured it would
 // contribute a zero-height frame: the export would silently drop most of the
 // chapter and every offset below it would be wrong. So the sizes are resolved
-// once, up front, and written back onto the pages — the same field the editor
+// once, up front, and written back onto the pages - the same field the editor
 // fills in when an image loads, so nothing downstream has to be told twice.
 async function measureStrip(pages) {
   for (const p of pages) {
@@ -531,7 +531,7 @@ function pageStripSpan(p, top) {
 }
 
 // Pin several pages' images for the duration of one call. Nesting rather than
-// looping because `withPageImages` releases in its own `finally` — the pins have
+// looping because `withPageImages` releases in its own `finally` - the pins have
 // to overlap, not follow one another. Per-page nesting is explicitly fine (the
 // pin is a count), and the depth here is however many pages one slice spans.
 async function withPagesImages(list, fn) {
@@ -542,7 +542,7 @@ async function withPagesImages(list, fn) {
 
 // One output image: the strip from y0 to y1, at the width of the widest page.
 //
-// `tops` must be the offsets `stripOffsets(pages)` gives for these same pages —
+// `tops` must be the offsets `stripOffsets(pages)` gives for these same pages -
 // the caller measures once and slices many times, and the two must agree or the
 // seams move.
 //
@@ -589,8 +589,8 @@ export async function renderStripSliceCanvas(pages, tops, y0, y1, scale = 1) {
           }
         }
         // `paintBoxOnPage` draws in page-local coordinates through the current
-        // transform — its direct-angle path translates/rotates from it, and its
-        // supersampled offscreen path composites through it — so translating to
+        // transform - its direct-angle path translates/rotates from it, and its
+        // supersampled offscreen path composites through it - so translating to
         // the page's corner in the slice is all this needs. The canvas clips
         // whatever falls outside the slice, which is the neighbouring file's
         // half of a box the cut had to cross.
@@ -607,7 +607,7 @@ export async function renderStripSliceCanvas(pages, tops, y0, y1, scale = 1) {
   return canvas;
 }
 
-// Raster formats — the ones a strip can be re-cut into. PSD stays one layered
+// Raster formats - the ones a strip can be re-cut into. PSD stays one layered
 // document per source page (its whole value is the editable layers, which a
 // stitched slice would fuse across page boundaries) and JSON is one document for
 // the chapter either way.
@@ -702,7 +702,7 @@ async function saveNative(items, scope, fmt) {
     if (!path) return null; // user cancelled
     await fsx.writeFileAtomic(path, await blobBytes(first.blob));
     const dir = await dirname(path);
-    // Learn the base name from a page file only — the JSON export's name carries
+    // Learn the base name from a page file only - the JSON export's name carries
     // a "-text" suffix that must not become the project's export base.
     // Only strip the suffix if it matches the current page id appended by export.
     const stem = (await basename(path)).replace(/\.[^.]+$/, '');
@@ -727,7 +727,7 @@ async function saveNative(items, scope, fmt) {
 
 // The detected/typeset text for a scope: one document, not one file per page,
 // and the same document the export dialog's JSON format produces. Lifted out of
-// exportImages so the detect menu and the dialog run identical code — two
+// exportImages so the detect menu and the dialog run identical code - two
 // serialisers for one file format would drift the moment either was touched.
 // Does NOT set app.exporting: exportImages already holds it across this call,
 // and every other caller wraps it the same way.
@@ -743,7 +743,7 @@ export async function exportTextJson(scope) {
     },
   ];
   if (isTauri()) {
-    // Always the single-file save dialog — 'all' is still one document.
+    // Always the single-file save dialog - 'all' is still one document.
     await saveNative(items, 'current', 'JSON');
   } else {
     downloadBlob(items[0].blob, items[0].name);
@@ -765,7 +765,7 @@ export async function exportImages(fmt, scope) {
     if (fmt === 'JSON') return await exportTextJson(scope);
 
     // A whole longstrip chapter is one column, and the files it ships as are
-    // slices of that column rather than its source pages. Only 'all' — a single
+    // slices of that column rather than its source pages. Only 'all' - a single
     // page is still a single page, and the user asking for "this page" in a
     // strip is asking for the slice they are looking at, not a re-cut of it.
     if (isLongstrip() && scope === 'all' && RASTER.has(fmt)) {
@@ -776,7 +776,7 @@ export async function exportImages(fmt, scope) {
     const items = [];
     for (const p of pages) {
       // Only five pages' pictures are in memory at a time (see page-images.js),
-      // and a whole-chapter export needs all of them — one at a time. This is
+      // and a whole-chapter export needs all of them - one at a time. This is
       // that: the page is minted if the window does not already hold it, pinned
       // so a page turn mid-export cannot revoke the image being drawn, and
       // handed back when its file is written.

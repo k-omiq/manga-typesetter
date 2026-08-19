@@ -1,16 +1,6 @@
-//! Engine state and the Tauri commands that replace the sidecar's HTTP routes.
+//! Detection and OCR engine state, model downloads, and Tauri commands.
 //!
-//! Three ONNX graphs live behind one mutex, each loaded the first time something
-//! needs it. Loading is expensive — the OCR encoder alone is 343 MB — and the
-//! app's own use is one page at a time, so a mutex over the whole set is both
-//! simpler and closer to what the Python sidecar did (module-level singletons
-//! behind the GIL) than any finer-grained scheme.
-//!
-//! What the mutex must *not* do is swallow a first-run download. The weights are
-//! ~640 MB fetched over the network, and a user who opens Settings while that is
-//! happening should still get an answer. So the download runs on the async side,
-//! before the lock is taken, and the blocking section only ever reads files that
-//! are already on disk.
+//! Lazily loads ONNX models behind a mutex while keeping downloads async and unblocked.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -18,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
 use ort::ep::ExecutionProvider;
 use ort::session::Session;
 use tauri::async_runtime::Mutex as AsyncMutex;
@@ -27,8 +18,7 @@ use super::ocr::OcrEngine;
 use super::panels;
 use super::textdetector::TextDetector;
 
-/// A weight file: where it lives under the model directory, and where it comes
-/// from if it is not there yet.
+/// Model file relative path and download URL.
 struct ModelFile {
     rel: &'static str,
     url: &'static str,
@@ -57,18 +47,10 @@ const OCR_FILES: [ModelFile; 3] = [
     },
 ];
 
-/// The directory every downloaded weight lives under, relative to `$HOME`.
-///
-/// Also the guard `detect_models_cache_clear` checks before it deletes anything;
-/// see [`guard_models_dir`].
+/// Directory where downloaded model weights reside, relative to `$HOME`.
 const MODELS_SUFFIX: [&str; 2] = [".mangatypesetter", "models"];
 
-/// Wall-clock cap on a single first-run download.
-///
-/// An HTTP read timeout only bounds the gap between chunks, so a mirror that
-/// dribbles bytes — or one that stalls just often enough to reset the read clock
-/// — can hang a detect forever. This bounds the whole transfer. `MT_DOWNLOAD_DEADLINE`
-/// overrides it, in seconds, as it does on the Python side.
+/// Wall-clock timeout on model downloads (default 300s, overridable via `MT_DOWNLOAD_DEADLINE`).
 fn download_deadline() -> Duration {
     let secs = std::env::var("MT_DOWNLOAD_DEADLINE")
         .ok()
@@ -88,15 +70,11 @@ struct Sessions {
 struct Inner {
     models_dir: PathBuf,
     sessions: Mutex<Sessions>,
-    /// One gate per weight file, created on demand. See [`DetectEngine::ensure`].
+    /// Per-file download lock to prevent duplicate concurrent fetches.
     downloads: Mutex<HashMap<&'static str, Arc<AsyncMutex<()>>>>,
 }
 
-/// Lazily-loaded detection models, shared across commands.
-///
-/// Cloning is cheap and is how a command hands the engine to a blocking task:
-/// `tauri::State` borrows for the life of the call, which is shorter than the
-/// `'static` a spawned task needs.
+/// Lazily-loaded detection models shared across commands.
 #[derive(Clone)]
 pub struct DetectEngine(Arc<Inner>);
 
@@ -113,19 +91,7 @@ impl DetectEngine {
         &self.0.models_dir
     }
 
-    /// Take the session lock, recovering it if an earlier call panicked while
-    /// holding it.
-    ///
-    /// `Mutex::lock` returns `Err` *forever* once a holder has panicked, and
-    /// every call site here used to answer that with `if let Ok` or a bare
-    /// error — so one panic in `analyze_blocking` bricked detection until the
-    /// app was restarted, with no way back short of that. Poisoning tells us
-    /// only that the `Sessions` may be half-built, which is entirely
-    /// recoverable: throw the graphs away and let the next call reload them.
-    ///
-    /// The `bool` is "this call is the one that found the poison", so exactly
-    /// one caller reports the panic and later ones get a working engine
-    /// instead of inheriting a stale error.
+    /// Acquires the session lock, resetting poisoned state if a previous caller panicked.
     fn lock_sessions(&self) -> (MutexGuard<'_, Sessions>, bool) {
         match self.0.sessions.lock() {
             Ok(guard) => (guard, false),
@@ -138,16 +104,7 @@ impl DetectEngine {
         }
     }
 
-    /// Fetch any of `files` that is not on disk yet.
-    ///
-    /// Deliberately not holding the session mutex: this can take minutes on a
-    /// cold machine, and a `detect_models_cache` call arriving meanwhile has no
-    /// reason to wait for it.
-    ///
-    /// It does hold a per-file gate, because two detects racing a cold cache
-    /// would otherwise both pull the same 343 MB. The loser wakes up, re-checks
-    /// the path, and finds the file already there. The gate is per file rather
-    /// than one global lock so an OCR download cannot delay the panel model.
+    /// Downloads missing model files, holding a per-file gate to avoid duplicate transfers.
     async fn ensure(&self, files: &[&ModelFile]) -> Result<(), String> {
         for f in files {
             let path = self.0.models_dir.join(f.rel);
@@ -167,18 +124,13 @@ impl DetectEngine {
         Ok(())
     }
 
-    /// Run one page through the pipeline, loading whatever it needs first.
-    ///
-    /// Blocking: hold this on a blocking thread, not the async runtime.
+    /// Runs page analysis on a blocking thread, loading models as needed.
     fn analyze_blocking(&self, bytes: &[u8], want_ocr: bool) -> Result<AnalyzeResponse, String> {
         let img = decode_image(bytes)?;
         let dir = &self.0.models_dir;
         let (mut s, recovered) = self.lock_sessions();
         if recovered {
-            // Reported once, by the call that cleared it. The graphs have been
-            // dropped, so retrying this same page is the right next move — and
-            // silently succeeding here would hide that a page took the engine
-            // down, which is the sort of thing that wants a bug report.
+            // Poison cleared: prompt user to retry after resetting dropped sessions.
             return Err("the detection engine panicked on an earlier page and has been \
                         reset; retry this page"
                 .to_string());
@@ -191,8 +143,7 @@ impl DetectEngine {
             );
         }
         if s.panels.is_none() {
-            // Best-effort, as `detect_panels` is in the Python: without panels
-            // the reading order falls back to a spatial sort rather than failing.
+            // Panel detection failure degrades to spatial sort rather than aborting.
             match panels::load_session(&dir.join(PANEL_MODEL.rel)) {
                 Ok(session) => s.panels = Some(session),
                 Err(e) => log::warn!("panel model unavailable, reading order degrades: {e}"),
@@ -216,18 +167,7 @@ impl DetectEngine {
     }
 }
 
-/// A scratch path for one download of `path`, unique to this call.
-///
-/// The suffix is appended, not substituted: `with_extension` would turn
-/// `vocab.txt` into `vocab.part` and collide with any other `vocab.*`.
-///
-/// And it carries a per-call serial, because a fixed `<file>.part` is a shared
-/// mutable path. Two cold-start detects that both decided the weight was
-/// missing would open the same scratch file and interleave their bytes into it;
-/// whichever finished first would then rename the resulting mixture into place,
-/// and every later run would read a corrupt ONNX graph as "already present".
-/// The serial is process-local — a second process could still collide, so the
-/// pid goes in too.
+/// Unique per-download scratch path to prevent collisions between concurrent processes.
 fn part_path(path: &Path) -> PathBuf {
     static SERIAL: AtomicU64 = AtomicU64::new(0);
     let n = SERIAL.fetch_add(1, Ordering::Relaxed);
@@ -236,16 +176,7 @@ fn part_path(path: &Path) -> PathBuf {
     PathBuf::from(tmp)
 }
 
-/// Move a finished download into place, taking the scratch file with it.
-///
-/// Every exit leaves no `.part` behind: a failed rename used to skip the
-/// cleanup that only the transfer-error path had, so a full disk or a
-/// permissions problem littered hundreds of megabytes that nothing would ever
-/// collect.
-///
-/// A file already at `path` means another download of the same weight won the
-/// race. Its bytes are these bytes, and it may already be open in a loaded
-/// session, so the loser drops its copy rather than renaming over it.
+/// Renames a finished download to its final path and cleans up scratch files.
 fn commit_download(tmp: &Path, path: &Path) -> Result<(), String> {
     if path.is_file() {
         let _ = std::fs::remove_file(tmp);
@@ -260,19 +191,7 @@ fn commit_download(tmp: &Path, path: &Path) -> Result<(), String> {
     }
 }
 
-/// Stream one weight file to disk.
-///
-/// Written to a scratch sibling and renamed on success, so an interrupted or
-/// timed-out download cannot leave a truncated file that the next run reads as
-/// "already present" — which would then fail as a corrupt ONNX graph, a long way
-/// from the cause.
-///
-/// The writing happens on a blocking thread rather than inline. These are
-/// hundreds of megabytes, and `File::write_all` plus a final `sync_all` are
-/// syscalls that park the calling thread — inline, that thread is a Tokio
-/// worker, and every other async task sharing it stalls behind the disk. The
-/// bounded channel is the backpressure: it caps how far ahead of the disk the
-/// network is allowed to buffer.
+/// Streams a model file to disk via a scratch file with backpressured async-to-disk channel.
 async fn download(url: &str, path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
@@ -382,12 +301,7 @@ pub struct CacheClear {
     pub errors: Vec<String>,
 }
 
-/// Total bytes of a directory tree, best-effort.
-///
-/// Symlinks are counted as links, not followed: the target may be shared with
-/// something outside the cache, and reporting its size as reclaimable would be
-/// a lie. Unreadable entries are skipped rather than aborting the walk, so a
-/// permissions problem in one corner still yields a useful number.
+/// Total bytes of a directory tree, skipping unreadable entries.
 fn dir_size(path: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(path) else { return 0 };
     let mut total = 0u64;
@@ -412,13 +326,7 @@ pub fn cache_info(models_dir: &Path) -> CacheInfo {
     }
 }
 
-/// Refuse to delete anything that is not the model cache.
-///
-/// `clear` is an `rm -rf` driven from the UI, so the path it is handed is
-/// checked rather than trusted: it is resolved through symlinks first and then
-/// required to end in `.mangatypesetter/models`. A misconfigured or
-/// maliciously-set model directory should fail this, not take the user's home
-/// with it.
+/// Validates that a directory path ends in `.mangatypesetter/models` before allowing deletion.
 fn guard_models_dir(dir: &Path) -> Result<PathBuf, String> {
     let resolved = dir
         .canonicalize()
@@ -440,8 +348,7 @@ fn guard_models_dir(dir: &Path) -> Result<PathBuf, String> {
 pub fn cache_clear(models_dir: &Path) -> CacheClear {
     let mut out = CacheClear { ok: true, cleared: Vec::new(), freed_bytes: 0, errors: Vec::new() };
     if !models_dir.is_dir() {
-        // Nothing there is a success, and the directory is recreated below so
-        // the next detect has somewhere to download into.
+        // Idempotent clear: recreate empty directory.
         let _ = std::fs::create_dir_all(models_dir);
         return out;
     }
@@ -513,15 +420,7 @@ pub async fn detect_models_cache_clear(
 ) -> Result<CacheClear, String> {
     let engine = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Drop the loaded graphs first: they are the deleted files, and keeping
-        // them would report freed disk the process is still holding open.
-        //
-        // Held *across* the delete, not released before it. Unlocking first
-        // left a window in which a concurrent `detect_analyze` — already past
-        // `ensure`, so past the point where it checks the files exist — took
-        // the free lock and started loading ONNX graphs out of the directory
-        // `remove_dir_all` was walking. Now it waits, and reloads afterwards
-        // from a directory that is simply empty.
+        // Reset sessions and hold lock across directory removal to prevent race with analyze.
         let (mut s, _) = engine.lock_sessions();
         *s = Sessions::default();
         let out = cache_clear(engine.models_dir());
@@ -539,19 +438,16 @@ pub struct Health {
     pub engine: String,
 }
 
-/// What the detection engine is and what it is running on.
-///
-/// `device` reports whether ONNX Runtime can offer CoreML at all — which on this
-/// build is exactly what every `load_session` asks for. It is not a promise that
-/// a given graph ran there: the OCR decoder is deliberately CPU-only because
-/// CoreML recompiles per input shape and that graph grows a token every step,
-/// and any session may silently fall back if an operator is unsupported.
+/// Reports engine status and execution provider availability (CoreML vs CPU).
 #[tauri::command]
 pub async fn detect_health() -> Result<Health, String> {
+    #[cfg(target_os = "macos")]
     let device = match ort::ep::CoreML::default().is_available() {
         Ok(true) => "coreml",
         _ => "cpu",
     };
+    #[cfg(not(target_os = "macos"))]
+    let device = "cpu";
     Ok(Health {
         status: "ok".into(),
         device: device.into(),
@@ -682,10 +578,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn this_build_reports_coreml_as_its_device() {
-        // The `coreml` feature is on in Cargo.toml, so a "cpu" here means the
-        // runtime was linked without it and every session is silently falling
-        // back — which shows up as a several-times-slower detect and nothing
-        // else. Worth one assertion.
+        // Verifies CoreML EP availability on macOS.
         assert!(ort::ep::CoreML::default().is_available().unwrap_or(false));
     }
 
