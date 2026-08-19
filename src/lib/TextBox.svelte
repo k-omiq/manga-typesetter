@@ -212,6 +212,10 @@
 
   function onBoxPointerDown(e) {
     if (editing) return; // let caret work
+    // The primary button and nothing else. A right-click is on its way to a
+    // context menu and a middle one is a paste on some platforms; neither is a
+    // request to select this box, drag it, or add it to a bulk edit.
+    if (e.button !== 0) return;
     // Before anything is selected or recorded. In a strip the box under the
     // pointer may be on a page the index is not on, and selection, the live undo
     // stack and the inspector are all scoped to the current page — so touching a
@@ -238,6 +242,12 @@
 
   function startMove(e) {
     e.preventDefault();
+    // The drag follows the pointer even once it leaves the window: without the
+    // capture, a button released outside gets no pointerup here at all and the
+    // box comes back stuck to the cursor. The listeners still live on
+    // `document` — a captured pointer's events are retargeted at the capture
+    // element and go on bubbling from there.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     // Whatever the Inspector is still holding is written now, from the geometry
     // this drag is about to change. Left to its own timer it would fire
     // mid-drag, record a resize from the pre-tweak geometry, and cost the user
@@ -284,8 +294,10 @@
   }
 
   function startTransform(e, dir) {
+    if (e.button !== 0) return; // see onBoxPointerDown
     e.preventDefault();
     e.stopPropagation();
+    e.currentTarget.setPointerCapture?.(e.pointerId); // see startMove
     focusPage(pg); // see onBoxPointerDown
     if (!selected) selectBox(box.id);
     settleEdits(); // same as startMove: one gesture must not cost two steps
@@ -317,6 +329,12 @@
     const move = (ev) => {
       if (ev.pointerId !== pid) return; // see startMove
       if (isRot) {
+        // The frame can be missing for a beat in a strip: the canvas binds one
+        // element per page and hands each box its own, and a box that renders
+        // before that binding has landed has nothing to measure the angle
+        // against. Skipped rather than thrown from — the frame arrives a tick
+        // later and the next move of the same drag finds it.
+        if (!pageFrameEl) return;
         const r = pageFrameEl.getBoundingClientRect();
         const mx = (ev.clientX - r.left) / zz, my = (ev.clientY - r.top) / zz;
         let ang = (Math.atan2(my - cy(), mx - cx()) * 180) / Math.PI + 90;
@@ -329,16 +347,46 @@
         }
         box.style.rotation = clamp(Math.round(ang), -180, 180);
       } else {
-        const dx = (ev.clientX - sx) / zz, dy = (ev.clientY - sy) / zz;
+        // The pointer's travel, turned into the box's OWN frame before anything
+        // is done with it. The handles are drawn on a rotated box but the
+        // geometry underneath is not — `box.w/h/x/y` are axis-aligned in page
+        // coordinates and `style.rotation` is a transform painted on top — so a
+        // screen-space delta fed straight into them made the East handle of a
+        // box rotated 90° widen it when the user was dragging downward along its
+        // own edge. Rotating by -rotation is what makes every handle work along
+        // the axis it is drawn on, at any angle; at rotation 0 the sin/cos
+        // collapse to 0/1 and the arithmetic below is the arithmetic that was
+        // here before, to the pixel.
+        const rad = (-(s.rotation || 0) * Math.PI) / 180;
+        const cos = Math.cos(rad), sin = Math.sin(rad);
+        const sdx = (ev.clientX - sx) / zz, sdy = (ev.clientY - sy) / zz;
+        const dx = sdx * cos - sdy * sin, dy = sdx * sin + sdy * cos;
         const hasE = dir.includes('e'), hasW = dir.includes('w'), hasN = dir.includes('n'), hasS = dir.includes('s');
         const corner = (hasE || hasW) && (hasN || hasS);
-        let nw = o.w, nh = o.h, nx = o.x, ny = o.y;
+        let nw = o.w, nh = o.h;
         if (hasE) nw = Math.max(40, o.w + dx);
-        if (hasW) { nw = Math.max(40, o.w - dx); nx = o.x + (o.w - nw); }
+        if (hasW) nw = Math.max(40, o.w - dx);
         if (hasS) nh = Math.max(30, o.h + dy);
-        if (hasN) { nh = Math.max(30, o.h - dy); ny = o.y + (o.h - nh); }
+        if (hasN) nh = Math.max(30, o.h - dy);
+        // The edge the user is NOT holding stays where it is on screen. On an
+        // unrotated box that is the one-liner it always was — drag the west edge
+        // and `x` follows it — but on a rotated one it is a statement about the
+        // centre, because the centre is what the rotation turns around: growing
+        // the box by g along its local x axis moves the centre by g/2 along that
+        // same axis, and the opposite edge then lands exactly where it started.
+        // The shift is computed in the box's frame and rotated back into page
+        // coordinates, which at rotation 0 reduces to the old two lines exactly.
+        const shiftX = hasE ? (nw - o.w) / 2 : hasW ? (o.w - nw) / 2 : 0;
+        const shiftY = hasS ? (nh - o.h) / 2 : hasN ? (o.h - nh) / 2 : 0;
+        const nx = o.x + o.w / 2 + (shiftX * cos + shiftY * sin) - nw / 2;
+        const ny = o.y + o.h / 2 + (shiftY * cos - shiftX * sin) - nh / 2;
         box.w = nw; box.h = nh; box.x = nx; box.y = ny;
-        if (corner) box.style.size = clamp(Math.round(o.size * (nh / o.h)), 6, 200);
+        // `o.h` is whatever the box carried, and `loadProjectPages` copies that
+        // straight off disk with no floor under it — a chapter written by an
+        // older build, or edited by hand, can hand this a box of height 0. The
+        // ratio is then Infinity and one corner drag snaps the type to the 200
+        // cap. No measured height, no scaling: the drag still resizes the box.
+        if (corner && o.h > 0) box.style.size = clamp(Math.round(o.size * (nh / o.h)), 6, 200);
         // Live, inside the drag, so the user sees the height the text needs
         // while they are choosing the width. It costs no second undo step: the
         // `resize` record below is written from `box` after this has run, so its
@@ -346,6 +394,20 @@
         // gesture. Grow-only means the drag is still deterministic — each frame
         // starts from `o.h`, so there is no ratchet.
         autoFitBox(box, dims);
+        // The top handle is the one edge the fit fights, so it is the one edge
+        // the drag takes back. `growToFit` anchors by `valign` — a middle- or
+        // bottom-aligned box grows UPWARDS — and while the user is dragging the
+        // top edge down, every line-wrap threshold crossed sent that edge back
+        // up past the pointer and the box appeared to flinch. The drag owns the
+        // edge it is holding; the fit only gets to decide how tall the box is.
+        //
+        // Only this handle. On a width drag the same upward growth is what keeps
+        // a centred block centred on its bubble, and no edge under the pointer
+        // moves, so nothing there needs correcting. Re-clamped into the page the
+        // way `growToFit` clamps its own answer, so re-anchoring can never push
+        // the box off the paper.
+        if (hasN && box.y !== ny)
+          box.y = dims.h > 0 ? clamp(ny, 0, Math.max(0, dims.h - box.h)) : ny;
       }
       markUnsaved();
     };

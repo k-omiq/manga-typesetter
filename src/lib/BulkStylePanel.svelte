@@ -93,7 +93,15 @@
   function onHeadPointerDown(e) {
     // Don't start a drag from the close button (or anything inside it).
     if (e.target.closest('.x')) return;
+    // The primary button and nothing else: a right-click on the header is on its
+    // way to a context menu, not a drag.
+    if (e.button !== 0) return;
     e.preventDefault();
+    // The drag follows the pointer even once it leaves the window — without the
+    // capture a button released outside gets no pointerup here at all, and the
+    // panel comes back stuck to the cursor. The listeners stay on `window`: a
+    // captured pointer's events still bubble to it.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     const pid = e.pointerId;
     const startX = e.clientX;
     const startY = e.clientY;
@@ -133,8 +141,10 @@
   // left of the canvas below the panel's top, which is the same number the CSS
   // cap uses — so the grip cannot produce a size the cap then contradicts.
   function onGripPointerDown(e) {
+    if (e.button !== 0) return; // see onHeadPointerDown
     e.preventDefault();
     e.stopPropagation();
+    e.currentTarget.setPointerCapture?.(e.pointerId); // see onHeadPointerDown
     const pid = e.pointerId;
     const startX = e.clientX;
     const startY = e.clientY;

@@ -51,6 +51,8 @@ impl std::fmt::Display for LineType {
 pub enum ReadingDirection {
     #[default]
     Rtl,
+    // Mirrors the upstream enum; nothing selects it until a direction toggle ships.
+    #[allow(dead_code)]
     Ltr,
 }
 
@@ -199,9 +201,9 @@ pub fn sort_panels_by_reading_order(
         // min node by bbox[1] (top-most panel)
         let mut best_i = 0;
         let mut best_val = nodes[0].bbox[1];
-        for i in 1..nodes.len() {
-            if nodes[i].bbox[1] < best_val {
-                best_val = nodes[i].bbox[1];
+        for (i, node) in nodes.iter().enumerate().skip(1) {
+            if node.bbox[1] < best_val {
+                best_val = node.bbox[1];
                 best_i = i;
             }
         }
@@ -345,9 +347,7 @@ pub fn sort_panels_by_reading_order(
                 let bottom_diff = (c_box[3] - r_box[3]).abs();
                 let is_row_aligned = bottom_diff < (curr_h * 0.25);
 
-                if c_cand_box[1] >= r_box[3] {
-                    Some(r)
-                } else if is_row_aligned {
+                if c_cand_box[1] >= r_box[3] || is_row_aligned {
                     Some(r)
                 } else {
                     Some(c)

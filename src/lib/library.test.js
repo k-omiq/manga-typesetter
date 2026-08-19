@@ -2433,6 +2433,20 @@ describe('switching a chapter mode from the project screen', () => {
     await saveOpenChapter();
     expect(chapterJson(c).mode).toBe('translate');
   });
+
+  it('clears inline editing and bulk mode when switching open chapter to translate', async () => {
+    const p = await createProject('Series');
+    const c = await createChapter({ projectId: p.id, number: 1, title: '', files: [fakeFile('a.png', 1)] });
+    await openChapter(p.id, c.id);
+    app.editingId = 'b1';
+    app.bulk.active = true;
+
+    await setChapterMode(p.id, c.id, 'translate');
+
+    expect(app.editingId).toBeNull();
+    expect(app.bulk.active).toBe(false);
+    expect(app.chapterMode).toBe('translate');
+  });
 });
 
 // ===== translations.json =====

@@ -48,7 +48,15 @@
   // is why the guard sits on the strip rather than on each button.
   function onRailPointerDown(e) {
     if (noSide) return; // nothing on screen to resize
+    // The primary button and nothing else: a right-click on the seam is on its
+    // way to a context menu, not a resize.
+    if (e.button !== 0) return;
     e.preventDefault();
+    // The resize follows the pointer even once it leaves the window — without
+    // the capture a button released outside gets no pointerup here at all, and
+    // the sidebar comes back stuck to the cursor. The listeners stay on
+    // `document`: a captured pointer's events still bubble to it.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     const pid = e.pointerId;
     const startX = e.clientX;
     const startW = app.leftWidth;
@@ -92,6 +100,9 @@
     else if (e.key === 'End') app.leftWidth = SIDEBAR_MAX;
     else return;
     e.preventDefault();
+    // The window keydown handler maps these arrows to page turns; a rail
+    // resize must not also flip the page.
+    e.stopPropagation();
     if (app.leftWidth !== w) saveSidebar();
   }
 

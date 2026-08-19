@@ -238,7 +238,7 @@ describe('one gesture, one step', () => {
 
   it('records a new box left by clicking the canvas', () => {
     const id = addEmptyBox(300, 300);
-    page().boxes[2].text = 'real';
+    endEdit('real', '');
     deselect();
     resetHistory();
     deleteBox(id);

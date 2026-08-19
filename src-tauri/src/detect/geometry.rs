@@ -104,7 +104,7 @@ impl Letterbox {
     /// Clamped because a model is free to predict a box that runs off the edge
     /// of the image it was given, and every consumer downstream — the reading
     /// order sort, the queue, the placement rect — assumes a box is on the page.
-    pub fn to_source(&self, b: BBox, src_w: u32, src_h: u32) -> BBox {
+    pub fn to_source(self, b: BBox, src_w: u32, src_h: u32) -> BBox {
         let (w0, h0) = (src_w as f64, src_h as f64);
         let gain = (self.net_h as f64 / h0).min(self.net_w as f64 / w0);
         // `.max(1.0)` for the same reason [`Letterbox::fit`] floors `inner_w`:

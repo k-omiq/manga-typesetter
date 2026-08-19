@@ -31,7 +31,16 @@
             "$HOME/.ssh/**",
             "$HOME/.aws/**",
             "$HOME/.gnupg/**",
-            "$HOME/.config/gh/**"
+            "$HOME/.config/gh/**",
+            "$HOME/.kube/**",
+            "$HOME/.azure/**",
+            "$HOME/.config/gcloud/**",
+            "$HOME/.netrc",
+            "$HOME/.npmrc",
+            "$HOME/.zsh_history",
+            "$HOME/.bash_history",
+            "$HOME/.tauri/**",
+            "$HOME/Library/Keychains/**"
           ]
         }
       }

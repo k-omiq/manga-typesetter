@@ -494,12 +494,16 @@ pub struct OcrEngine {
 /// `Error executing model: ... (error code: -1)`. So the flag is not a tuning
 /// knob; it is which of the two graphs CoreML can actually take.
 fn load_session(model_path: &Path, coreml: bool) -> ort::Result<Session> {
-    let builder = Session::builder()?;
+    #[cfg_attr(target_os = "macos", allow(unused_mut))]
+    let mut builder = Session::builder()?;
+    #[cfg(target_os = "macos")]
     let mut builder = if coreml {
         builder.with_execution_providers([ort::ep::CoreML::default().build()])?
     } else {
         builder
     };
+    #[cfg(not(target_os = "macos"))]
+    let _ = coreml;
     builder.commit_from_file(model_path)
 }
 
@@ -600,11 +604,20 @@ impl OcrEngine {
             ])?;
             let (shape, logits) = outputs["logits"].try_extract_tensor::<f32>()?;
             let out_seq = shape[1] as usize;
+            
+            if seq_len == 1 && shape[2] as usize != vocab_size {
+                return Err(ort::Error::new(format!(
+                    "decoder model's vocabulary size ({}) does not match vocab.txt line count ({})",
+                    shape[2], vocab_size
+                )));
+            }
 
             // `next_token_scores`: log-softmax of the last position, banned
             // trigram completions knocked out, then the beam's running score.
             let mut grid = vec![0f32; NUM_BEAMS * vocab_size];
             for b in 0..NUM_BEAMS {
+                // The logits shape is [NUM_BEAMS, out_seq, vocab_size], so the last
+                // token of beam b starts at b * out_seq * vocab_size + (out_seq - 1) * vocab_size.
                 let start = (b * out_seq + out_seq - 1) * vocab_size;
                 let row = &mut grid[b * vocab_size..(b + 1) * vocab_size];
                 row.copy_from_slice(&logits[start..start + vocab_size]);

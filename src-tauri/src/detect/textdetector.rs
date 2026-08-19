@@ -68,9 +68,11 @@ impl TextDetector {
     /// Silent fallback rather than an error: CoreML is an optimisation, and a
     /// machine where it fails to register should still detect text, just slower.
     pub fn load(model_path: &std::path::Path) -> ort::Result<TextDetector> {
-        let session = Session::builder()?
-            .with_execution_providers([ort::ep::CoreML::default().build()])?
-            .commit_from_file(model_path)?;
+        #[cfg_attr(target_os = "macos", allow(unused_mut))]
+        let mut builder = Session::builder()?;
+        #[cfg(target_os = "macos")]
+        let mut builder = builder.with_execution_providers([ort::ep::CoreML::default().build()])?;
+        let session = builder.commit_from_file(model_path)?;
         Ok(TextDetector { session })
     }
 
@@ -97,7 +99,7 @@ impl TextDetector {
         let channels = if blk_shape.len() == 3 { blk_shape[2] as usize } else { 0 };
         let proposals = decode_blocks(blk, anchors, channels, &lb);
 
-        let mask = page_mask(seg, &lb, im_w, im_h);
+        let mask = page_mask(seg, &lb, im_w, im_h)?;
         let lines = decode_lines(det, &lb);
 
         let blocks = group_output(&proposals, &lines, im_w as i32, im_h as i32, &mask);
@@ -138,8 +140,8 @@ pub struct Letterbox {
 impl Letterbox {
     pub fn fit(src_w: usize, src_h: usize) -> Letterbox {
         let r = (INPUT_SIZE as f64 / src_h as f64).min(INPUT_SIZE as f64 / src_w as f64);
-        let inner_w = round_half_even(src_w as f64 * r) as usize;
-        let inner_h = round_half_even(src_h as f64 * r) as usize;
+        let inner_w = (round_half_even(src_w as f64 * r) as usize).max(1);
+        let inner_h = (round_half_even(src_h as f64 * r) as usize).max(1);
         let pad_w = INPUT_SIZE - inner_w;
         let pad_h = INPUT_SIZE - inner_h;
         Letterbox {
@@ -256,7 +258,15 @@ fn decode_blocks(data: &[f32], anchors: usize, channels: usize, lb: &Letterbox) 
 }
 
 /// Turn the U-Net head into a page-sized 8-bit text mask.
-fn page_mask(seg: &[f32], lb: &Letterbox, im_w: u32, im_h: u32) -> GrayImage {
+fn page_mask(seg: &[f32], lb: &Letterbox, im_w: u32, im_h: u32) -> ort::Result<GrayImage> {
+    let plane = INPUT_SIZE * INPUT_SIZE;
+    if seg.len() < plane {
+        return Err(ort::Error::new(format!(
+            "segmentation head returned {} values, expected at least {}",
+            seg.len(), plane
+        )));
+    }
+
     // Sigmoid is already applied in the graph; scaling truncates, as
     // `astype(np.uint8)` does.
     let mut cropped = vec![0u8; lb.inner_w * lb.inner_h];
@@ -266,7 +276,7 @@ fn page_mask(seg: &[f32], lb: &Letterbox, im_w: u32, im_h: u32) -> GrayImage {
         }
     }
     let resized = resize_linear_u8(&cropped, lb.inner_w, lb.inner_h, 1, im_w as usize, im_h as usize);
-    GrayImage::from_raw(im_w, im_h, resized).expect("mask buffer sized to the page")
+    Ok(GrayImage::from_raw(im_w, im_h, resized).expect("mask buffer sized to the page"))
 }
 
 /// Recover line quads from the DBNet head, in page coordinates.
@@ -309,6 +319,13 @@ mod tests {
         assert_eq!(lb.pad_w, 304);
         assert!((lb.ratio_x - 1080.0 / 720.0).abs() < 1e-12);
         assert!((lb.ratio_y - 1535.0 / 1024.0).abs() < 1e-12);
+
+        // A webtoon strip so thin its scaled width is less than half a pixel
+        // floors to 1 instead of 0, avoiding a division by zero in `ratio_x`.
+        let lb_thin = Letterbox::fit(1, 100000);
+        assert_eq!(lb_thin.inner_w, 1);
+        assert_eq!(lb_thin.inner_h, 1024);
+        assert!((lb_thin.ratio_x - 1.0).abs() < 1e-12);
     }
 
     #[test]
@@ -388,7 +405,7 @@ mod tests {
                 seg[y * INPUT_SIZE + x] = 1.0;
             }
         }
-        let m = page_mask(&seg, &lb, 512, 1024);
+        let m = page_mask(&seg, &lb, 512, 1024).unwrap();
         assert_eq!((m.width(), m.height()), (512, 1024));
         assert_eq!(m.get_pixel(256, 512).0[0], 255);
     }
@@ -400,7 +417,7 @@ mod tests {
         // blank, which silently deletes text blocks via the density gate.
         let lb = Letterbox::fit(512, 1024);
         let seg = vec![1f32; INPUT_SIZE * INPUT_SIZE];
-        let m = page_mask(&seg, &lb, 512, 1024);
+        let m = page_mask(&seg, &lb, 512, 1024).unwrap();
         assert_eq!(m.get_pixel(511, 1023).0[0], 255);
     }
 

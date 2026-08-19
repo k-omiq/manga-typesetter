@@ -578,7 +578,12 @@ describe('interiorLineWidths — the width each line actually has', () => {
     expect(w.length).toBe(12);
     for (const v of w) expect(v).toBeGreaterThan(0);
     expect(w.every((v) => Number.isFinite(v))).toBe(true);
+    const rect = { kind: 'rect', x: 40, y: 60, w: 300, h: 120 };
     expect(interiorLineWidths(ell, 30, 0)).toEqual([]);
+    expect(interiorLineWidths(ell, 30, undefined)).toEqual([]);
+    expect(interiorLineWidths(ell, 30, NaN)).toEqual([]);
+    expect(interiorLineWidths(ell, 30, -5)).toEqual([]);
+    expect(interiorLineWidths(rect, 30, undefined)).toEqual([]);
     expect(interiorLineWidths(null, 30, 3)).toEqual([]);
   });
 });

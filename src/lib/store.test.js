@@ -13,6 +13,7 @@ import {
   saveSidebar,
   flushSidebar,
   endEdit,
+  deselect,
   settleEdits,
   recordEdit,
   placeActiveAt,
@@ -1997,6 +1998,13 @@ describe('deleting a free-typed box takes its line with it', () => {
     expect(page().lines.map((l) => l.n)).toEqual([1]);
   });
 
+  it('takes the line too when an empty free box is abandoned via deselect', () => {
+    addEmptyBox(100, 100);
+    deselect();
+    expect(page().boxes.length).toBe(0);
+    expect(page().lines.map((l) => l.n)).toEqual([1]);
+  });
+
   // Stronger than the case above, which only ever saw the queue armed by
   // `addEmptyBox`'s own path: here the user has clicked the free row, so
   // `activeLineN` really is the number that is about to leave the document.
@@ -2189,6 +2197,21 @@ describe('translate mode', () => {
     activateLine(1);
     placeActiveAt(100, 100);
     expect(page().boxes).toHaveLength(0);
+  });
+
+  it('disallows deleting boxes in translate mode', () => {
+    loadProjectPages([
+      {
+        id: 1,
+        w: 800,
+        h: 1200,
+        lines: [{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }],
+        boxes: [{ id: 'b1', lineN: 1, text: 'Ah', x: 0, y: 0, w: 10, h: 10, style: defaultStyle() }],
+      },
+    ]);
+    app.chapterMode = 'translate';
+    deleteBox('b1');
+    expect(page().boxes).toHaveLength(1);
   });
 
   it('arms the active line without selecting canvas boxes on row click', () => {

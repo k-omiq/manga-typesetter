@@ -58,9 +58,10 @@ export function arcLayout(text, style, sizePx) {
   const ls = (Number(style?.letterSpacing) || 0) * (style.size > 0 ? sizePx / style.size : 0);
   const total = widths.reduce((a, b) => a + b, 0) + Math.max(0, chars.length - 1) * ls;
   if (!Number.isFinite(total) || total <= 0) return [];
-  const maxAng = Math.max((Math.abs(style.curve) / 100) * 2.4, 1e-4);
+  const curve = Number(style?.curve) || 0;
+  const maxAng = Math.max((Math.abs(curve) / 100) * 2.4, 1e-4);
   const R = total / maxAng;
-  const sign = Math.sign(style.curve) || 1;
+  const sign = Math.sign(curve) || 1;
   const out = [];
   let cum = 0;
   for (let i = 0; i < chars.length; i++) {
@@ -136,21 +137,29 @@ export function wrapLinesDOM(text, style, sizePx, contentWidthPx) {
       const range = document.createRange();
       let curTop = null;
       let start = 0;
-      for (let i = 0; i < para.length; i++) {
+      for (let i = 0; i < para.length;) {
+        const cp = para.codePointAt(i);
+        const charLen = cp > 0xffff ? 2 : 1;
         range.setStart(node, i);
-        range.setEnd(node, i + 1);
+        range.setEnd(node, i + charLen);
         const rects = range.getClientRects();
         const rect = rects[rects.length - 1];
-        if (!rect) continue;
+        if (!rect) {
+          i += charLen;
+          continue;
+        }
         const top = Math.round(rect.top);
         if (curTop === null) curTop = top;
         else if (Math.abs(top - curTop) > 1) {
-          out.push(para.slice(start, i).replace(/\s+$/, ''));
+          const raw = para.slice(start, i).replace(/\s+$/, '');
+          out.push(start === 0 ? raw : raw.replace(/^\s+/, ''));
           start = i;
           curTop = top;
         }
+        i += charLen;
       }
-      out.push(para.slice(start).replace(/\s+$/, ''));
+      const raw = para.slice(start).replace(/\s+$/, '');
+      out.push(start === 0 ? raw : raw.replace(/^\s+/, ''));
     }
   } finally {
     el.remove();

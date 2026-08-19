@@ -1059,6 +1059,15 @@ export function selectBox(id) {
 }
 export function deselect() {
   if (app.editingId) {
+    const b = byId(app.editingId);
+    const own = b ? boxOwnText(b) : null;
+    if (own != null && own.trim() === '' && isFreeBox(b)) {
+      const id = app.editingId;
+      app.editingId = null;
+      app.selectedId = null;
+      deleteBox(id);
+      return;
+    }
     settleText();
     settlePending();
   }
@@ -1938,6 +1947,7 @@ export function addTextBoxInView() {
 
 // ---------- delete ----------
 export function deleteBox(id) {
+  if (isTranslateMode()) return;
   const p = page();
   const b = byId(id);
   if (!b) return;

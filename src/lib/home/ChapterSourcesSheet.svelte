@@ -20,6 +20,7 @@
   import { pickImageFiles, pickJsonFile, readTranslations } from '../importer.js';
   import { toast } from '../store.svelte.js';
   import { plural } from '../format.js';
+  import { joinPath } from '../paths.js';
 
   // `busy` is bindable so the app-level Escape handler can refuse to dismiss
   // the sheet mid-copy, matching the overlay guard below.
@@ -119,6 +120,7 @@
       await fn();
     } catch (e) {
       error = `${label} — ${e?.message ?? e}`;
+      toast(error);
     }
   }
 
@@ -243,8 +245,11 @@
 
   // The asset protocol serves the library directly, so a 200-page chapter costs
   // no memory here — the same route ProjectCard's cover already takes.
-  const srcFor = (pg) =>
-    convertFileSrc(`${pg.cleaned && !pg.missing ? sources.cleanedDir : sources.rawsDir}/${pg.cleaned && !pg.missing ? pg.cleaned : pg.file}`);
+  const srcFor = (pg) => {
+    const dir = pg.cleaned && !pg.missing ? sources.cleanedDir : sources.rawsDir;
+    const file = pg.cleaned && !pg.missing ? pg.cleaned : pg.file;
+    return convertFileSrc(joinPath(dir, file));
+  };
 </script>
 
 {#if open}

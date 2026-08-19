@@ -168,6 +168,13 @@
       error = 'Name the new project.';
       return;
     }
+    // An emptied number input binds null; that must mean 1, not chapter 000.
+    // An explicit 0 is still honoured — chapter 0 prologues are a real thing.
+    const n = number === null || number === undefined || number === '' ? 1 : Number(number);
+    if (!Number.isFinite(n) || n < 0) {
+      error = 'Enter a valid chapter number.';
+      return;
+    }
     busy = true;
     // Set only when this submit created the project, so a later chapter failure
     // can name what it left behind in the library.
@@ -177,9 +184,6 @@
         createdProject = await createProject(newProjectName.trim(), { layout: newProjectLayout });
       }
       const pid = createdProject ? createdProject.id : target;
-      // An emptied number input binds null; that must mean 1, not chapter 000.
-      // An explicit 0 is still honoured — chapter 0 prologues are a real thing.
-      const n = number === null || number === undefined || number === '' ? 1 : Number(number);
 
       let chapter;
       let note;

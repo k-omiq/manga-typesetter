@@ -31,3 +31,17 @@ export function chapterSlug(number, title) {
   const t = title ? slugify(title) : '';
   return t ? `${n}-${t}` : n;
 }
+
+// Join path parts using forward slashes and normalize separators so paths
+// passed to convertFileSrc or displayed in the UI work across platforms.
+export function joinPath(...parts) {
+  return parts
+    .map((p, i) => {
+      const s = String(p ?? '').replace(/\\/g, '/');
+      if (i === 0) return s.replace(/\/+$/, '');
+      return s.replace(/^\/+|\/+$/g, '');
+    })
+    .filter((p, i) => i === 0 || p.length > 0)
+    .join('/');
+}
+

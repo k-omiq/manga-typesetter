@@ -125,11 +125,13 @@ pub fn analyze(
         // the golden fixtures were captured through — `_OCR_BATCH` defaults to
         // 1 on the Python side for the same reason.
         for crop in &queue {
-            texts.push(
-                engine
-                    .ocr(&crop.as_python_saw_it())
-                    .map_err(|e| format!("ocr failed: {e}"))?,
-            );
+            match engine.ocr(&crop.as_python_saw_it()) {
+                Ok(text) => texts.push(text),
+                Err(e) => {
+                    log::warn!("ocr failed for crop, degrading to empty text: {e}");
+                    texts.push(String::new());
+                }
+            }
         }
     }
 

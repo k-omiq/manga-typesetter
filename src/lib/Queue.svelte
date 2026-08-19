@@ -26,8 +26,52 @@
     normalizeTagName,
     MAX_TAG_LEN,
   } from './tags.svelte.js';
+  import {
+    createFieldUndo,
+    resyncField,
+    recordFieldEdit,
+    undoField,
+    redoField,
+    caretAfter,
+    isAtomicInput,
+  } from './editor/field-undo.svelte.js';
 
   const p = $derived(page());
+
+  // ---------- ⌘Z inside the translation textarea ----------
+  const fieldUndo = createFieldUndo();
+  let fieldOwner = null;
+
+  $effect(() => {
+    const activeLine = p.lines.find((l) => l.n === p.activeLineN);
+    const key = activeLine ? `${p.id}:${activeLine.n}` : null;
+    const v = activeLine?.en ?? '';
+    if (key === fieldOwner && v === fieldUndo.stack[fieldUndo.i]) return;
+    fieldOwner = key;
+    resyncField(fieldUndo, v);
+  });
+
+  function onTextareaInput(e, line) {
+    const v = e.currentTarget.value;
+    line.en = v;
+    recordFieldEdit(fieldUndo, v, { atomic: isAtomicInput(e.inputType) });
+    fitLineBoxes(line.n);
+    markUnsaved();
+  }
+
+  function onTextareaKey(e, line) {
+    if (!(e.metaKey || e.ctrlKey) || (e.key !== 'z' && e.key !== 'Z')) return;
+    e.preventDefault();
+    const next = e.shiftKey ? redoField(fieldUndo) : undoField(fieldUndo);
+    if (next == null) return;
+    const el = e.currentTarget;
+    const caret = caretAfter(el.value, next);
+    el.value = next;
+    el.setSelectionRange(caret, caret);
+    line.en = next;
+    fitLineBoxes(line.n);
+    markUnsaved();
+  }
 
   // In a translate chapter the queue IS the work, and nothing in it is about
   // placement: there are no boxes on the canvas to be placed or unplaced, so the
@@ -407,7 +451,8 @@
             rows="2"
             placeholder="English…"
             value={line.en ?? ''}
-            oninput={(e) => { line.en = e.currentTarget.value; fitLineBoxes(line.n); markUnsaved(); }}
+            oninput={(e) => onTextareaInput(e, line)}
+            onkeydown={(e) => onTextareaKey(e, line)}
           ></textarea>
         </span>
         {#if !translate}<span class="dot {placed ? 'placed' : 'unplaced'}" title={placed ? 'Placed' : 'Unplaced'}></span>{/if}

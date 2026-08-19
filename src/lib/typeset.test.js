@@ -755,7 +755,7 @@ describe('layoutLines — one answer for the editor and the export', () => {
 });
 
 describe('measure.js robustness and trailing whitespace', () => {
-  it('guards arcLayout against size 0 and missing letterSpacing without emitting NaN', () => {
+  it('guards arcLayout against size 0, missing letterSpacing, and missing/NaN curve without emitting NaN', () => {
     expect(arcLayout('hello', { size: 0, letterSpacing: 0, curve: 50 }, 20)).toEqual([]);
     expect(arcLayout('hello', { size: 20, letterSpacing: 0, curve: 50 }, 0)).toEqual([]);
     const layout = arcLayout('hello', { size: 20, letterSpacing: undefined, curve: 50 }, 20);
@@ -765,6 +765,16 @@ describe('measure.js robustness and trailing whitespace', () => {
       expect(Number.isFinite(ch.y)).toBe(true);
       expect(Number.isFinite(ch.rot)).toBe(true);
       expect(Number.isFinite(ch.w)).toBe(true);
+    }
+    for (const badCurve of [undefined, NaN, null]) {
+      const flat = arcLayout('hello', { size: 20, letterSpacing: 0, curve: badCurve }, 20);
+      expect(flat.length).toBe(5);
+      for (const ch of flat) {
+        expect(Number.isFinite(ch.x)).toBe(true);
+        expect(Number.isFinite(ch.y)).toBe(true);
+        expect(Number.isFinite(ch.rot)).toBe(true);
+        expect(Number.isFinite(ch.w)).toBe(true);
+      }
     }
   });
 
@@ -779,6 +789,46 @@ describe('measure.js robustness and trailing whitespace', () => {
     expect(wrapped).toEqual(['hello world']);
     const multiline = wrapLines('line 1   \nline 2   ', { font: 'Comic Neue', size: 20, letterSpacing: 0 }, 20, 200);
     expect(multiline).toEqual(['line 1', 'line 2']);
+  });
+
+  it('wrapLinesDOM handles leading whitespace on wrapped lines and surrogate pairs', () => {
+    const originalDoc = globalThis.document;
+    try {
+      const createdDiv = {
+        style: {},
+        textContent: '',
+        firstChild: { length: 0 },
+        remove: () => {},
+      };
+      globalThis.document = {
+        createElement: () => createdDiv,
+        body: { appendChild: () => {} },
+        createRange: () => {
+          let startOffset = 0;
+          return {
+            setStart: (_, s) => { startOffset = s; },
+            setEnd: () => {},
+            getClientRects: () => {
+              const top = startOffset >= 6 ? 20 : 0;
+              return [{ top }];
+            },
+          };
+        },
+      };
+      const res = wrapLinesDOM('hello world', { font: 'Comic Neue', size: 20, letterSpacing: 0 }, 20, 100);
+      expect(res).toEqual(['hello', 'world']);
+
+      const emojiStarts = [];
+      globalThis.document.createRange = () => ({
+        setStart: (_, s) => { emojiStarts.push(s); },
+        setEnd: () => {},
+        getClientRects: () => [{ top: 0 }],
+      });
+      wrapLinesDOM('A😀B', { font: 'Comic Neue', size: 20, letterSpacing: 0 }, 20, 100);
+      expect(emojiStarts).toEqual([0, 1, 3]);
+    } finally {
+      globalThis.document = originalDoc;
+    }
   });
 });
 

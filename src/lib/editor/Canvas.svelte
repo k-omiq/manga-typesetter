@@ -85,23 +85,45 @@
 
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-  // Bound a candidate offset against where the frame actually is. `applied` is
-  // the offset the DOM is currently rendered with, which is what lets the
-  // un-panned position be recovered from a live measurement instead of being
-  // tracked separately — the frame moves with the zoom, the fit, the sidebar
-  // and the scroll position, and every one of those would need mirroring here
-  // otherwise.
-  function clampPan(next, applied) {
+  // Everything the clamp is made of, read off the layout in one go: the frame's
+  // un-panned position and the two boxes. `applied` is the offset the DOM is
+  // currently rendered with, which is what lets the un-panned position be
+  // recovered from a live measurement instead of being tracked separately — the
+  // frame moves with the zoom, the fit, the sidebar and the scroll position, and
+  // every one of those would need mirroring here otherwise.
+  function panBase(applied) {
     // Whatever the pan is actually applied to: one page frame, or the whole
     // longstrip column.
     const el = strip ? stripEl : pageFrameEl;
-    if (!scrollEl || !el) return next;
+    if (!scrollEl || !el) return null;
     const sr = scrollEl.getBoundingClientRect();
     const fr = el.getBoundingClientRect();
-    const ux = fr.left - sr.left - applied.x;
-    const uy = fr.top - sr.top - applied.y;
-    const keepX = Math.min(KEEP, fr.width);
-    const keepY = Math.min(KEEP, fr.height);
+    return {
+      ux: fr.left - sr.left - applied.x,
+      uy: fr.top - sr.top - applied.y,
+      fw: fr.width,
+      fh: fr.height,
+      vw: sr.width,
+      vh: sr.height,
+    };
+  }
+
+  // Bound a candidate offset against a base `panBase` measured earlier. `dl`/`dt`
+  // are how far the container has been scrolled since that measurement: scrolling
+  // right by n slides the frame left by n, so the frame's un-panned position
+  // follows from arithmetic rather than from a second look at the layout.
+  //
+  // That split is what the drag needs. Every move writes scrollLeft/scrollTop and
+  // then clamps, and a getBoundingClientRect between those two forces a
+  // synchronous layout on every single pointermove — of the whole longstrip
+  // column, in a strip. It also asked the DOM a question about a pan the DOM has
+  // not necessarily been given yet, so the base it derived could disagree with
+  // the offset it was clamping, and the page jittered at the edges of the range.
+  function clampTo(next, base, dl = 0, dt = 0) {
+    const ux = base.ux - dl;
+    const uy = base.uy - dt;
+    const keepX = Math.min(KEEP, base.fw);
+    const keepY = Math.min(KEEP, base.fh);
     // Snapped to the device-pixel grid, not left fractional. Pointer clientX/Y
     // and the rect maths above are fractional, and a fractional translate on a
     // page scaled to a non-integer zoom changes the raster phase of every
@@ -110,7 +132,7 @@
     const dpr = window.devicePixelRatio || 1;
     const snap = (v) => Math.round(v * dpr) / dpr;
     return {
-      x: snap(clamp(next.x, keepX - fr.width - ux, sr.width - keepX - ux)),
+      x: snap(clamp(next.x, keepX - base.fw - ux, base.vw - keepX - ux)),
       // A strip does not pan vertically. Down the column IS the scroll — the
       // container always has somewhere to go, so a free offset could only ever
       // be built up at the two ends of the chapter, and the clamp that bounds it
@@ -118,8 +140,16 @@
       // of thousands of pixels: one drag at the bottom would throw the whole
       // chapter off screen with nothing to grab. The horizontal axis keeps the
       // hand it always had, for a page zoomed wider than the viewport.
-      y: strip ? 0 : snap(clamp(next.y, keepY - fr.height - uy, sr.height - keepY - uy)),
+      y: strip ? 0 : snap(clamp(next.y, keepY - base.fh - uy, base.vh - keepY - uy)),
     };
+  }
+
+  // The at-rest form: measure and clamp in one breath. Every caller outside a
+  // drag is answering a change that has already been laid out — a zoom, a
+  // resize — so there is nothing to be gained by holding the measurement.
+  function clampPan(next, applied) {
+    const base = panBase(applied);
+    return base ? clampTo(next, base) : next;
   }
 
   const p = $derived(page());
@@ -253,6 +283,10 @@
   // otherwise land a box off the paper — so their branch below still demands a
   // press that landed on `.boxlayer` itself.
   function onStagePointerDown(e) {
+    // The primary button and nothing else. A right-click is on its way to a
+    // context menu and a middle one is a paste on some platforms; neither is a
+    // request to drag the page around or to leave a box where it landed.
+    if (e.button !== 0) return;
     if (app.bulk.active) return; // bulk mode: only box clicks matter
     if (app.tool === 'pan') {
       // The one thing on the stage the hand does not take: a box being typed
@@ -290,11 +324,23 @@
   // shortcut mid-drag must not change the answer under it.
   function startPanPointer(e, addsBox) {
     const pid = e.pointerId;
+    // The gesture follows the pointer even once it leaves the window: without
+    // the capture, a button released outside gets no pointerup here at all and
+    // the page comes back stuck to the cursor. Captured on the element the press
+    // landed on rather than on `.stage`, because a captured pointer's events are
+    // retargeted at the capture element — and the release below resolves which
+    // page a new box goes on from `ev.target`. The listeners stay on `document`:
+    // a captured pointer's events still bubble to it.
+    e.target.setPointerCapture?.(pid);
     const startX = e.clientX,
       startY = e.clientY;
     const sl = scrollEl.scrollLeft,
       st = scrollEl.scrollTop;
     const basePan = { x: pan.x, y: pan.y };
+    // Measured once, here, and not again for the rest of the gesture — see
+    // `clampTo`. What changes under a pan is the scroll position, and the
+    // handler already knows how far it has moved it.
+    const geom = panBase(basePan);
     let panning = false;
     const setLive = (v) => {
       if (panLive !== v) panLive = v;
@@ -323,7 +369,8 @@
       scrollEl.scrollTop = gotT;
       // Scrolling right by n and translating the page left by n are the same
       // picture, hence the sign.
-      pan = clampPan({ x: basePan.x - (wantL - gotL), y: basePan.y - (wantT - gotT) }, pan);
+      const want = { x: basePan.x - (wantL - gotL), y: basePan.y - (wantT - gotT) };
+      pan = geom ? clampTo(want, geom, gotL - sl, gotT - st) : want;
     };
     // One controller for both endings, the same net FloatingPanel and TextBox
     // keep: a gesture the browser takes away from us — an OS gesture claiming
@@ -544,10 +591,18 @@
     // The first answer, before the user has scrolled anything: a chapter opens
     // at the top, and the reference strip has to be told so.
     queueStripSync();
+    // Continuous in the wheel's own delta rather than a fixed step per event,
+    // the same shape the reference strip's pinch already had (see `RefSidebar`).
+    // A trackpad pinch arrives as sixty to a hundred small events, and a flat
+    // ×1.1 on each of them crossed the entire zoom range in one flick — the page
+    // leapt to the ceiling and back. `exp` keeps it geometric like the dock's
+    // buttons, so the same travel is the same ratio wherever the zoom starts,
+    // and the ends are still `setZoom`'s clamp.
+    const ZOOM_PER_PX = 0.0035;
     const onWheel = (e) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        setZoom(app.zoom * (e.deltaY < 0 ? 1.1 : 0.9));
+        setZoom(app.zoom * Math.exp(-e.deltaY * ZOOM_PER_PX));
       }
     };
     scrollEl.addEventListener('wheel', onWheel, { passive: false });

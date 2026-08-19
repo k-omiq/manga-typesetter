@@ -296,6 +296,9 @@
       if (fontModalOpen) return (fontModalOpen = false);
       return deselect();
     }
+    // Modals handle their own keyboard interactions; suppress global editor
+    // shortcuts while any modal dialog overlay is open on screen.
+    if (typeof document !== 'undefined' && document.querySelector('.modal-overlay.open')) return;
     if (route.name !== 'editor') return;
     // Before the single-letter tool shortcuts, and the reason they are guarded
     // at all: without this, ⌘Z would read as a bare 'z' on its way past and
@@ -340,7 +343,7 @@
       redo();
       return;
     }
-    if ((e.key === 'Delete' || e.key === 'Backspace') && app.selectedId) {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && app.selectedId && !isTranslateMode()) {
       e.preventDefault();
       deleteBox(app.selectedId);
     }

@@ -278,7 +278,6 @@ async fn download(url: &str, path: &Path) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
     let tmp = part_path(path);
-    let deadline = Instant::now() + download_deadline();
 
     // `Vec<u8>` rather than reqwest's `Bytes`, which would move without a copy
     // but is a type this crate cannot name without taking a dependency on
@@ -299,24 +298,29 @@ async fn download(url: &str, path: &Path) -> Result<(), String> {
     };
 
     let streamed = async {
-        let mut resp = reqwest::Client::new()
+        let mut resp = reqwest::Client::builder()
+            .connect_timeout(download_deadline())
+            .build()
+            .map_err(|e| format!("{url}: {e}"))?
             .get(url)
-            .timeout(download_deadline())
             .send()
             .await
             .map_err(|e| format!("{url}: {e}"))?
             .error_for_status()
             .map_err(|e| format!("{url}: {e}"))?;
 
+        let mut deadline = Instant::now() + download_deadline();
+
         // `chunk()` rather than `bytes_stream()`: the same streaming, without
         // pulling the `stream` feature and `futures-util` in for one loop.
         while let Some(chunk) = resp.chunk().await.map_err(|e| format!("{url}: {e}"))? {
             if Instant::now() > deadline {
                 return Err(format!(
-                    "download exceeded {:.0}s (stalled mirror?): {url}",
+                    "download stalled for {:.0}s (stalled mirror?): {url}",
                     download_deadline().as_secs_f64()
                 ));
             }
+            deadline = Instant::now() + download_deadline();
             if tx.send(chunk.to_vec()).await.is_err() {
                 // The only way the receiver hangs up is a write error, and it
                 // is holding the message that says which. Stop feeding it and
@@ -476,11 +480,15 @@ pub async fn detect_analyze(
     ocr: bool,
 ) -> Result<AnalyzeResponse, String> {
     let engine = state.inner().clone();
-    let mut needed: Vec<&ModelFile> = vec![&TEXT_DETECTOR, &PANEL_MODEL];
+    let mut needed: Vec<&ModelFile> = vec![&TEXT_DETECTOR];
     if ocr {
         needed.extend(OCR_FILES.iter());
     }
     engine.ensure(&needed).await?;
+
+    if let Err(e) = engine.ensure(&[&PANEL_MODEL]).await {
+        log::warn!("failed to download panel model, reading order degrades: {e}");
+    }
 
     tauri::async_runtime::spawn_blocking(move || engine.analyze_blocking(&image, ocr))
         .await

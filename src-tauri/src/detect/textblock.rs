@@ -28,6 +28,8 @@ pub enum Language {
 }
 
 impl Language {
+    // No caller yet; kept as the stable string form for logs and future UI.
+    #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
             Language::Eng => "eng",

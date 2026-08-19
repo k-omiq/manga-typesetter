@@ -301,7 +301,7 @@ mod imp {
 
         // Biggest first — the point of the list is to see what is holding the
         // memory, and that is almost always the web view.
-        rows.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+        rows.sort_by_key(|r| std::cmp::Reverse(r.bytes));
         let total = rows.iter().map(|r| r.bytes).sum();
         MemoryReport { supported: true, total, processes: rows, incomplete }
     }

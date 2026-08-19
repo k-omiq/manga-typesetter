@@ -66,18 +66,28 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
       - name: Collect updater artifacts
         shell: bash
+        # Renamed to MangaTypesetter_<version>_<platform>.<ext>: the platform tag keeps
+        # the two mac architectures from clobbering each other under one R2 key, and
+        # dropping the space in "Manga Typesetter" keeps update URLs unencoded-safe.
         run: |
           set -euo pipefail
+          VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
           BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
           OUT="out/${{ matrix.platform }}"
+          PREFIX="MangaTypesetter_${VERSION}_${{ matrix.platform }}"
           mkdir -p "$OUT"
           case "${{ matrix.platform }}" in
             darwin-*)
-              cp "$BUNDLE"/macos/*.app.tar.gz "$BUNDLE"/macos/*.app.tar.gz.sig "$OUT"/
-              cp "$BUNDLE"/dmg/*.dmg "$OUT"/ 2>/dev/null || true
+              SRC=$(ls "$BUNDLE"/macos/*.app.tar.gz)
+              cp "$SRC" "$OUT/$PREFIX.app.tar.gz"
+              cp "$SRC.sig" "$OUT/$PREFIX.app.tar.gz.sig"
+              DMG=$(ls "$BUNDLE"/dmg/*.dmg 2>/dev/null | head -1 || true)
+              [ -n "$DMG" ] && cp "$DMG" "$OUT/$PREFIX.dmg"
               ;;
             windows-*)
-              cp "$BUNDLE"/nsis/*-setup.exe "$BUNDLE"/nsis/*-setup.exe.sig "$OUT"/
+              SRC=$(ls "$BUNDLE"/nsis/*-setup.exe)
+              cp "$SRC" "$OUT/$PREFIX-setup.exe"
+              cp "$SRC.sig" "$OUT/$PREFIX-setup.exe.sig"
               ;;
           esac
           ls -la "$OUT"
@@ -108,6 +118,8 @@ jobs:
             git fetch --depth=1 origin +refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}
             NOTES=$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}")
           fi
+          # Lightweight tags have no message; don't publish empty notes.
+          [ -n "$NOTES" ] || NOTES="Release ${GITHUB_REF_NAME:-$(date -u +%Y-%m-%d)}"
           {
             echo "notes<<NOTES_EOF"
             echo "$NOTES"
@@ -122,6 +134,10 @@ jobs:
         run: |
           set -euo pipefail
           VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          if [ "${{ github.event_name }}" = "push" ] && [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match tauri.conf.json version v${VERSION} — bump the version before tagging" >&2
+            exit 1
+          fi
           BASE_URL="https://typesetter.komiq.cc"
           BUCKET="typesetter-updates"
           echo "== publishing v$VERSION =="

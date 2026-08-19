@@ -9,7 +9,18 @@ import { planStripCuts, boxSpanY, SLICE_H_DEFAULT } from './editor/strip-cuts.js
 // note at the top of text-json.js. Re-exported here because this is where every
 // existing caller (and the export dialog's JSON format) asks for it.
 import { buildTextJson } from './text-json.js';
+import { fsx } from './fsx.js';
 export { buildTextJson };
+
+// Strip path separators and traversal from the export name, keeping unicode and spaces.
+export function sanitizeExportName(name) {
+  const s = String(name ?? '')
+    .replace(/[/\\]/g, '')
+    .replace(/\.\.+/g, '')
+    .replace(/^\.+$/, '')
+    .trim();
+  return s || 'page';
+}
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -467,7 +478,11 @@ export function renderBoxLayer(box, W, H, scratch, p, scale = 1) {
 // Render one page to a Blob in the requested raster format (native resolution).
 async function renderPageBlob(p, fmt) {
   const canvas = await renderPageCanvas(p);
-  return new Promise((res) => canvas.toBlob(res, MIME[fmt], QUALITY[fmt]));
+  const blob = await new Promise((res) => canvas.toBlob(res, MIME[fmt], QUALITY[fmt]));
+  if (!blob) {
+    throw new Error(`Could not render page ${p?.id ?? ''} (page too large)`.trim());
+  }
+  return blob;
 }
 
 // ---------- longstrip: the chapter as one column, re-cut ----------
@@ -612,6 +627,7 @@ async function exportStripImages(fmt) {
   const ext = EXT[fmt];
   const n = cuts.length - 1;
   const digits = Math.max(2, String(n).length);
+  const baseName = sanitizeExportName(app.exportName);
   const items = [];
   for (let i = 0; i < n; i++) {
     const canvas = await renderStripSliceCanvas(pages, tops, cuts[i], cuts[i + 1]);
@@ -622,7 +638,7 @@ async function exportStripImages(fmt) {
     canvas.width = 0;
     canvas.height = 0;
     items.push({
-      name: `${app.exportName}-strip-${String(i + 1).padStart(digits, '0')}.${ext}`,
+      name: `${baseName}-strip-${String(i + 1).padStart(digits, '0')}.${ext}`,
       blob,
       page: pages[0],
     });
@@ -671,9 +687,8 @@ export function stripPageSuffix(stem, pageId) {
 
 // Native save via the OS dialog + filesystem (Tauri). Returns the directory used.
 async function saveNative(items, scope, fmt) {
-  const [{ save, open }, { writeFile }, { join, dirname, basename }] = await Promise.all([
+  const [{ save, open }, { join, dirname, basename }] = await Promise.all([
     import('@tauri-apps/plugin-dialog'),
-    import('@tauri-apps/plugin-fs'),
     import('@tauri-apps/api/path'),
   ]);
   const ext = EXT[fmt];
@@ -685,7 +700,7 @@ async function saveNative(items, scope, fmt) {
       filters: [{ name: fmt, extensions: [ext] }],
     });
     if (!path) return null; // user cancelled
-    await writeFile(path, await blobBytes(first.blob));
+    await fsx.writeFileAtomic(path, await blobBytes(first.blob));
     const dir = await dirname(path);
     // Learn the base name from a page file only — the JSON export's name carries
     // a "-text" suffix that must not become the project's export base.
@@ -703,7 +718,7 @@ async function saveNative(items, scope, fmt) {
   const dir = await open({ directory: true, defaultPath: app.exportDir || undefined });
   if (!dir) return null; // cancelled
   for (const it of items) {
-    await writeFile(await join(dir, it.name), await blobBytes(it.blob));
+    await fsx.writeFileAtomic(await join(dir, it.name), await blobBytes(it.blob));
   }
   saveExportPrefs(dir, app.exportName);
   toast(`Saved ${items.length} file(s) to ${dir}`);
@@ -719,9 +734,10 @@ async function saveNative(items, scope, fmt) {
 export async function exportTextJson(scope) {
   const pages = scope === 'all' ? app.pages : [page()];
   const suffix = scope === 'all' ? 'text' : `${pages[0].id}-text`;
+  const baseName = sanitizeExportName(app.exportName);
   const items = [
     {
-      name: `${app.exportName}-${suffix}.json`,
+      name: `${baseName}-${suffix}.json`,
       blob: new Blob([buildTextJson(pages)], { type: MIME.JSON }),
       page: pages[0],
     },
@@ -756,6 +772,7 @@ export async function exportImages(fmt, scope) {
       return await exportStripImages(fmt);
     }
 
+    const baseName = sanitizeExportName(app.exportName);
     const items = [];
     for (const p of pages) {
       // Only five pages' pictures are in memory at a time (see page-images.js),
@@ -774,7 +791,7 @@ export async function exportImages(fmt, scope) {
         }
         return await renderPageBlob(p, fmt);
       });
-      items.push({ name: `${app.exportName}-${p.id}.${ext}`, blob, page: p });
+      items.push({ name: `${baseName}-${p.id}.${ext}`, blob, page: p });
     }
     if (isTauri()) {
       await saveNative(items, scope, fmt);

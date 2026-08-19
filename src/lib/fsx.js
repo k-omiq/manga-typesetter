@@ -62,6 +62,21 @@ export const fsx = {
   async writeFile(p, bytes) {
     return (await fs()).writeFile(p, bytes);
   },
+  async writeFileAtomic(p, bytes) {
+    const m = await fs();
+    const tmp = `${p}.${++tmpSeq}.tmp`;
+    try {
+      await m.writeFile(tmp, bytes);
+      await m.rename(tmp, p);
+    } catch (e) {
+      try {
+        await m.remove(tmp);
+      } catch {
+        /* it may never have been created; the original is intact either way */
+      }
+      throw e;
+    }
+  },
   async mkdir(p) {
     return (await fs()).mkdir(p, { recursive: true });
   },

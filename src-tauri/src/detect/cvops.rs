@@ -471,6 +471,8 @@ mod tests {
     }
 
     #[test]
+    // The 1*8+1 index is row*stride+col spelled out; clearer than the bare sum.
+    #[allow(clippy::identity_op)]
     fn fill_poly_fills_a_rectangle_inclusive_of_its_border() {
         let mut m = vec![0u8; 8 * 8];
         fill_poly(&mut m, 8, 8, &[(1, 1), (6, 1), (6, 6), (1, 6)]);

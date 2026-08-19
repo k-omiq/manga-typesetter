@@ -22,6 +22,8 @@ import {
   clearPending,
   settleEdits,
   setTool,
+  deselect,
+  closeBulk,
   normalizeChapterMode,
   normalizeLayout,
   toast,
@@ -1197,8 +1199,13 @@ export async function setChapterMode(projectId, chapterId, mode) {
   if (app.chapterRef?.chapterId === chapterId) {
     app.chapterMode = next;
     // The same tool reset an open in translate mode performs — the rail is about
-    // to lose the two tools the user may currently be holding.
-    if (next === 'translate') setTool('pan');
+    // to lose the two tools the user may currently be holding. Ending inline
+    // editing and closing bulk state prevents stuck editingId and phantom bulk.
+    if (next === 'translate') {
+      deselect();
+      closeBulk();
+      setTool('pan');
+    }
     c.mode = next;
     markUnsaved();
     return next;

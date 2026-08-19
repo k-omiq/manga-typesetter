@@ -921,7 +921,7 @@ export function inscribedRect(shape, opts = {}) {
 // the editor and the exporter lay out inside — exactly as it does today when it
 // hands the breaker `box.w - 4`.
 export function interiorLineWidths(shape, lineHeight, lineCount, valign = 'middle', opts = {}) {
-  const n = Math.max(0, Math.floor(lineCount));
+  const n = Number.isFinite(+lineCount) ? Math.max(0, Math.floor(+lineCount)) : 0;
   if (!shape || n === 0) return [];
   const o = { ...BALLOON_DEFAULTS, ...opts };
   const s = insetShape(shape, o);

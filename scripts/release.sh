@@ -33,25 +33,37 @@ case "$PLATFORM" in
   darwin-*)
     ARTIFACT=$(ls "$BUNDLE_DIR"/macos/*.app.tar.gz | head -1)
     EXTRA=$(ls "$BUNDLE_DIR"/dmg/*.dmg 2>/dev/null | head -1 || true)
+    EXT="app.tar.gz"
     ;;
   windows-*)
     ARTIFACT=$(ls "$BUNDLE_DIR"/nsis/*-setup.exe | head -1)
     EXTRA=""
+    EXT="setup.exe"
     ;;
 esac
 SIG="$ARTIFACT.sig"
 [ -f "$SIG" ] || { echo "signature missing: $SIG (is bundle.createUpdaterArtifacts true?)"; exit 1; }
 
-FNAME=$(basename "$ARTIFACT")
+# Platform-tagged, space-free name: keeps mac arches distinct in R2 and keeps
+# update URLs safe without percent-encoding. Must match release.yml's naming.
+FNAME="MangaTypesetter_${VERSION}_${PLATFORM}.${EXT}"
 REMOTE="releases/v$VERSION/$FNAME"
 echo "== uploading $FNAME =="
 npx wrangler r2 object put "$BUCKET/$REMOTE" --file "$ARTIFACT" --remote
 if [ -n "$EXTRA" ]; then
-  npx wrangler r2 object put "$BUCKET/releases/v$VERSION/$(basename "$EXTRA")" --file "$EXTRA" --remote
+  npx wrangler r2 object put "$BUCKET/releases/v$VERSION/MangaTypesetter_${VERSION}_${PLATFORM}.dmg" --file "$EXTRA" --remote
 fi
 
 echo "== merging latest.json =="
-EXISTING=$(curl -sf "$BASE_URL/latest.json" || echo '{}')
+# 404 means first release ever; any other failure must abort rather than
+# silently rebuilding latest.json from nothing.
+HTTP=$(curl -s -o /tmp/existing-latest.$$ -w "%{http_code}" "$BASE_URL/latest.json" || echo 000)
+case "$HTTP" in
+  200) EXISTING=$(cat /tmp/existing-latest.$$) ;;
+  404) EXISTING='{}' ;;
+  *) echo "fetching existing latest.json failed (HTTP $HTTP), aborting"; rm -f /tmp/existing-latest.$$; exit 1 ;;
+esac
+rm -f /tmp/existing-latest.$$
 LATEST=$(EXISTING_JSON="$EXISTING" python3 - "$VERSION" "$PLATFORM" "$BASE_URL/$REMOTE" "$SIG" "$NOTES" <<'PY'
 import json, sys, os, datetime
 version, platform, url, sig_path, notes = sys.argv[1:6]
@@ -73,8 +85,10 @@ out = {
 print(json.dumps(out, indent=2))
 PY
 )
-echo "$LATEST" > /tmp/latest.json
-npx wrangler r2 object put "$BUCKET/latest.json" --file /tmp/latest.json --remote
+TMP_LATEST=$(mktemp)
+echo "$LATEST" > "$TMP_LATEST"
+npx wrangler r2 object put "$BUCKET/latest.json" --file "$TMP_LATEST" --remote
+rm -f "$TMP_LATEST"
 
 echo "== done =="
 echo "$LATEST"
