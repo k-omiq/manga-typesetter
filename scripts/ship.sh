@@ -34,7 +34,8 @@ echo "== preflight =="
 command -v gh >/dev/null || fail "gh CLI not installed"
 gh auth status >/dev/null 2>&1 || fail "gh not authenticated; run: gh auth login"
 [ "$(git branch --show-current)" = "main" ] || fail "not on main"
-[ -z "$(git status --porcelain)" ] || fail "working tree not clean; commit or stash first"
+# Untracked files don't block a release; modified tracked files do.
+[ -z "$(git status --porcelain --untracked-files=no)" ] || fail "working tree has uncommitted changes; commit or stash first"
 git fetch -q origin main
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || fail "main is not synced with origin/main; push or pull first"
 git rev-parse "v$VERSION" >/dev/null 2>&1 && fail "tag v$VERSION already exists"
