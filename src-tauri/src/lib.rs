@@ -6,6 +6,8 @@ pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
+    .plugin(tauri_plugin_updater::Builder::new().build())
+    .plugin(tauri_plugin_process::init())
     // The in-process ONNX engine — the whole of detection and OCR. It replaced
     // the Python sidecar outright: there is no child process to spawn, health-
     // poll or kill any more.
