@@ -1,6 +1,0 @@
-1: CONFIRMED — Calling exported [`renderPageCanvas`](file:///Users/caved/dev/manga-typesetter/src/lib/exporter.js#L319) with a page object missing the `boxes` property (minimal trigger: `await renderPageCanvas({ id: 1, w: 800, h: 1200 })`) evaluates `for (const box of p.boxes)` without a fallback (unlike `p.boxes ?? []` in [`renderStripSliceCanvas`](file:///Users/caved/dev/manga-typesetter/src/lib/exporter.js#L582)), throwing an uncaught `TypeError: p.boxes is not iterable` ([`src/lib/exporter.js:344`](file:///Users/caved/dev/manga-typesetter/src/lib/exporter.js#L344)).
-
-### Priority Summary
-- **P3 (Low)**: Finding 1 is a minor robustness edge-case in exported utility [`renderPageCanvas`](file:///Users/caved/dev/manga-typesetter/src/lib/exporter.js#L319), easily resolved with a nullish coalescing fallback `p.boxes ?? []`.
-- **Verified Invariants**: Cut planning termination, rotated text bounding extents, slice canvas pixel alignment, and multi-page memory release are all verified clean.
-- **Action Required**: Safe single-line defensive fix at [`src/lib/exporter.js:344`](file:///Users/caved/dev/manga-typesetter/src/lib/exporter.js#L344); no other regressions or strip-export defects identified.

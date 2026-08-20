@@ -22,7 +22,7 @@ cd "$(dirname "$0")/.."
 VERSION="${1:-}"
 NOTES="${2:-}"
 DRY_RUN="${3:-}"
-REPO="gecallidryas/manga-typesetter"
+REPO="k-omiq/manga-typesetter"
 BASE_URL="https://typesetter.komiq.cc"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }

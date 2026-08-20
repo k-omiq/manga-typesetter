@@ -1,6 +1,6 @@
 name: Release
 
-# Builds signed installers for mac (arm + intel) and windows, then publishes
+# Builds signed installers for mac (apple silicon) and windows, then publishes
 # them plus latest.json to the R2 bucket behind https://typesetter.komiq.cc.
 # Installed apps poll that URL and offer the update in-app.
 #
@@ -36,9 +36,8 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             platform: darwin-aarch64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            platform: darwin-x86_64
+          # No intel mac: ort-sys ships no prebuilt onnxruntime for
+          # x86_64-apple-darwin, so the target cannot build.
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: windows-x86_64

@@ -53,3 +53,6 @@ dist-app/
 
 # Git worktrees for parallel agent sessions
 .claude/worktrees/
+
+# Internal working notes stay local
+docs/
