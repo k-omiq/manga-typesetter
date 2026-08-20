@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Manga Typesetter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.mangatypesetter.app",
   "build": {
     "frontendDist": "../dist",
@@ -26,7 +26,9 @@
       "assetProtocol": {
         "enable": true,
         "scope": {
-          "allow": ["$HOME/**"],
+          "allow": [
+            "$HOME/**"
+          ],
           "deny": [
             "$HOME/.ssh/**",
             "$HOME/.aws/**",
