@@ -47,8 +47,11 @@ def key(v): return [int(x) for x in v.split('.')]
 sys.exit(0 if key('$VERSION') > key('$CURRENT') else 1)
 " || fail "version $VERSION is not greater than current $CURRENT"
 
+# One fetch, then grep the string: `gh | grep -q` under pipefail dies of
+# SIGPIPE whenever the match is not the last line grep reads.
+SECRETS=$(gh secret list --repo "$REPO")
 for s in TAURI_SIGNING_PRIVATE_KEY CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
-  gh secret list --repo "$REPO" | grep -q "^$s" || fail "repo secret $s missing"
+  grep -q "^$s" <<<"$SECRETS" || fail "repo secret $s missing"
 done
 echo "preflight ok: $CURRENT -> $VERSION"
 
