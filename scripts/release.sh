@@ -12,7 +12,9 @@ BUCKET="typesetter-updates"
 KEY_PATH="$HOME/.tauri/typesetter-updater.key"
 
 [ -f "$KEY_PATH" ] || { echo "signing key missing: $KEY_PATH"; exit 1; }
-export TAURI_SIGNING_PRIVATE_KEY_PATH="$KEY_PATH"
+# Tauri v2 reads TAURI_SIGNING_PRIVATE_KEY (path or key content); the
+# _PATH-suffixed name is not recognized.
+export TAURI_SIGNING_PRIVATE_KEY="$KEY_PATH"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 
 VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
