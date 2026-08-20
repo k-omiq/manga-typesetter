@@ -12,6 +12,7 @@
     addTextBoxInView,
     autoFitBox,
     isTranslateMode,
+    addQueueLine,
   } from './store.svelte.js';
   import {
     knownTags,
@@ -84,7 +85,7 @@
   }
 
   const known = $derived(knownTags(app.pages));
-  const recent = $derived(known.slice(0, 2));
+  const recent = $derived(known.slice(0, 4));
 
 
   let menuFor = $state(null);
@@ -333,6 +334,13 @@
       <button class="qadd-btn" disabled={!app.pages.length} onclick={addText}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" /></svg>
         Add text
+      </button>
+    </div>
+  {:else}
+    <div class="qadd">
+      <button class="qadd-btn" disabled={!app.pages.length} onclick={addQueueLine}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" /></svg>
+        Add line
       </button>
     </div>
   {/if}

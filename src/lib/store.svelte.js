@@ -866,6 +866,7 @@ export function settleEdits() {
   // way out records once.
   settleText();
   settlePending();
+  settleNudge();
 }
 // The history addresses pages by id, not by index: an entry may outlive the
 // page being the one on screen.
@@ -903,6 +904,10 @@ export const clearPending = () => {
   pendingPlace = null;
   editBefore = undefined;
   editGeomBefore = null;
+  // The nudge window too: it names a page by id, and the document these paths
+  // put away is the one that page belonged to.
+  nudgePending = null;
+  clearTimeout(nudgeT);
 };
 // Every path that ends an edit calls this - not just `endEdit`. `deselect` and
 // `selectBox` null `editingId` on pointerdown, before the browser fires blur on
@@ -1886,6 +1891,16 @@ export function addEmptyBox(imgX, imgY, target = null) {
   return b.id;
 }
 
+export function addQueueLine() {
+  if (!app.pages.length) return null;
+  const p = page();
+  const ln = { n: nextFreeLineN(p), type: 'dialogue', jp: '', en: '' };
+  p.lines.push(ln);
+  p.activeLineN = ln.n;
+  markUnsaved();
+  return ln.n;
+}
+
 // ---------- a text box from the queue's Add button ----------
 // `addEmptyBox` takes page coordinates, and the caller that has none is the
 // queue's Add button: it lives in a panel floating over the canvas, and the user
@@ -1943,6 +1958,112 @@ export function addTextBoxInView() {
   const frame = el(`.page-frame[data-page-id="${page().id}"]`) ?? el('.page-frame');
   const { x, y } = visiblePageCenter(page(), el('.editor-scroll'), frame, app.zoom);
   return addEmptyBox(x, y);
+}
+
+// ---------- duplicate ----------
+// Far enough that the copy is visibly its own box and near enough that it is
+// obviously the same one.
+const DUP_OFFSET = 16;
+
+// The copy always gets a FREE line of its own rather than joining the source's,
+// whatever the source was placed from. Two boxes on one imported line is the
+// state `firstUnplaced` and `placeActiveAt` are written to prevent, and a free
+// line carries the type, the Japanese, the English and the tags across, so
+// `boxText` answers the same for both and a tag-scoped bulk edit still reaches
+// the copy.
+export function duplicateBox(id = app.selectedId) {
+  if (!app.pages.length) return null; // no chapter open: never write into the stand-in page
+  if (isTranslateMode()) return null; // no canvas boxes in a translate chapter - see `placeActiveAt`
+  // Before anything is read: a settle arriving after this gesture's own record
+  // would sit on top of it, so the first undo would rewind the edit that came
+  // *before* the duplicate.
+  settleEdits();
+  const p = page();
+  const src = p.boxes.find((b) => b.id === id);
+  if (!src) return null;
+  const from = lineByN(p, src.lineN);
+  const ln = {
+    n: nextFreeLineN(p),
+    type: from?.type ?? 'dialogue',
+    jp: from?.jp ?? '',
+    en: from ? lineText(from) : '',
+  };
+  const tags = lineTags(from);
+  if (tags.length) ln.tags = [...tags];
+  p.lines.push(ln);
+  const b = {
+    id: 'b' + boxSeq++,
+    lineN: ln.n,
+    // Carried as it stands: a box owning a string keeps owning it, and one
+    // reading through its line reads through the copy of that line.
+    text: src.text,
+    x: clamp(src.x + DUP_OFFSET, 0, Math.max(0, p.w - src.w)),
+    y: clamp(src.y + DUP_OFFSET, 0, Math.max(0, p.h - src.h)),
+    w: src.w,
+    h: src.h,
+    style: cloneStyle(src.style),
+    // The fit is used as a width profile rather than as a position on the page
+    // (see `balloonWidthsFor`), so the copy breaks its lines exactly where the
+    // original does even though it sits at the offset.
+    fit: normalizeFit($state.snapshot(src.fit)),
+  };
+  p.boxes.push(b);
+  // One entry for the whole gesture, and the same kind a free-typed placement
+  // records: undo takes the box and its line back out together. No queue fields
+  // - nothing here touched `activeLineN`.
+  recordEdit({
+    t: 'place',
+    pageId: p.id,
+    index: p.boxes.length - 1,
+    box: $state.snapshot(b),
+    ...freeLineRecord(p, b),
+  });
+  markUnsaved();
+  selectBox(b.id);
+  return b.id;
+}
+
+// ---------- keyboard nudge ----------
+// The arrow keys, moving the selected box a pixel at a time. Bounds are the
+// drag's, not the page's: a box the user deliberately hung off the edge must not
+// jump back onto the page on the first arrow press.
+//
+// A run of presses coalesces into one entry through the same settle window the
+// Inspector's sliders use - the history is five steps deep, so an entry per
+// keypress would empty it before the user had finished moving one box.
+const NUDGE_SETTLE_MS = 400;
+let nudgePending = null;
+let nudgeT = null;
+function settleNudge() {
+  const pend = nudgePending;
+  if (!pend) return;
+  nudgePending = null;
+  clearTimeout(nudgeT);
+  const p = pageById(pend.pageId);
+  const b = p?.boxes.find((x) => x.id === pend.boxId);
+  if (!b) return; // the box went while the window was open - nothing to record against
+  if (b.x === pend.before.x && b.y === pend.before.y) return;
+  recordEdit({ t: 'move', pageId: pend.pageId, boxId: pend.boxId, before: pend.before, after: { x: b.x, y: b.y } });
+}
+
+export function nudgeBox(id, dx, dy) {
+  if (isTranslateMode()) return false;
+  const p = page();
+  const b = p.boxes.find((x) => x.id === id);
+  if (!b) return false;
+  // A run on one box keeps its window open; anything else closes it first.
+  if (nudgePending && (nudgePending.boxId !== id || nudgePending.pageId !== p.id)) settleNudge();
+  else if (!nudgePending) settleEdits();
+  const x = clamp(b.x + dx, -b.w + 20, p.w - 20);
+  const y = clamp(b.y + dy, -b.h + 20, p.h - 20);
+  if (x === b.x && y === b.y) return false;
+  nudgePending ??= { boxId: id, pageId: p.id, before: { x: b.x, y: b.y } };
+  b.x = x;
+  b.y = y;
+  clearTimeout(nudgeT);
+  nudgeT = setTimeout(settleNudge, NUDGE_SETTLE_MS);
+  markUnsaved();
+  return true;
 }
 
 // ---------- delete ----------

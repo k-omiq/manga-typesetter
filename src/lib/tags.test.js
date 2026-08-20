@@ -128,11 +128,13 @@ describe('recency order', () => {
     expect(updateTag('ghost', { font: 'Bangers' })).toBe(null);
     expect(tags.list).toHaveLength(0);
   });
-  it('hands the picker its first two slots', () => {
+  it('hands the picker its first four slots', () => {
     createTag('a');
     createTag('b');
     createTag('c');
-    expect(recentTags().map((t) => t.name)).toEqual(['c', 'b']);
+    createTag('d');
+    createTag('e');
+    expect(recentTags().map((t) => t.name)).toEqual(['e', 'd', 'c', 'b']);
   });
   it('applying a tag promotes it, removing it does not', () => {
     createTag('sfx');
@@ -169,7 +171,8 @@ describe('saving a tag’s settings', () => {
     const before = tags.list.map((t) => t.name);
     saveTagDefaults('sfx', { font: 'Bangers' });
     expect(tags.list.map((t) => t.name)).toEqual([...before, 'sfx']);
-    expect(recentTags().map((t) => t.name)).toEqual(before);
+    expect(recentTags().map((t) => t.name)).toEqual([...before, 'sfx']);
+    expect(recentTags()[0].name).not.toBe('sfx');
     expect(findTag('sfx').font).toBe('Bangers');
   });
 

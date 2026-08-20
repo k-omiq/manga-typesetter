@@ -3,6 +3,7 @@ import {
   app,
   loadProjectPages,
   addEmptyBox,
+  addQueueLine,
   beginEdit,
   byId,
   clampSidebarWidth,
@@ -56,6 +57,9 @@ import {
   applyDetection,
   boxText,
   deleteBox,
+  duplicateBox,
+  nudgeBox,
+  lineByN,
   isPlaced,
   firstUnplaced,
   visiblePageCenter,
@@ -2038,6 +2042,146 @@ describe('deleting a free-typed box takes its line with it', () => {
   });
 });
 
+describe('duplicating a box', () => {
+  beforeEach(() => {
+    app.chapterRef = null;
+    app.chapterMode = 'typeset';
+    loadProjectPages([
+      { id: 1, w: 800, h: 1200, lines: [{ n: 1, type: 'sfx', jp: 'ドン', en: 'DON' }], boxes: [] },
+    ]);
+  });
+
+  it('copies the text and the style, and offsets the copy so it is visible', () => {
+    const id = addEmptyBox(100, 100);
+    endEdit('typed');
+    byId(id).style.size = 42;
+    const copy = byId(duplicateBox(id));
+    expect(boxText(copy)).toBe('typed');
+    expect(copy.style.size).toBe(42);
+    expect([copy.x, copy.y]).toEqual([byId(id).x + 16, byId(id).y + 16]);
+    expect([copy.w, copy.h]).toEqual([byId(id).w, byId(id).h]);
+    // A copy, not a shared reference: restyling one must not restyle the other.
+    expect(copy.style).not.toBe(byId(id).style);
+  });
+
+  // Two boxes on one imported line is the state `firstUnplaced` and
+  // `placeActiveAt` are written to prevent, so the copy is always free-typed -
+  // carrying the line's text and type across so it reads the same.
+  it('gives the copy a free line of its own rather than a second box on an imported one', () => {
+    placeActiveAt(100, 100);
+    const id = page().boxes[0].id;
+    const copy = byId(duplicateBox(id));
+    expect(copy.lineN).toBeLessThan(0);
+    expect(boxText(copy)).toBe('DON');
+    const ln = lineByN(page(), copy.lineN);
+    expect([ln.type, ln.jp, ln.en]).toEqual(['sfx', 'ドン', 'DON']);
+    // The imported line still has exactly one box on it.
+    expect(page().boxes.filter((b) => b.lineN === 1).length).toBe(1);
+  });
+
+  it('keeps the copy on the page when the original is already against the edge', () => {
+    const id = addEmptyBox(10000, 10000);
+    endEdit('edge');
+    const src = { x: byId(id).x, y: byId(id).y };
+    const copy = byId(duplicateBox(id));
+    expect([copy.x, copy.y]).toEqual([src.x, src.y]);
+    expect(copy.x + copy.w).toBeLessThanOrEqual(800);
+    expect(copy.y + copy.h).toBeLessThanOrEqual(1200);
+  });
+
+  it('selects the copy, and defaults to whatever is selected', () => {
+    const id = addEmptyBox(100, 100);
+    endEdit('typed');
+    app.selectedId = id;
+    const copyId = duplicateBox();
+    expect(copyId).not.toBe(id);
+    expect(app.selectedId).toBe(copyId);
+  });
+
+  it('refuses in a translate chapter, and with nothing to copy', () => {
+    const id = addEmptyBox(100, 100);
+    endEdit('typed');
+    expect(duplicateBox('nosuchbox')).toBe(null);
+    app.chapterMode = 'translate';
+    expect(duplicateBox(id)).toBe(null);
+    expect(page().boxes.length).toBe(1);
+  });
+
+  // One press of undo has to take both halves back, which is what the `place`
+  // kind's line fields are for - see history.svelte.js.
+  it('records one entry, carrying the line it created', () => {
+    const id = addEmptyBox(100, 100);
+    endEdit('typed');
+    const log = [];
+    const off = setRecorder((e) => log.push(e));
+    const copyId = duplicateBox(id);
+    off();
+    expect(log.length).toBe(1);
+    expect(log[0].t).toBe('place');
+    expect(log[0].box.id).toBe(copyId);
+    expect(log[0].line.n).toBe(byId(copyId).lineN);
+  });
+});
+
+describe('nudging a box with the arrow keys', () => {
+  beforeEach(() => {
+    app.chapterRef = null;
+    app.chapterMode = 'typeset';
+    loadProjectPages([{ id: 1, w: 800, h: 1200, lines: [], boxes: [] }]);
+  });
+
+  const aBox = () => {
+    const id = addEmptyBox(400, 600);
+    endEdit('typed');
+    return id;
+  };
+
+  it('moves by the step it is given', () => {
+    const id = aBox();
+    const { x, y } = byId(id);
+    nudgeBox(id, 1, 0);
+    nudgeBox(id, 0, -10);
+    expect([byId(id).x, byId(id).y]).toEqual([x + 1, y - 10]);
+  });
+
+  // A run of presses is one gesture. The history is five steps deep, so an entry
+  // per keypress would empty it before the user finished moving one box.
+  it('coalesces a run into a single move entry', () => {
+    const id = aBox();
+    const { x } = byId(id);
+    const log = [];
+    const off = setRecorder((e) => log.push(e));
+    nudgeBox(id, 1, 0);
+    nudgeBox(id, 1, 0);
+    nudgeBox(id, 1, 0);
+    expect(log.length).toBe(0);
+    settleEdits();
+    off();
+    expect(log.length).toBe(1);
+    expect(log[0].t).toBe('move');
+    expect(log[0].before.x).toBe(x);
+    expect(log[0].after.x).toBe(x + 3);
+  });
+
+  // The drag's bounds, not the page's: a box hung off the edge on purpose must
+  // not jump back on at the first arrow press.
+  it('stops where a drag would stop', () => {
+    const id = aBox();
+    byId(id).x = 780;
+    nudgeBox(id, 10, 0);
+    expect(byId(id).x).toBe(780);
+    expect(nudgeBox(id, 10, 0)).toBe(false);
+  });
+
+  it('does nothing in a translate chapter', () => {
+    const id = aBox();
+    const { x } = byId(id);
+    app.chapterMode = 'translate';
+    expect(nudgeBox(id, 5, 0)).toBe(false);
+    expect(byId(id).x).toBe(x);
+  });
+});
+
 // The blur or the Escape with no typing in it, which used to be an edit.
 describe('ending an inline edit that changed nothing', () => {
   beforeEach(() => {
@@ -2236,6 +2380,30 @@ describe('translate mode', () => {
     activateLine(1);
     expect(page().activeLineN).toBe(1);
     expect(app.selectedId).toBe('b1');
+  });
+
+  it('appends a free line with negative n, sets activeLineN, and creates no box when addQueueLine is called', () => {
+    loadProjectPages(withLines([{ n: 1, type: 'dialogue', jp: 'あ', en: 'Ah' }]));
+    app.chapterMode = 'translate';
+    markSaved();
+    const n = addQueueLine();
+    expect(n).toBe(-1);
+    expect(page().lines).toHaveLength(2);
+    expect(page().lines[1]).toEqual({ n: -1, type: 'dialogue', jp: '', en: '' });
+    expect(page().activeLineN).toBe(-1);
+    expect(page().boxes).toHaveLength(0);
+    expect(app.saved).toBe(false);
+
+    const n2 = addQueueLine();
+    expect(n2).toBe(-2);
+    expect(page().lines).toHaveLength(3);
+    expect(page().lines[2]).toEqual({ n: -2, type: 'dialogue', jp: '', en: '' });
+    expect(page().activeLineN).toBe(-2);
+  });
+
+  it('returns null from addQueueLine when no pages are loaded', () => {
+    app.pages = [];
+    expect(addQueueLine()).toBe(null);
   });
 });
 

@@ -15,7 +15,7 @@
   import NewChapterDialog from './lib/home/NewChapterDialog.svelte';
   import ChapterSourcesSheet from './lib/home/ChapterSourcesSheet.svelte';
   import { onMount, untrack } from 'svelte';
-  import { app, deleteBox, deselect, nextPage, prevPage, setTool, closeBulk, toast, setPageSwitchHook, flushSidebar, noteFontsChanged, isLongstrip, isTranslateMode } from './lib/store.svelte.js';
+  import { app, deleteBox, duplicateBox, nudgeBox, deselect, nextPage, prevPage, setTool, closeBulk, toast, setPageSwitchHook, flushSidebar, noteFontsChanged, isLongstrip, isTranslateMode } from './lib/store.svelte.js';
   import { initHistory, undo, redo } from './lib/editor/history.svelte.js';
   import { flushPanels } from './lib/editor/panels.svelte.js';
   import { switchHistoryPage } from './lib/editor/history-file.svelte.js';
@@ -162,6 +162,10 @@
     sourcesOpen = true;
   }
 
+  // Arrow keys, as the step they move a box by. Shift multiplies it.
+  const NUDGE = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  const NUDGE_FAST = 10;
+
   function onKeydown(e) {
     const t = e.target;
     if (t instanceof Element && t.matches('input,textarea,select')) return;
@@ -206,6 +210,13 @@
       redo();
       return;
     }
+    // Cmd/Ctrl+D. Prevented either way so the browser's bookmark dialog never
+    // opens over a translate chapter that has nothing to duplicate.
+    if (mod && (e.key === 'd' || e.key === 'D')) {
+      e.preventDefault();
+      if (!isTranslateMode()) duplicateBox();
+      return;
+    }
     if ((e.key === 'Delete' || e.key === 'Backspace') && app.selectedId && !isTranslateMode()) {
       e.preventDefault();
       deleteBox(app.selectedId);
@@ -214,6 +225,15 @@
     if (!mod && (e.key === 'v' || e.key === 'V')) setTool('place');
     if (!mod && (e.key === 't' || e.key === 'T')) setTool('text');
     if (!mod && (e.key === 'h' || e.key === 'H')) setTool('pan');
+    // The arrows nudge the selected box and turn the page when nothing is
+    // selected - one key, and which it means is what the user is looking at.
+    const step = !mod ? NUDGE[e.key] : null;
+    if (step && app.selectedId && !isTranslateMode()) {
+      e.preventDefault();
+      const k = e.shiftKey ? NUDGE_FAST : 1;
+      nudgeBox(app.selectedId, step[0] * k, step[1] * k);
+      return;
+    }
     // Longstrip navigation is handled by scroll container.
     if (!isLongstrip()) {
       if (e.key === 'ArrowRight' && !e.shiftKey) nextPage();

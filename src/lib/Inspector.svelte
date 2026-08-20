@@ -72,7 +72,10 @@
   // Hook to settle pending edits on navigation or undo.
   const releaseSettleHook = setEditSettleHook(settle);
   onDestroy(() => {
-    // Settle pending changes on panel unmount.
+    // Settle pending changes on panel unmount, then release the hook so a
+    // later settle cannot record against whatever document is open by then.
+    settle();
+    releaseSettleHook();
     clearTimeout(settleT);
     pending = null;
   });

@@ -33,6 +33,7 @@
 
   // A translate chapter is the raw page, the queue and the way around them.
   // Mount typeset controls in typeset mode.
+  const translate = $derived(isTranslateMode());
   const strip = $derived(isLongstrip());
 
   // The reference sidebar is redundant when the canvas itself is showing the

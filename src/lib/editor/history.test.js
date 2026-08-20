@@ -3,6 +3,7 @@ import {
   app,
   loadProjectPages,
   deleteBox,
+  duplicateBox,
   placeActiveAt,
   addEmptyBox,
   beginEdit,
@@ -289,6 +290,24 @@ describe('a free-typed box and its line move together', () => {
     expect(boxText(page().boxes.find((b) => b.id === id))).toBe('BOOM');
     redo();
     expect(freeLines()).toHaveLength(0);
+  });
+
+  // A duplicate is the same gesture by another route: one box, one free line,
+  // one press of undo taking both.
+  it('takes a duplicate and its line back in one step', () => {
+    const id = addEmptyBox(300, 300);
+    endEdit('BOOM');
+    resetHistory();
+    const copy = duplicateBox(id);
+    expect(page().boxes).toHaveLength(4);
+    expect(freeLines()).toHaveLength(2);
+    undo();
+    expect(page().boxes.some((b) => b.id === copy)).toBe(false);
+    expect(freeLines()).toHaveLength(1);
+    // The original is untouched, text and all.
+    expect(boxText(page().boxes.find((b) => b.id === id))).toBe('BOOM');
+    redo();
+    expect(boxText(page().boxes.find((b) => b.id === copy))).toBe('BOOM');
   });
 
   // An entry about a queue-placed box carries no line at all, so the ordinary

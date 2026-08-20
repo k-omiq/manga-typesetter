@@ -904,8 +904,9 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
    so it is lit when it is not the default and quiet when it is. Fixed width, or
    the two words either side of the switch would shift Sources and Delete along
    the row as chapters differ. */
-.chapter-mode{ width:64px; flex:none; text-align:right; }
-.chapter-mode.on{ color:var(--accent); }
+.chapter-mode{ width:72px; flex:none; text-align:center; border:1px solid var(--line); border-radius:999px; padding:2px 8px; }
+.chapter-mode:hover{ border-color:var(--t3); }
+.chapter-mode.on{ color:var(--accent); border-color:var(--accent); }
 .chapter-mode.on:hover{ color:var(--accent); }
 
 /* Unreadable chapter rows (scan stubs from a chapter.json that failed to

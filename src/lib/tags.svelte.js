@@ -444,8 +444,8 @@ export function knownTags(pages = []) {
   return out;
 }
 
-// The picker's first two slots.
-export const recentTags = (pages = []) => knownTags(pages).slice(0, 2);
+// The picker's first four slots.
+export const recentTags = (pages = []) => knownTags(pages).slice(0, 4);
 
 // Every box carrying `name` within `pages`. The boxes come back live - the same
 // objects the document holds, not snapshots - because the caller's whole purpose
