@@ -237,6 +237,15 @@ export function defaultStyle() {
     // With no shapes the mask does nothing, whichever mode is set - so a box
     // that only flipped the switch looks exactly like the switch is off.
     clip: { on: false, mode: 'exclude', brushSize: 20, shapes: [] },
+    // Hand-drawn brush strokes inside the box, in the same box-local page px
+    // the mask shapes use. Each stroke is self-describing - every field that
+    // decides how it renders is on the stroke, not on the tool - so a stroke
+    // drawn last week still draws the same after the brush settings moved on.
+    // `pts` is [x, y, w], where w is the point's width factor in 0..1, already
+    // resolved from pen pressure, stroke speed or randomness when it was drawn.
+    // Taper is deliberately NOT baked in: it is cheap at render time and stays
+    // adjustable afterwards.
+    ink: { on: false, strokes: [] },
     // Text closed into a full circle (see `circleLayout`): the ring's size
     // comes from the text's own advance, `angle` (degrees, clockwise) turns
     // it, `inside` flips the text onto the inner face - the bottom arc of a
@@ -318,6 +327,51 @@ export function normalizeShadow(x) {
     blur: Math.max(0, num(x?.blur, SHADOW_DEF.blur)),
     color: hex(x?.color, SHADOW_DEF.color),
     opacity: Math.min(1, Math.max(0, num(x?.opacity, SHADOW_DEF.opacity))),
+  };
+}
+// One hand-drawn brush stroke, sanitised. Returns null for a stroke that
+// cannot be drawn at all - no points, or a size of zero - because a stroke
+// that paints nothing is worse than no stroke: it still costs a history slot
+// and a bounds pass. Individual unreadable points are dropped, the way a mask
+// shape's are, so one bad number does not lose the whole gesture.
+export function normalizeInkStroke(src) {
+  if (!src || typeof src !== 'object') return null;
+  const pts = [];
+  for (const q of Array.isArray(src.pts) ? src.pts : []) {
+    if (!Array.isArray(q)) continue;
+    const x = +q[0];
+    const y = +q[1];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const w = Number.isFinite(+q[2]) ? Math.min(1, Math.max(0, +q[2])) : 1;
+    pts.push([x, y, w]);
+  }
+  if (!pts.length) return null;
+  const size = Math.min(2000, Math.max(0.5, num(src.size, 24)));
+  const taper = (t, d) => ({
+    on: !!t?.on,
+    len: Math.min(500, Math.max(0, num(t?.len, d))),
+    ratio: Math.min(100, Math.max(0, num(t?.ratio, 60))),
+  });
+  return {
+    brush: typeof src.brush === 'string' && src.brush ? src.brush : 'round',
+    size,
+    color: hex(src.color, '#000000'),
+    opacity: Math.min(1, Math.max(0, num(src.opacity, 1))),
+    // Spacing is a percentage of the tip's size. Below 1% the stamp count
+    // explodes with no visible gain, so that is the floor.
+    spacing: Math.min(200, Math.max(1, num(src.spacing, 10))),
+    hardness: Math.min(100, Math.max(0, num(src.hardness, 100))),
+    angle: ((num(src.angle, 0) % 360) + 360) % 360,
+    angleJitter: Math.min(100, Math.max(0, num(src.angleJitter, 0))),
+    // Flatness squashes the tip across its angle. 1 is round; 0 would be a
+    // line with no area, so the floor is a hair above it.
+    flatness: Math.min(1, Math.max(0.01, num(src.flatness, 1))),
+    taperIn: taper(src.taperIn, 20),
+    taperOut: taper(src.taperOut, 20),
+    // The seed makes angle jitter repeatable: the same stroke must draw the
+    // same picture in the editor and in the export.
+    seed: Math.max(1, Math.floor(num(src.seed, 1))),
+    pts,
   };
 }
 // Every tile `drawPatternTile` knows how to draw, in the order the picker shows
@@ -473,6 +527,12 @@ export function normalizeStyle(s) {
     }
   }
 
+  const ink = { on: !!src.ink?.on, strokes: [] };
+  for (const k of Array.isArray(src.ink?.strokes) ? src.ink.strokes : []) {
+    const norm = normalizeInkStroke(k);
+    if (norm) ink.strokes.push(norm);
+  }
+
   const out = {
     ...d,
     ...flat,
@@ -480,6 +540,7 @@ export function normalizeStyle(s) {
     motionBlur: mb,
     path: pth,
     clip: cl,
+    ink,
     circle: circ,
     gradient: g,
     pattern: pat,
