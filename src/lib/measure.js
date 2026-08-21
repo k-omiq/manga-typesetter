@@ -23,6 +23,27 @@ export function canMeasure() {
 // copies too many.
 export const BOX_PAD = 2;
 
+// Where a text block's top edge sits inside its box, as an offset from the
+// box's top-left, for straight (non-curved) text. `blockH` is the block's own
+// height - line count times line height.
+//
+// Anything other than 'middle' or 'bottom' is the top, `undefined` included:
+// a partial style with no `valign` at all reaches this from the PSD writer,
+// and it has to answer the same way the exporter always has.
+//
+// Stated once here because three places need it and they have to agree: the
+// raster exporter draws from it (layoutBox in exporter.js), the auto-height
+// helper sizes boxes with it, and the PSD writer anchors a live Photoshop type
+// layer with it. When the writer did NOT - it anchored every type layer at
+// BOX_PAD, i.e. the top - a middle- or bottom-aligned box exported pixels the
+// app agreed with and engine data it did not, and the words jumped upward the
+// moment Photoshop re-rendered the layer.
+export function blockYFor(style, boxH, blockH) {
+  if (style?.valign === 'middle') return (boxH - blockH) / 2;
+  if (style?.valign === 'bottom') return boxH - BOX_PAD - blockH;
+  return BOX_PAD;
+}
+
 // ---- typesetting engine switch (beta) ----
 // The shaped line breaking, hyphenation and balloon fitting in typeset.js /
 // balloon.js are a beta feature, off unless the user turns it on in Settings.
@@ -112,22 +133,38 @@ export function arcLayout(text, style, sizePx) {
 // n-1: the ring closes, so the seam between the last glyph and the first is a
 // neighbour gap like any other - and widening the spacing is also the one
 // knob that grows the circle.
+//
+// `style.circle.r` overrides that: a radius in page px (0 = auto, the closed
+// ring above). The text then keeps its own advance and simply wraps as far
+// around a circle of THAT size as it reaches - short text is an arc, not a
+// stretched ring - and the run is CENTRED on `angle` rather than started
+// there, because a partial arc has a middle worth aiming and the closed ring
+// does not. Spacing goes back to the line's n-1 gaps, since there is no seam.
+// The radius is in the style's own px, so it scales with the zoom exactly as
+// `size` and `letterSpacing` do.
 export function circleLayout(text, style, sizePx) {
   if (!text || sizePx <= 0 || !style || (style.size ?? 0) <= 0) return [];
   const chars = [...text];
   const widths = charWidths(text, style, sizePx);
-  const ls = (Number(style?.letterSpacing) || 0) * (style.size > 0 ? sizePx / style.size : 0);
-  const total = widths.reduce((a, b) => a + b, 0) + chars.length * ls;
+  const scale = style.size > 0 ? sizePx / style.size : 0;
+  const ls = (Number(style?.letterSpacing) || 0) * scale;
+  const fixed = Math.max(0, Number(style.circle?.r) || 0) * scale;
+  const ink = widths.reduce((a, b) => a + b, 0);
+  // The closed ring pays a gap per character; the open arc pays the line's n-1.
+  const total = ink + (fixed > 0 ? Math.max(0, chars.length - 1) : chars.length) * ls;
   if (!Number.isFinite(total) || total <= 0) return [];
-  const R = total / (2 * Math.PI);
+  const R = fixed > 0 ? fixed : total / (2 * Math.PI);
+  // A fixed ring is centred on `angle`; the closed one starts there.
+  const half = fixed > 0 ? total / 2 : 0;
   const inside = !!style.circle?.inside;
   const a0 = ((Number(style.circle?.angle) || 0) * Math.PI) / 180;
   const out = [];
   let cum = 0;
   for (let i = 0; i < chars.length; i++) {
-    // Angle is arc length over radius, i.e. 2π x the share of the advance;
-    // measured clockwise from twelve o'clock, which is where `angle` 0 starts.
-    const t = (2 * Math.PI * (cum + widths[i] / 2)) / total;
+    // Angle is arc length over radius - which for the auto ring is 2π x the
+    // share of the advance, R being total/2π. Measured clockwise from twelve
+    // o'clock, which is where `angle` 0 starts.
+    const t = (cum + widths[i] / 2 - half) / R;
     const th = inside ? a0 + Math.PI - t : a0 + t;
     out.push({
       ch: chars[i],

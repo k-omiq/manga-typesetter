@@ -1524,7 +1524,7 @@ export async function setChapterMode(projectId, chapterId, mode) {
   if (c.unreadable) throw new Error('This chapter could not be read');
   const next = normalizeChapterMode(mode);
 
-  if (app.chapterRef?.chapterId === chapterId) {
+  if (app.chapterRef?.projectId === projectId && app.chapterRef?.chapterId === chapterId) {
     app.chapterMode = next;
     // The same tool reset an open in translate mode performs - the rail is about
     // to lose the two tools the user may currently be holding. Ending inline
@@ -1854,6 +1854,12 @@ async function writeOpenChapter(seq) {
   // what stops it writing an empty or foreign document over a real chapter.
   const ref = app.chapterRef;
   if (!ref) return;
+  // Belt to the `openSeq` suspenders in `closeChapter`: no document is on
+  // screen, so whatever `app.pages` holds - the empty array a close leaves, most
+  // of all - is not a chapter, and writing it would replace one. A real open
+  // always ends in `loadProjectPages`, which sets this true before the ref ever
+  // goes on.
+  if (!app.loaded) return;
   // …and the document in hand has to be that chapter's. The two are set together
   // and cleared together, so a disagreement means this save has arrived in the
   // middle of something - a chapter switch part-way through, a load abandoned by
@@ -1945,6 +1951,14 @@ async function writeOpenChapter(seq) {
 }
 
 export function closeChapter() {
+  // Any open still in flight is now superseded. Without this, a load that was
+  // mid-await when the user backed out of the editor resumed afterwards and
+  // re-established `chapterRef`/`loadedRef` over the close - and because the
+  // close below had already emptied `app.pages`, the next `markUnsaved` (a mode
+  // toggle from the project screen was the one that actually happened) autosaved
+  // `pages: []` over a real chapter's only copy. Bumping the sequence makes the
+  // in-flight load fail its own `mine()` check at the next await instead.
+  openSeq++;
   // Before the pages go, because the live page's stack is only in memory until
   // this runs - without it the last 800ms of records never reach disk. The id
   // comes off the page itself rather than `page()`, whose empty-document

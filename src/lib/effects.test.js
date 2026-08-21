@@ -9,7 +9,7 @@ describe('normalizeStyle effects schema', () => {
     expect(s.motionBlur).toEqual({ on: false, x: 2, y: 0, amount: 16 });
     expect(s.path).toEqual({ on: false, pts: [] });
     expect(s.clip).toEqual({ on: false, mode: 'exclude', brushSize: 20, shapes: [] });
-    expect(s.circle).toEqual({ on: false, angle: 0, inside: false });
+    expect(s.circle).toEqual({ on: false, angle: 0, inside: false, r: 0 });
   });
 
   it('clamps motion blur direction x/y and amount, rounding amount to integer', () => {
@@ -100,11 +100,20 @@ describe('normalizeStyle effects schema', () => {
   });
 
   it('coerces circle on and inside to boolean', () => {
-    expect(normalizeStyle({ circle: { on: 1, inside: 0 } }).circle).toEqual({ on: true, angle: 0, inside: false });
-    expect(normalizeStyle({ circle: { on: 'yes', inside: 'true' } }).circle).toEqual({ on: true, angle: 0, inside: true });
-    expect(normalizeStyle({ circle: { on: 0, inside: false } }).circle).toEqual({ on: false, angle: 0, inside: false });
-    expect(normalizeStyle({ circle: { on: false, inside: null } }).circle).toEqual({ on: false, angle: 0, inside: false });
-    expect(normalizeStyle({ circle: null }).circle).toEqual({ on: false, angle: 0, inside: false });
+    expect(normalizeStyle({ circle: { on: 1, inside: 0 } }).circle).toEqual({ on: true, angle: 0, inside: false, r: 0 });
+    expect(normalizeStyle({ circle: { on: 'yes', inside: 'true' } }).circle).toEqual({ on: true, angle: 0, inside: true, r: 0 });
+    expect(normalizeStyle({ circle: { on: 0, inside: false } }).circle).toEqual({ on: false, angle: 0, inside: false, r: 0 });
+    expect(normalizeStyle({ circle: { on: false, inside: null } }).circle).toEqual({ on: false, angle: 0, inside: false, r: 0 });
+    expect(normalizeStyle({ circle: null }).circle).toEqual({ on: false, angle: 0, inside: false, r: 0 });
+  });
+
+  it('clamps the circle radius and reads a missing one as auto', () => {
+    expect(normalizeStyle({ circle: { r: 120 } }).circle.r).toBe(120);
+    expect(normalizeStyle({ circle: { r: -5 } }).circle.r).toBe(0);
+    expect(normalizeStyle({ circle: { r: 99999 } }).circle.r).toBe(4000);
+    expect(normalizeStyle({ circle: { r: 'wide' } }).circle.r).toBe(0);
+    // A style saved before the radius existed still means the auto ring.
+    expect(normalizeStyle({ circle: { on: true } }).circle.r).toBe(0);
   });
 });
 
@@ -414,6 +423,35 @@ describe('circleLayout', () => {
     expect(layout).toHaveLength(4);
     expect(layout[0].y).toBeGreaterThan(0);
     expect(layout[0].rot).toBeCloseTo(-((2 * Math.PI * 5.5) / 44), 6);
+  });
+
+  it('holds a chosen radius and centres the run on the angle', () => {
+    // 'abcd' at 11px a glyph: an open arc of 44px advance on a radius-100 ring,
+    // centred on twelve o'clock, so the run straddles it symmetrically.
+    const style = { size: 20, letterSpacing: 0, circle: { on: true, angle: 0, inside: false, r: 100 } };
+    const layout = circleLayout('abcd', style, 20);
+
+    expect(layout).toHaveLength(4);
+    for (const g of layout) expect(Math.hypot(g.x, g.y)).toBeCloseTo(100, 6);
+    // Half the advance short of the middle, then a glyph's half width in.
+    expect(layout[0].rot).toBeCloseTo((5.5 - 22) / 100, 6);
+    expect(layout[3].rot).toBeCloseTo((38.5 - 22) / 100, 6);
+    expect(layout[0].x).toBeLessThan(0);
+    expect(layout[3].x).toBeGreaterThan(0);
+    for (const g of layout) expect(g.y).toBeLessThan(0);
+  });
+
+  it('scales the chosen radius with the drawn size, as letterSpacing scales', () => {
+    const style = { size: 20, letterSpacing: 0, circle: { on: true, angle: 0, inside: false, r: 100 } };
+    const layout = circleLayout('abcd', style, 40);
+    for (const g of layout) expect(Math.hypot(g.x, g.y)).toBeCloseTo(200, 6);
+  });
+
+  it('pays n-1 gaps on a chosen radius, not the closed ring\'s n', () => {
+    const style = { size: 20, letterSpacing: 10, circle: { on: true, angle: 0, inside: false, r: 100 } };
+    const layout = circleLayout('abcd', style, 20);
+    // advance 4x11 + 3x10 = 74, so the run spans 74/100 radians about the top.
+    expect(layout[3].rot - layout[0].rot).toBeCloseTo((74 - 11) / 100, 6);
   });
 
   it('grows the ring with letterSpacing', () => {

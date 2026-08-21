@@ -12,7 +12,7 @@ import {
   reconstructForeign,
   psdSelfTest,
 } from './psd.js';
-import { PAGE_W, PAGE_H, emptyFaces } from './data.js';
+import { PAGE_W, PAGE_H, emptyFaces, defaultStyle } from './data.js';
 import { BOX_PAD } from './measure.js';
 import { app } from './store.svelte.js';
 import { _setPostScriptNameFor, _clearPostScriptNames } from './fonts.js';
@@ -136,12 +136,80 @@ describe('isRasterOnly', () => {
     expect(isRasterOnly({ curve: 0, roughen: { on: false }, flipV: true })).toBe(true);
   });
 
+  // Every glyph-by-glyph layout goes down the same route as the arc, for the
+  // same reason: Photoshop re-renders a type layer as a straight paragraph in
+  // the box rect, over pixels that were laid out along a path or a ring.
+  it('is true for text on a bezier path, once the path has anchors to follow', () => {
+    const pts = [
+      { x: 0, y: 0, inX: 0, inY: 0, outX: 0, outY: 0 },
+      { x: 40, y: 0, inX: 0, inY: 0, outX: 0, outY: 0 },
+    ];
+    expect(isRasterOnly({ path: { on: true, pts } })).toBe(true);
+    // A path switched on but not yet drawn lays out as ordinary lines (see
+    // layoutBox's `isPath`), so it is still a live type layer.
+    expect(isRasterOnly({ path: { on: true, pts: [] } })).toBe(false);
+    expect(isRasterOnly({ path: { on: true, pts: [pts[0]] } })).toBe(false);
+    expect(isRasterOnly({ path: { on: false, pts } })).toBe(false);
+  });
+
+  it('is true for text closed into a circle', () => {
+    expect(isRasterOnly({ circle: { on: true, angle: 0, inside: false } })).toBe(true);
+    expect(isRasterOnly({ circle: { on: false } })).toBe(false);
+  });
+
+  // The mask hides ink. A re-render has no mask, so Photoshop would show the
+  // letters the user erased - but only a mask with shapes hides anything, and
+  // an empty one must not cost the box its editability.
+  it('is true for an active visibility mask and false for an empty one', () => {
+    expect(isRasterOnly({ clip: { on: true, mode: 'exclude', shapes: [{ kind: 'ellipse', cx: 1, cy: 1, rx: 2, ry: 2 }] } })).toBe(true);
+    expect(isRasterOnly({ clip: { on: true, mode: 'exclude', shapes: [] } })).toBe(false);
+    expect(isRasterOnly({ clip: { on: false, shapes: [{ kind: 'ellipse', cx: 1, cy: 1, rx: 2, ry: 2 }] } })).toBe(false);
+  });
+
+  // Both blur the finished composite - fill, strokes and shadows together -
+  // which no per-effect Photoshop track can restate.
+  it('is true for a whole-text blur', () => {
+    expect(isRasterOnly({ blur: 3 })).toBe(true);
+    expect(isRasterOnly({ blur: 0 })).toBe(false);
+  });
+
+  it('is true for a motion blur that has a direction, false for one that has none', () => {
+    expect(isRasterOnly({ motionBlur: { on: true, x: 2, y: 0, amount: 16 } })).toBe(true);
+    expect(isRasterOnly({ motionBlur: { on: true, x: 0, y: -3, amount: 16 } })).toBe(true);
+    // (0,0) draws nothing at all - see motionBlurExtent - so it changes nothing.
+    expect(isRasterOnly({ motionBlur: { on: true, x: 0, y: 0, amount: 16 } })).toBe(false);
+    expect(isRasterOnly({ motionBlur: { on: false, x: 2, y: 2, amount: 16 } })).toBe(false);
+  });
+
+  it('is true for a pattern fill', () => {
+    expect(isRasterOnly({ pattern: { on: true, kind: 'dots', fg: '#000', bg: '#fff', scale: 1 } })).toBe(true);
+    expect(isRasterOnly({ pattern: { on: false, kind: 'dots' } })).toBe(false);
+  });
+
+  // Only the shape `gradientOverlay` can actually state stays live type.
+  it('is true for a gradient Photoshop cannot restate, false for the linear block one', () => {
+    const g = { on: true, kind: 'linear', scope: 'box', angle: 180, stops: [] };
+    expect(isRasterOnly({ gradient: g })).toBe(false);
+    expect(isRasterOnly({ gradient: { ...g, scope: 'line' } })).toBe(true);
+    expect(isRasterOnly({ gradient: { ...g, kind: 'radial' } })).toBe(true);
+    expect(isRasterOnly({ gradient: { ...g, on: false, scope: 'line' } })).toBe(false);
+    // An older style with no `kind` at all is the linear one.
+    expect(isRasterOnly({ gradient: { on: true, scope: 'box' } })).toBe(false);
+  });
+
   it('is false for a plain box with neither', () => {
     expect(isRasterOnly({ curve: 0, roughen: { on: false } })).toBe(false);
   });
 
   it('is false when curve/roughen are simply absent from the style', () => {
     expect(isRasterOnly({})).toBe(false);
+  });
+
+  // The whole point of the predicate is that it is narrow: an ordinary lettered
+  // box - the one this app makes hundreds of per chapter - has to stay an
+  // editable Photoshop type layer, and every switch above is off by default.
+  it('is false for the app default style', () => {
+    expect(isRasterOnly(defaultStyle())).toBe(false);
   });
 });
 
@@ -438,15 +506,27 @@ describe('textLayerFor', () => {
     expect(go.opacity).toBe(1);
     expect(go.gradient.colorStops.map((c) => c.location)).toEqual([0, 1]);
 
+    // A radial ramp is not the same construction as Photoshop's radial overlay,
+    // so it must not come out as one - and it must not fall back to the linear
+    // branch either, which is what a `scope`-only check used to let it do.
+    const radial = textLayerFor(page, box({ ...baseStyle, gradient: { ...g, kind: 'radial' } }), rendered);
+    expect(radial.effects?.gradientOverlay).toBeUndefined();
+    expect('text' in radial).toBe(false);
+
     // Per-line scope has no Photoshop equivalent, and neither has a pattern.
+    // Both are now raster-only rather than live type layers quietly missing
+    // their fill: a re-render discards the cached pixels, so a type layer here
+    // showed flat `fillColor` text where the app shows a ramp or a tile.
     const perLine = textLayerFor(page, box({ ...baseStyle, gradient: { ...g, scope: 'line' } }), rendered);
     expect(perLine.effects?.gradientOverlay).toBeUndefined();
+    expect('text' in perLine).toBe(false);
     const pat = textLayerFor(
       page,
       box({ ...baseStyle, pattern: { on: true, kind: 'dots', fg: '#000', bg: '#fff', scale: 1 } }),
       rendered,
     );
     expect(pat.effects).toBeUndefined();
+    expect('text' in pat).toBe(false);
   });
 
   it('attaches a dropShadow effect and round-trips angle and distance back to canvas x and y offsets', () => {
@@ -531,12 +611,16 @@ describe('textLayerFor', () => {
     const layer = textLayerFor(page, unrotatedBox, rendered);
     expect(layer.text).toBeDefined();
 
-    // boxBounds must be the content box (frame minus padding on both sides),
-    // not the outer box frame dimensions.
-    expect(layer.text.boxBounds).toEqual([0, 0, 120 - BOX_PAD * 2, 80 - BOX_PAD * 2]);
+    // boxBounds is the BLOCK's rect measured from the origin: the content width
+    // (frame minus padding on both sides), because that is what both the app and
+    // Photoshop reflow at, and the block's own height rather than the rest of
+    // the frame, because Photoshop starts the paragraph at the top of this rect.
+    // `baseStyle` has no explicit lineHeight, so one line is 24 * 1.1.
+    expect(layer.text.boxBounds).toEqual([0, 0, 120 - BOX_PAD * 2, Math.round(24 * 1.1)]);
 
     // The transform matrix [cos, sin, -sin, cos, tx, ty] for an unrotated box
-    // must place the content origin at (box.x + BOX_PAD, box.y + BOX_PAD).
+    // must place the content origin at (box.x + BOX_PAD, box.y + blockY), and
+    // `baseStyle` names no `valign`, which is the top - i.e. BOX_PAD.
     const [xx, xy, yx, yy, tx, ty] = layer.text.transform;
     expect(xx).toBeCloseTo(1, 6);
     expect(xy).toBeCloseTo(0, 6);
@@ -544,6 +628,31 @@ describe('textLayerFor', () => {
     expect(yy).toBeCloseTo(1, 6);
     expect(tx).toBeCloseTo(100 + BOX_PAD, 6);
     expect(ty).toBeCloseTo(60 + BOX_PAD, 6);
+  });
+
+  // Photoshop has no `valign`: it flows a paragraph from the top of `boxBounds`
+  // and stops. So the app's vertical alignment has to be spent on WHERE that
+  // rect starts, or a middle- or bottom-aligned box describes text at the top of
+  // the frame while its cached pixels show it centred - and the words jump the
+  // moment Photoshop re-renders the layer. `valign` defaults to 'middle', so
+  // this was nearly every box in a document.
+  it('anchors the type layer at the text block, not the box frame, for each valign', () => {
+    const at = (valign) => {
+      const layer = textLayerFor(
+        page,
+        { lineN: null, text: 'hello', x: 100, y: 60, w: 120, h: 80, style: { ...baseStyle, rotation: 0, valign } },
+        rendered,
+      );
+      return layer.text.transform[5];
+    };
+    // One line, no explicit lineHeight in baseStyle.
+    const blockH = 24 * 1.1;
+    expect(at('top')).toBeCloseTo(60 + BOX_PAD, 6);
+    expect(at('middle')).toBeCloseTo(60 + (80 - blockH) / 2, 6);
+    expect(at('bottom')).toBeCloseTo(60 + 80 - BOX_PAD - blockH, 6);
+    // A style that names no alignment at all has to answer like the exporter's
+    // own fallback, which is the top.
+    expect(at(undefined)).toBeCloseTo(60 + BOX_PAD, 6);
   });
 
   it('rotates the padded content origin about the box frame centre rather than about the inset origin', () => {
@@ -672,7 +781,7 @@ const fullDoc = () =>
     w: W,
     h: H,
     textLayers: [textLayer()],
-    baseLayers: [baseLayer('Cleaned', 1), baseLayer('Raw', 2)],
+    baseLayers: [baseLayer('Raw', 2), baseLayer('Cleaned', 1)],
     project,
   });
 // The shape textLayerFor hands back for a curved/roughened box: same kind of
@@ -711,9 +820,13 @@ describe('pagePsdDocument', () => {
     expect(res.thumbnailRaw).toBeUndefined();
   });
 
-  it('carries the Base and Text groups and nothing else', () => {
+  // `children[0]` is the BOTTOM layer, so this list reads upwards: the art
+  // first, the lettering over it. Built the other way round - which is how it
+  // used to be - the page art covers every text layer and the export opens as
+  // bare, untypeset artwork.
+  it('carries the Base and Text groups, art at the bottom and text on top', () => {
     const doc = fullDoc();
-    expect(doc.children.map((c) => c.name)).toEqual(['Text', 'Base']);
+    expect(doc.children.map((c) => c.name)).toEqual(['Base', 'Text']);
     // Every root entry is a group: the hidden `Flattened preview` raster that
     // used to sit here was a flat layer, and that is how one would come back.
     expect(doc.children.every((c) => Array.isArray(c.children))).toBe(true);
@@ -726,7 +839,8 @@ describe('pagePsdDocument', () => {
 
   it('sizes the document to the page, so base art is stored unresampled', () => {
     const doc = fullDoc();
-    const raw = doc.children[1].children[1];
+    const raw = doc.children[0].children[0];
+    expect(raw.name).toBe('Raw');
     expect([doc.width, doc.height]).toEqual([W, H]);
     expect([raw.right - raw.left, raw.bottom - raw.top]).toEqual([W, H]);
   });
@@ -736,7 +850,7 @@ describe('pagePsdDocument', () => {
     // produces: pagePsdDocument does not itself decide this (textLayerFor
     // does, see above) but has to pass the distinction through untouched.
     const doc = pagePsdDocument({ w: W, h: H, textLayers: [textLayer(), rasterLayer()], project });
-    const [text, raster] = doc.children[0].children;
+    const [text, raster] = doc.children.find((c) => c.name === 'Text').children;
     expect('text' in text).toBe(true);
     expect('text' in raster).toBe(false);
     expect([raster.imageData.width, raster.imageData.height]).toEqual([40, 30]);
@@ -744,18 +858,25 @@ describe('pagePsdDocument', () => {
 });
 
 describe('writePagePsd', () => {
-  it('reads back as Base + Text, with no flat preview layer and an editable type layer', () => {
+  // The order survives the file, not just the document object: ag-psd's writer
+  // emits `children` in array order and its reader walks the file back from the
+  // top with `unshift`, so a round trip is the closest thing here to asking
+  // Photoshop which layer is on top. (It was asked directly, once: a written
+  // page composited by psd-tools and diffed against renderPageCanvas is what
+  // found the groups the wrong way up.)
+  it('reads back as Base then Text, with no flat preview layer and an editable type layer', () => {
     const psd = readPsd(writePagePsd(fullDoc()), READ);
-    expect(psd.children.map((c) => c.name)).toEqual(['Text', 'Base']);
+    expect(psd.children.map((c) => c.name)).toEqual(['Base', 'Text']);
     expect(psd.children.every((c) => c.children)).toBe(true);
-    expect(psd.children[0].children.every((l) => !!l.text)).toBe(true);
-    expect(psd.children[1].children.map((l) => l.name)).toEqual(['Cleaned', 'Raw']);
+    expect(psd.children[1].children.every((l) => !!l.text)).toBe(true);
+    // Cleaned over Raw, or the cleaning is hidden by the art it replaced.
+    expect(psd.children[0].children.map((l) => l.name)).toEqual(['Raw', 'Cleaned']);
   });
 
   it('round-trips a raster-only layer through a real PSD with no `text` on it, next to one that keeps it', () => {
     const doc = pagePsdDocument({ w: W, h: H, textLayers: [textLayer(), rasterLayer()], project });
     const psd = readPsd(writePagePsd(doc), READ);
-    const [text, raster] = psd.children[0].children;
+    const [text, raster] = psd.children.find((c) => c.name === 'Text').children;
     expect(!!text.text).toBe(true);
     expect(!!raster.text).toBe(false);
     // The raster layer's pixels and bounds still round-trip byte-for-byte -
@@ -791,7 +912,8 @@ describe('writePagePsd', () => {
     // so a lossy channel encoding would quietly corrupt the art on the way back
     // in and no other check here would see it.
     const psd = readPsd(writePagePsd(fullDoc()), READ);
-    const raw = psd.children[1].children[1];
+    const raw = psd.children[0].children[0];
+    expect(raw.name).toBe('Raw');
     const ref = noise(W, H, 2).data;
     expect([raw.imageData.width, raw.imageData.height]).toEqual([W, H]);
     // The index rather than the arrays: a failing toEqual on 345,600 channels

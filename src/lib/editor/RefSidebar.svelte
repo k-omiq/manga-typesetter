@@ -43,7 +43,7 @@
       <div class="ed-side-strip">
         {#each app.pages as pg (pg.id)}
           {#if pg.raw}
-            <img src={pg.raw} alt="Raw page" decoding="async" style="width:{rawWidth}; aspect-ratio:{ratioOf(pg)}" />
+            <img src={pg.raw} alt="Raw page" crossorigin="anonymous" decoding="async" style="width:{rawWidth}; aspect-ratio:{ratioOf(pg)}" />
           {:else}
             <div class="ed-side-slot" style="width:{rawWidth}; aspect-ratio:{ratioOf(pg)}"></div>
           {/if}
@@ -62,7 +62,7 @@
              With it the box is the right shape from the moment the element
              mounts. A page whose art has never been measured falls back to
              `2 / 3`, which is a page-shaped hole rather than a flat line. -->
-        <img src={page().raw} alt="Raw page" decoding="async" style="width:{rawWidth}; aspect-ratio:{ratioOf(page())}" />
+        <img src={page().raw} alt="Raw page" crossorigin="anonymous" decoding="async" style="width:{rawWidth}; aspect-ratio:{ratioOf(page())}" />
       {:else}
         <div class="ed-side-empty">No raw reference.<br />Import Raw to load it here.</div>
       {/if}

@@ -952,6 +952,59 @@ describe('openChapter', () => {
     closeChapter();
   });
 
+  it('a close during a slow open supersedes the load, so a later save cannot write an empty document', async () => {
+    // The interleaving that cost a real chapter its pages: the user clicks a
+    // chapter, backs out of the editor while the first page's image is still
+    // being read, and then toggles the chapter's mode from the project screen.
+    // Before `closeChapter` bumped `openSeq`, the parked load resumed after the
+    // close, re-established `chapterRef`/`loadedRef` over a document the close
+    // had already emptied, and the toggle's `markUnsaved` autosaved `pages: []`
+    // over the chapter's only copy.
+    const { p, c } = await seedOpenChapter();
+    closeChapter();
+    // Measured pages, so the open's only `readFile` is the page-image mint -
+    // which parks the load exactly at the await the real interleaving hit.
+    const record = chapterJson(c);
+    for (const pg of record.pages) {
+      pg.w = 100;
+      pg.h = 200;
+    }
+    fsx._tree.files.set(`${c.dir}/chapter.json`, JSON.stringify(record));
+
+    const orig = fsx.readFile;
+    let release;
+    const gate = new Promise((r) => (release = r));
+    fsx.readFile = async (path) => {
+      await gate;
+      return orig(path);
+    };
+    let open;
+    try {
+      open = openChapter(p.id, c.id);
+      // Let the load run to the gated image read...
+      await new Promise((r) => setTimeout(r, 0));
+      // ...then back out of the editor while it is parked there.
+      closeChapter();
+      release();
+      await open;
+    } finally {
+      fsx.readFile = orig;
+    }
+
+    // The load noticed it was superseded and never re-established the refs.
+    expect(app.chapterRef).toBeNull();
+    expect(app.loaded).toBe(false);
+    expect(app.pages).toEqual([]);
+
+    // The toggle that used to poison the file now takes the closed-chapter
+    // branch and rewrites the record it read - pages and all.
+    await setChapterMode(p.id, c.id, 'translate');
+    await saveOpenChapter();
+    const after = chapterJson(c);
+    expect(after.mode).toBe('translate');
+    expect(after.pages).toHaveLength(2);
+  });
+
   it('refuses to open an unreadable chapter rather than loading a blank one', async () => {
     closeChapter();
     seedProject('z', PROJECT('p1', 'Z'));

@@ -753,6 +753,10 @@ import {
                     <input type="number" min="0" max="359" step="1" value={s.circle.angle} onchange={(e) => { s.circle.angle = ((+e.target.value || 0) % 360 + 360) % 360; tickBulkProp('circle'); }} />
                   </div>
                   <div class="field">
+                    <span class="sub-lbl">Radius</span>
+                    <input type="number" min="0" max="4000" step="1" value={s.circle.r} title="0 = auto (fit the ring to the text)" onchange={(e) => { s.circle.r = clamp(+e.target.value || 0, 0, 4000); tickBulkProp('circle'); }} />
+                  </div>
+                  <div class="field">
                     <span class="sub-lbl">Inside</span>
                     <div class="switch" class:on={s.circle.inside} role="switch" aria-checked={s.circle.inside} tabindex="0" onclick={() => { s.circle.inside = !s.circle.inside; tickBulkProp('circle'); }} onkeydown={(e) => e.key === 'Enter' && ((s.circle.inside = !s.circle.inside), tickBulkProp('circle'))}><span class="knob"></span></div>
                   </div>

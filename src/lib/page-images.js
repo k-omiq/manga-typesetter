@@ -1,15 +1,25 @@
 // ===== How many of a chapter's page images are in memory at once =====
 //
-// A page's picture reaches the DOM as a blob URL, and a blob URL is not a
-// pointer to a file: it is the file, held in the renderer's memory for as long
-// as the URL is alive. `openChapter` used to mint one for every raw and every
-// cleaned page in the chapter before it would show the first one, which made
-// the cost of opening a chapter linear in its length and permanent for the
-// session. A 200-page chapter at ~1.5 MB a page, raw and cleaned, is ~600 MB
-// held from the moment it opens until it closes - dwarfing everything else the
-// editor keeps (the box JSON for the same chapter is ~5 MB, and the undo
-// history, which is delta-based, capped at five steps a page and already
-// spilled to `logs/history.json`, is under one).
+// Under Tauri a page's picture reaches the DOM as an asset-protocol URL - a
+// stable pointer the webview streams straight from disk, with no copy of the
+// bytes ever passing through IPC or sitting in JS memory. What this module
+// holds for such a page is only the pre-decoded handle that keeps the bitmap
+// warm; releasing the handle is what gives the memory back. Outside Tauri
+// (vite dev in a plain browser, the tests) the file is read and a blob URL
+// minted instead, which is the shape this module always had - and a blob URL
+// is not a pointer to a file: it is the file, held in the renderer's memory
+// for as long as the URL is alive.
+//
+// The window below exists because of that second shape's history: `openChapter`
+// used to mint a blob for every raw and every cleaned page in the chapter
+// before it would show the first one, which made the cost of opening a chapter
+// linear in its length and permanent for the session. A 200-page chapter at
+// ~1.5 MB a page, raw and cleaned, is ~600 MB held from the moment it opens
+// until it closes - dwarfing everything else the editor keeps (the box JSON for
+// the same chapter is ~5 MB, and the undo history, which is delta-based, capped
+// at five steps a page and already spilled to `logs/history.json`, is under
+// one). Asset URLs shrink what an entry costs, not what the window is for: the
+// decoded bitmaps are still the bound that matters.
 //
 // So the pictures live in a window instead: the page on screen, two either
 // side, and nothing else. Five pages is what makes a page turn instant in both
@@ -158,15 +168,55 @@ function releaseDecoded(img) {
   }
 }
 
-// Answers `{ url, img }` - the blob URL and the pre-decoded handle that keeps
-// its bitmap warm - or null.
+// The asset-protocol half of a mint. The URL is a pointer the webview resolves
+// straight from disk, so there are no bytes to read here - the decode is the
+// only work, and it doubles as the existence check: a missing or unreadable
+// file rejects `decode()`, and the page draws blank exactly as the blob path
+// answers for an unreadable read. `crossOrigin` because the asset origin is not
+// the app's own, and every canvas that later draws this bitmap - the pixel
+// cache, the exporters - needs it untainted; the protocol answers with the CORS
+// header that makes that work (verified against the running app).
+async function mintAsset(url) {
+  // No `Image` means no way to decode OR to tell a missing file apart - hand
+  // the URL over and let the element that mounts it find out, which is the
+  // honest answer in an environment that cannot ask.
+  if (typeof Image === 'undefined') return { url, img: null };
+  const img = new Image();
+  img.decoding = 'async';
+  img.crossOrigin = 'anonymous';
+  img.src = url;
+  try {
+    await img.decode?.();
+  } catch {
+    return null;
+  }
+  return { url, img };
+}
+
+// Answers `{ url, img }` - the URL and the pre-decoded handle that keeps its
+// bitmap warm - or null. Under Tauri the URL is the asset protocol's; without
+// it (vite dev in a browser, the tests) the file is read and a blob URL minted,
+// which is the shape this module always had.
 async function mintOne(dir, name) {
   if (!dir || !name) return null;
   try {
-    const bytes = await fsx.readFile(await fsx.join(dir, name));
+    const path = await fsx.join(dir, name);
+    const asset = (await fsx.assetUrl?.(path)) ?? null;
+    if (asset) {
+      const entry = await mintAsset(asset);
+      if (entry) {
+        remember(asset);
+        return entry;
+      }
+      // An asset the webview cannot load falls through to the read below
+      // rather than blanking the page: the protocol can be refused for reasons
+      // a readFile is not subject to (a scope miss, a dev-origin quirk), and a
+      // file that is genuinely missing fails the read the same way it always
+      // did.
+    }
+    const bytes = await fsx.readFile(path);
     const url = URL.createObjectURL(new Blob([bytes]));
-    mintedSrcs.add(url);
-    if (mintedSrcs.size > SRC_MEMORY) mintedSrcs.delete(mintedSrcs.values().next().value);
+    remember(url);
     return { url, img: await predecode(url) };
   } catch {
     // A missing or unreadable file is a page that draws blank, exactly as it
@@ -176,9 +226,22 @@ async function mintOne(dir, name) {
   }
 }
 
+function remember(url) {
+  mintedSrcs.add(url);
+  if (mintedSrcs.size > SRC_MEMORY) mintedSrcs.delete(mintedSrcs.values().next().value);
+}
+
+// Only a blob URL owns memory that revoking returns; an asset URL is a stable
+// pointer the protocol serves on demand, and "revoking" one is a no-op the
+// webview would ignore anyway. The decoded handle is the memory either kind
+// holds, and `releaseDecoded` is what gives that back.
+function revokeUrl(u) {
+  if (u && u.startsWith('blob:')) URL.revokeObjectURL(u);
+}
+
 function revokeEntry(e) {
-  if (e.raw) URL.revokeObjectURL(e.raw);
-  if (e.cleaned) URL.revokeObjectURL(e.cleaned);
+  revokeUrl(e.raw);
+  revokeUrl(e.cleaned);
   releaseDecoded(e.rawImg);
   releaseDecoded(e.cleanedImg);
   e.rawImg = null;
@@ -277,8 +340,8 @@ export function ensurePageImages(p) {
     //   deliberately mints pages the window does not want.
     const wanted = resident.has(p.id) || pinned(p.id);
     if (mine !== epoch || minted.has(p.id) || !wanted) {
-      if (raw) URL.revokeObjectURL(raw);
-      if (cleaned) URL.revokeObjectURL(cleaned);
+      revokeUrl(raw);
+      revokeUrl(cleaned);
       releaseDecoded(rawMint?.img);
       releaseDecoded(cleanedMint?.img);
       return p;
@@ -314,7 +377,21 @@ export function setResidentWindow(pages, index, radius = RESIDENT_RADIUS) {
   for (let i = lo; i <= hi; i++) if (pages[i]) resident.add(pages[i].id);
   for (const id of [...minted.keys()]) if (!resident.has(id)) releasePageImages(id);
   const here = ensurePageImages(pages[index]);
-  for (let i = lo; i <= hi; i++) if (i !== index) ensurePageImages(pages[i]);
+  // Neighbours start AFTER the page on screen has landed, not alongside it.
+  // Kicked off together, four prefetch reads and decodes (each raw a scan-sized
+  // PNG, tens of MB over the Tauri IPC pipe) contend with the one read the user
+  // is actually waiting on, and the first page of a freshly opened chapter took
+  // seconds to paint. `resident` is already set above, so a window that moves
+  // on before this runs still releases and re-checks exactly as before -
+  // `ensurePageImages` drops a mint the window no longer wants.
+  here
+    .finally(() => {
+      for (let i = lo; i <= hi; i++) if (i !== index) ensurePageImages(pages[i]);
+    })
+    .catch(() => {
+      /* the caller holds the original promise; this branch only exists so the
+         prefetch chain can never surface as an unhandled rejection */
+    });
   return here;
 }
 

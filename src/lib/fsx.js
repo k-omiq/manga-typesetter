@@ -211,6 +211,17 @@ export const fsx = {
   async join(...parts) {
     return (await path()).join(...parts);
   },
+  // The webview URL for a file on disk, served by Tauri's asset protocol: the
+  // renderer streams the bytes straight from the filesystem, with no IPC copy
+  // and no blob held in JS memory. Null wherever there is no Tauri host (vite
+  // dev in a plain browser, the test runner), and callers fall back to reading
+  // the bytes themselves. The protocol's scope mirrors the fs scope - see the
+  // note in src-tauri/capabilities/default.json.
+  async assetUrl(p) {
+    if (!inTauri()) return null;
+    if (!coreMod) coreMod = await import('@tauri-apps/api/core');
+    return coreMod.convertFileSrc(p);
+  },
   async homeDir() {
     return (await path()).homeDir();
   },

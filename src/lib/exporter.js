@@ -1,6 +1,6 @@
 // Native-resolution raster export via canvas 2D. PNG is lossless.
 import { app, page, toast, boxText, saveExportPrefs, isLongstrip, PAGE_W, PAGE_H } from './store.svelte.js';
-import { familyFor, fontShorthand, applyCase, layoutLines, arcLayout, circleLayout, pathLayout, maxLineWidth, BOX_PAD, balloonWidthsFor } from './measure.js';
+import { familyFor, fontShorthand, applyCase, layoutLines, arcLayout, circleLayout, pathLayout, maxLineWidth, BOX_PAD, blockYFor, balloonWidthsFor } from './measure.js';
 import {
   strokeBands,
   strokeExtent,
@@ -251,12 +251,7 @@ function layoutBox(box, p) {
     // BOX_PAD on both sides, so every auto-fitted box exported with 4px of slack
     // under its text. Centred alignments were always right and still are - the
     // padding is symmetric, so it cancels.
-    blockY =
-      s.valign === 'middle'
-        ? (box.h - blockH) / 2
-        : s.valign === 'bottom'
-          ? box.h - BOX_PAD - blockH
-          : BOX_PAD;
+    blockY = blockYFor(s, box.h, blockH);
     blockX =
       s.align === 'center'
         ? (box.w - blockW) / 2

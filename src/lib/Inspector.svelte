@@ -1220,6 +1220,13 @@
                 <input class="num-s" type="number" min="0" max="359" step="1" value={s.circle.angle} disabled={!s.circle.on} title="Turns the ring, degrees" aria-label="Angle, degrees" onchange={(e) => commitNum(s.circle, 'angle', e, 0, 359)} />
               </div>
             </div>
+            <div class="grp">
+              <span class="lbl">Radius</span>
+              <div class="slider-row">
+                <input type="range" min="0" max="600" step="1" value={Math.min(600, s.circle.r)} disabled={!s.circle.on} title="Ring radius in px. 0 fits the ring to the text; any other value holds the size and the text runs as far round as it reaches." aria-label="Radius" oninput={(e) => setNum(s.circle, 'r', e.target.value, 0, 4000)} />
+                <input class="num-s" type="number" min="0" max="4000" step="1" value={s.circle.r} disabled={!s.circle.on} title="0 = auto (fit the ring to the text)" aria-label="Radius, px" onchange={(e) => commitNum(s.circle, 'r', e, 0, 4000)} />
+              </div>
+            </div>
             <div class="switch-row">
               <button
                 type="button"

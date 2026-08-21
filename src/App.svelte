@@ -210,7 +210,7 @@
   $effect(() => {
     if (route.name !== 'editor') return;
     const { projectId, chapterId } = route;
-    if (untrack(() => app.chapterRef?.chapterId) === chapterId) return;
+    if (untrack(() => app.chapterRef?.projectId === projectId && app.chapterRef?.chapterId === chapterId)) return;
     openChapter(projectId, chapterId).catch((e) => {
       toast(`Could not open that chapter: ${e?.message ?? e}`);
       goBack();

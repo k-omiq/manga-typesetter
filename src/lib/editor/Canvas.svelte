@@ -852,11 +852,15 @@
                    frame. `page-images.js` has usually decoded the bitmap
                    already (see `predecode`), so this is the element agreeing to
                    wait for that rather than starting its own. -->
-              <img class="page-img" src={srcOf(pg)} alt="Page" decoding="async" onload={(e) => onCleanedLoad(e, pg)} />
+              <img class="page-img" src={srcOf(pg)} alt="Page" crossorigin="anonymous" decoding="async" onload={(e) => onCleanedLoad(e, pg)} />
             {/if}
             <div class="boxlayer" class:pan={app.tool === 'pan'}>
-              <!-- Only inside the resident window - see `stripBoxesOn`. -->
-              {#if stripBoxesOn(i)}
+              <!-- Only inside the resident window - see `stripBoxesOn`. A
+                   translate chapter renders no canvas boxes at all: the boxes
+                   are typeset-mode state that survives the switch on disk, and
+                   showing them here would present a canvas the mode's tools
+                   cannot touch. -->
+              {#if !translate && stripBoxesOn(i)}
                 {#each pg.boxes as box (box.id)}
                   <TextBox {box} {pg} pageFrameEl={frameEls[i]} />
                 {/each}
@@ -886,12 +890,15 @@
                  its pixels are cached before it is ever shown - `onCleanedLoad`
                  files both against the page the element was mounted for, and
                  re-fits only when that page is the one on screen. -->
-            <img class="page-img" src={srcOf(m.pg)} alt="Page" decoding="async" onload={(e) => onCleanedLoad(e, m.pg)} />
+            <img class="page-img" src={srcOf(m.pg)} alt="Page" crossorigin="anonymous" decoding="async" onload={(e) => onCleanedLoad(e, m.pg)} />
           {/if}
           <div class="boxlayer" class:pan={app.tool === 'pan'}>
-            {#each m.pg.boxes as box (box.id)}
-              <TextBox {box} pg={m.pg} pageFrameEl={pagedFrameEls[m.i]} />
-            {/each}
+            <!-- Same as the strip above: a translate chapter draws no boxes. -->
+            {#if !translate}
+              {#each m.pg.boxes as box (box.id)}
+                <TextBox {box} pg={m.pg} pageFrameEl={pagedFrameEls[m.i]} />
+              {/each}
+            {/if}
           </div>
         </div>
       {/each}

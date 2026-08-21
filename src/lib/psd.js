@@ -14,9 +14,9 @@ import { isTauri, pickFilesTauri } from './importer.js';
 import { renderBoxLayer, pageSpace, settleNoise } from './exporter.js';
 import { fontCssFor, fontNameFor } from './store.svelte.js';
 import { resolveFace, postScriptNameFor } from './fonts.js';
-import { applyCase, canMeasure, layoutLines, BOX_PAD, balloonWidthsFor } from './measure.js';
+import { applyCase, canMeasure, layoutLines, BOX_PAD, blockYFor, balloonWidthsFor } from './measure.js';
 import { normalizeFit } from './data.js';
-import { strokeBands } from './text-paint.js';
+import { strokeBands, clipActive } from './text-paint.js';
 import { withPageImages } from './page-images.js';
 
 // Bumped when the embedded schema changes in a non-back-compatible way. Import
@@ -278,31 +278,101 @@ function warpForCurve(curve) {
   return { style: 'arc', value: Math.max(-100, Math.min(100, curve)), perspective: 0, perspectiveOther: 0, rotate: 'horizontal' };
 }
 
+// A gradient Photoshop can restate as a real `gradientOverlay` layer effect,
+// which is the linear ramp across the whole block and nothing else.
+//
+//   scope 'line' restarts the ramp on every wrapped line (see paintBox's
+//   `perLine`). One overlay covers one layer, so there is no list of effects
+//   that says "and again, per line".
+//   kind 'radial' reads cx/cy/radius against the fill rect's farthest corner
+//   (see text-paint.js). Photoshop's radial overlay is parameterised by an
+//   offset and a scale percentage against its own reference, which is not the
+//   same construction, so a mapping would be a guess dressed as a value.
+//
+// Used twice, deliberately: by `isRasterOnly` to decide the layer even gets a
+// live `text` object, and by the effects builder to decide it emits the
+// overlay. One rule, so the two can never disagree about the same style.
+function gradientOverlayable(g) {
+  return !!g && g.scope !== 'line' && (g.kind ?? 'linear') === 'linear';
+}
+
 // True when a box's style is something Photoshop's own text engine cannot
 // reproduce, so the layer it gets has to carry pixels instead of a live
-// `text` object. Two cases, both pixel-only effects with no PS type-layer
-// equivalent:
+// `text` object.
+//
+// The reason this predicate has to exist at all: Photoshop ALWAYS re-renders a
+// live type layer from its own engine data and throws the cached `imageData`
+// away. So "we baked it into the pixels" is not a fallback for a live type
+// layer - it is only a fallback for readers that are not Photoshop. Anything
+// the type layer cannot state is either painted wrong (a different shape over
+// our pixels) or silently dropped (our effect gone), and both are the export
+// lying about what the app shows. Dropping `text` makes Photoshop treat the
+// layer as a plain image and show exactly the bytes we hand it.
+//
+// Geometry - Photoshop would lay the glyphs out somewhere else:
 //   curve   - our per-character circular-arc layout (arcLayout in measure.js)
 //             is not the same shape as Photoshop's `arc` warp. Attaching the
 //             warp anyway made Photoshop re-render the glyphs along ITS arc,
 //             on open, over the cached pixels that were laid out along ours.
-//   roughen - a seeded pixel-displacement filter (roughen() in exporter.js)
-//             with nothing in Photoshop's type engine that produces it at
-//             all; there is no warp/style value that could stand in for it.
+//   path    - text on the user's bezier (pathLayout), placed by arc length
+//             with a per-glyph tangent. A type layer has no path to follow, so
+//             Photoshop re-renders it as a straight paragraph in the box rect.
+//   circle  - the closed ring (circleLayout). Same failure as `path`.
 //   flip    - the mirror is baked into the pixels (paintBoxOnPage's ctx.scale
 //             in exporter.js), but a type layer's transform below is
 //             [cos, sin, -sin, cos, tx, ty], which has determinant +1 and so
 //             cannot express a reflection at all. Left as a type layer, a
 //             mirrored box re-rendered the right way round over the mirrored
 //             pixels - the same failure as the curve, for the same reason.
+//
+// Ink - Photoshop would lay the glyphs out right and then paint them wrong:
+//   roughen  - a seeded pixel-displacement filter (roughen() in exporter.js)
+//              with nothing in Photoshop's type engine that produces it at
+//              all; there is no warp/style value that could stand in for it.
+//   clip     - the visibility mask hides part of the box's ink. A re-render
+//              has no mask, so Photoshop shows the letters the user erased.
+//              Only counted when the mask actually has shapes - `clipActive`
+//              is the one statement of that, shared with both renderers.
+//   blur     - a gaussian over the finished composite (fill + strokes +
+//              shadows together). Photoshop's type effects blur each effect on
+//              its own track; there is no whole-layer blur to ask for.
+//   motion   - the directional smear, likewise, and only when it has a
+//              direction to smear along (0,0 draws nothing - see
+//              motionBlurExtent).
+//   pattern  - a tiled fill. Photoshop's patternOverlay takes a pattern from
+//              the document's pattern table, not a tile we can hand it here,
+//              and a type layer's own fill is one flat colour.
+//   gradient - only the shapes `gradientOverlayable` accepts survive; the rest
+//              would come out as a flat `fillColor`.
+//
 // A raster-only box still round-trips losslessly through this app - the
 // embedded project JSON (see buildPagePsd) is what re-import actually reads -
 // so this predicate only ever affects what a foreign copy of Photoshop shows.
+// The cost of saying yes here is editability in Photoshop, and it is only paid
+// by a box that switched one of these on; the ordinary box (strokes, shadows,
+// a block gradient) is untouched and stays live type.
+//
 // Single place this decision is made; exported so it can be unit-tested from
 // node without a canvas.
 export function isRasterOnly(style) {
   if (!style) return false;
-  return !!(style.curve || (style.roughen && style.roughen.on) || style.flipH || style.flipV);
+  const s = style;
+  const mb = s.motionBlur;
+  return !!(
+    // geometry
+    s.curve ||
+    (s.path?.on && (s.path.pts?.length ?? 0) >= 2) ||
+    s.circle?.on ||
+    s.flipH ||
+    s.flipV ||
+    // ink
+    s.roughen?.on ||
+    clipActive(s.clip) ||
+    (s.blur ?? 0) > 0 ||
+    (mb?.on && ((mb.x ?? 0) !== 0 || (mb.y ?? 0) !== 0)) ||
+    s.pattern?.on ||
+    (s.gradient?.on && !gradientOverlayable(s.gradient))
+  );
 }
 
 // Written onto a raster-only layer's name and read back off it by the foreign
@@ -426,8 +496,24 @@ export function textLayerFor(p, box, rendered) {
   // invisible until the layer re-renders, and then a 2px jump. `boxBounds`
   // loses the padding on both sides for the same reason: it is the box the text
   // re-flows inside, so it has to be the content box, not the frame.
+  //
+  // Vertically the origin is the BLOCK's top, not the box's. Photoshop flows
+  // paragraph text from the top of `boxBounds` and has no notion of our
+  // `valign`, so a middle- or bottom-aligned box anchored at `box.y + BOX_PAD`
+  // described text at the top of the frame while the cached pixels underneath
+  // showed it centred or sitting on the floor. The file looked right until the
+  // layer re-rendered - a font substitution, or the type tool - and then the
+  // words jumped up by half the slack. `valign` defaults to 'middle', so that
+  // was nearly every box.
+  //
+  // `blockYFor` is the exporter's own rule, imported rather than repeated, and
+  // the line count is the only thing needed to size the block: `content` is the
+  // shaped text with the app's own breaks already in it.
+  const lineH = (s.lineHeight || 1.1) * s.size;
+  const blockH = content.split('\n').length * lineH;
+  const blockY = blockYFor(s, box.h, blockH);
   const ox = box.x + BOX_PAD;
-  const oy = box.y + BOX_PAD;
+  const oy = box.y + blockY;
   const tx = cx + (ox - cx) * cos - (oy - cy) * sin;
   const ty = cy + (ox - cx) * sin + (oy - cy) * cos;
   const fontSize = s.size;
@@ -455,11 +541,10 @@ export function textLayerFor(p, box, rendered) {
   // Photoshop casts a shadow at vector (-distance * cos(θ), distance * sin(θ)).
   // Converting canvas (x, y) gives distance = hypot(x, y) and angle = atan2(y, -x).
   //
-  // The pattern fill and the whole-text blur have no type-layer equivalent, and
-  // neither does a per-line gradient. They stay in the cached pixels, which
-  // already carry them, and in the embedded project JSON, which is the file's
-  // actual truth - a re-render in Photoshop loses them, the same way it loses a
-  // curve.
+  // Everything Photoshop's type engine cannot state - the pattern fill, the
+  // whole-text blur, the smear, the mask, a per-line or radial gradient - is
+  // not here: `isRasterOnly` sent that box down the raster branch above, so by
+  // this line the only fill left to describe is a linear block gradient.
   const effects = {};
   const bands = strokeBands(s.strokes);
   if (bands.length) {
@@ -490,7 +575,7 @@ export function textLayerFor(p, box, rendered) {
   // is the direction the gradient travels, counter-clockwise from the +x axis
   // with y pointing UP, while the style stores CSS degrees clockwise from "up" -
   // so 90 minus it. Stop positions are 0..1 either way.
-  if (s.gradient?.on && s.gradient.scope !== 'line') {
+  if (s.gradient?.on && gradientOverlayable(s.gradient)) {
     effects.gradientOverlay = [
       {
         enabled: true,
@@ -539,7 +624,11 @@ export function textLayerFor(p, box, rendered) {
       antiAlias: 'smooth',
       warp: warpForCurve(s.curve),
       shapeType: 'box',
-      boxBounds: [0, 0, Math.round(box.w - BOX_PAD * 2), Math.round(box.h - BOX_PAD * 2)],
+      // The block's own rect, measured from the origin above. Width is the
+      // content box, because that is what the app wraps at and Photoshop
+      // reflows at; height is the block rather than the rest of the frame, so
+      // the box Photoshop draws in is the box the app drew.
+      boxBounds: [0, 0, Math.round(box.w - BOX_PAD * 2), Math.round(blockH)],
       style: {
         font: { name: face.name },
         fontSize,
@@ -604,9 +693,22 @@ function flatWhiteComposite(w, h) {
 // false - macOS never reads it, see above - and no reader we can name and test
 // on this machine reads it either (Adobe Bridge is the usual claim; unverified
 // here). Removed rather than kept on a story.
+// LAYER ORDER: `children[0]` is the BOTTOM layer, and the last entry is the top
+// one. This is ag-psd's order and the file's own - a PSD stores its layer
+// records bottom-first, ag-psd's writer emits `children` in array order and its
+// reader `unshift`es them back while walking the file from the top, so both
+// halves agree. It is the opposite of how a layers palette reads, which is what
+// made it easy to get backwards: this file used to build `[Text, Base]` and
+// describe it as "top of list = top in Photoshop", which put the page art on
+// top of every text layer. The export opened as bare, untypeset artwork - and
+// nothing noticed, because this app re-imports from the embedded JSON and never
+// composites the layers it wrote. Verified by compositing a written file with
+// an independent reader (psd-tools) and diffing it against renderPageCanvas;
+// `psdSelfTest` now pins the order so it cannot flip back silently.
 export function pagePsdDocument({ w, h, textLayers = [], baseLayers = [], project }) {
-  const children = [{ name: 'Text', opened: true, children: (textLayers ?? []).filter(Boolean) }];
+  const children = [];
   if (baseLayers.length) children.push({ name: 'Base', opened: true, children: baseLayers });
+  children.push({ name: 'Text', opened: true, children: (textLayers ?? []).filter(Boolean) });
   return {
     width: w,
     height: h,
@@ -648,10 +750,12 @@ export function writePagePsd(doc) {
 }
 
 // Build a layered, editable PSD (ArrayBuffer) for one page, with the complete
-// project embedded as JSON for lossless re-import. Group/layer schema (top of
-// list = top in Photoshop):
-//   Text  - one editable text layer per box
-//   Base  - Cleaned (if any) over Raw
+// project embedded as JSON for lossless re-import. Group/layer schema, written
+// bottom-first because that is the order the file stores (see
+// pagePsdDocument) - so this list reads upwards, the reverse of a layers
+// palette:
+//   Base  - Raw, with Cleaned (if any) over it
+//   Text  - one editable text layer per box, on top of the art
 //
 // The document is the page's OWN pixel size. It used to be supersampled 2x so
 // the text layers' cached pixels stayed sharp when zoomed; the cost was that
@@ -708,19 +812,22 @@ export async function buildPagePsd(p) {
   // page is measured from `cleaned`, so `Raw` is the layer that gets resampled
   // here. Nothing in the app produces that pair, and a page that carries it has
   // no single honest size to export at anyway.
+  // Raw first, Cleaned second: `children[0]` is the BOTTOM layer (see
+  // pagePsdDocument), so pushing Cleaned first put the untouched art back on
+  // top of the cleaned plate and hid the cleaning.
   const baseLayers = [];
-  if (p.cleaned) {
-    try {
-      const data = await imageDataFromSrc(p.cleaned, W, H);
-      baseLayers.push({ name: 'Cleaned', left: 0, top: 0, right: data.width, bottom: data.height, imageData: data });
-    } catch {
-      /* skip */
-    }
-  }
   if (p.raw) {
     try {
       const data = await imageDataFromSrc(p.raw, W, H);
       baseLayers.push({ name: 'Raw', left: 0, top: 0, right: data.width, bottom: data.height, imageData: data });
+    } catch {
+      /* skip */
+    }
+  }
+  if (p.cleaned) {
+    try {
+      const data = await imageDataFromSrc(p.cleaned, W, H);
+      baseLayers.push({ name: 'Cleaned', left: 0, top: 0, right: data.width, bottom: data.height, imageData: data });
     } catch {
       /* skip */
     }
@@ -790,7 +897,11 @@ export async function reconstructForeign(psd) {
   const H = psd.height || PAGE_H;
 
   // Bottom-most raster becomes the base image. Prefer a named Base/Cleaned/Raw
-  // if present, else the last flat pixel layer, else the composite.
+  // if present, else the FIRST flat pixel layer, else the composite. First,
+  // not last: `children[0]` is the bottom layer (see pagePsdDocument), and
+  // `walk` visits children in that same order, so a foreign PSD used to hand
+  // back its topmost raster - the lettering plate, in a typeset file - as the
+  // page's art.
   const flat = [];
   const walk = (nodes) => {
     for (const n of nodes ?? []) {
@@ -800,7 +911,7 @@ export async function reconstructForeign(psd) {
   };
   walk(psd.children);
   const baseLayer =
-    findInGroup(psd, 'Base', 'Cleaned') || findInGroup(psd, 'Base', 'Raw') || flat[flat.length - 1] || null;
+    findInGroup(psd, 'Base', 'Cleaned') || findInGroup(psd, 'Base', 'Raw') || flat[0] || null;
   let cleaned = baseLayer ? await layerToUrl(baseLayer) : null;
   if (!cleaned && psd.canvas) cleaned = await canvasToObjectUrl(psd.canvas);
 
@@ -887,6 +998,17 @@ export async function reconstructForeign(psd) {
             bold: !!st.fauxBold || /bold/i.test(faceSuffix),
             italic: !!st.fauxItalic || /(italic|oblique)/i.test(faceSuffix),
             align: n.text.paragraphStyle?.justification === 'left' ? 'left' : n.text.paragraphStyle?.justification === 'right' ? 'right' : 'center',
+            // Top, because `boxBounds` is where the text starts: Photoshop
+            // flows a paragraph from the top of that rect, and so does the
+            // writer above, which anchors the layer at the BLOCK's top rather
+            // than the frame's. The box recovered here is that block plus
+            // padding, so the only vertical alignment that puts the words back
+            // where the file showed them is the one that means "at the top of
+            // the box". The app's own default is 'middle', and taking it here
+            // would re-centre every imported box inside a box that is already
+            // the size of its text - a slow drift upward on every round trip
+            // through a PSD whose embedded project Photoshop has rewritten.
+            valign: 'top',
             color: st.fillColor ? '#' + [st.fillColor.r, st.fillColor.g, st.fillColor.b].map((v) => (v | 0).toString(16).padStart(2, '0')).join('') : '#1a1a1a',
           },
         });
@@ -1165,6 +1287,18 @@ export async function psdSelfTest(p) {
       report.checks.groups = groupNames;
       report.checks.noFlatLayers = (psd.children ?? []).every((c) => !!c.children);
       report.checks.hasTextGroup = !!textGroup;
+      // The art must sit UNDER the lettering, and the cleaned plate over the
+      // raw. `children[0]` is the bottom layer (see pagePsdDocument), so this
+      // reads bottom-first: Base, then Text. Built backwards it opened as bare
+      // artwork with every text layer hidden beneath it, and nothing else here
+      // would notice - the pixel checks above pass layer by layer whichever way
+      // round the groups are stacked.
+      report.checks.textAboveBase = groupNames.indexOf('Text') === groupNames.length - 1;
+      const baseNames = ((psd.children ?? []).find((c) => c.children && c.name === 'Base')?.children ?? []).map((l) => l.name);
+      report.checks.baseOrder = baseNames;
+      report.checks.cleanedAboveRaw =
+        !baseNames.includes('Cleaned') || !baseNames.includes('Raw') || baseNames.indexOf('Cleaned') > baseNames.indexOf('Raw');
+      if (!report.checks.textAboveBase || !report.checks.cleanedAboveRaw) report.ok = false;
       // This used to assert "every layer in the Text group is editable text",
       // which the raster-only fix below makes false on purpose: a curved or
       // roughened box now deliberately gets a layer with no `text` at all (see

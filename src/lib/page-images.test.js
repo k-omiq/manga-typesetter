@@ -23,6 +23,9 @@ vi.mock('./fsx.js', () => ({
       if (path.includes('missing')) throw new Error('ENOENT');
       return new Uint8Array([1, 2, 3]);
     },
+    // The default is the no-Tauri answer, so every test below exercises the
+    // blob path unless it swaps this out - see 'the asset-protocol mint'.
+    assetUrl: async () => null,
   },
 }));
 
@@ -34,6 +37,17 @@ const {
 } = await import('./page-images.js');
 
 const { rememberPagePixels, pagePixelsHeld, forgetPagePixels } = await import('./page-pixels.js');
+const { fsx } = await import('./fsx.js');
+
+// `setResidentWindow` resolves when the page on screen is there; the
+// neighbours are prefetch and start only after it, off the critical path (see
+// the deferral in `setResidentWindow`). Tests that assert on the whole window
+// wait that tick out.
+const settled = async (...args) => {
+  const r = await setResidentWindow(...args);
+  await new Promise((res) => setTimeout(res, 0));
+  return r;
+};
 
 const real = {
   createObjectURL: globalThis.URL.createObjectURL,
@@ -68,6 +82,9 @@ class FakeImage {
     if (v) this.url = v;
   }
   async decode() {
+    // An asset URL for a file that is missing or unreadable rejects its
+    // decode - that rejection is the only existence check the asset path has.
+    if (this.#src?.includes('undecodable')) throw new Error('broken image');
     this.decoded++;
   }
   removeAttribute(name) {
@@ -108,7 +125,7 @@ describe('pre-decoding what the window mints', () => {
   it('decodes every page it mints, before it hands the URL over', async () => {
     setChapterImageDirs('/ch/raws', null);
     const ps = pages(3);
-    await setResidentWindow(ps, 0);
+    await settled(ps, 0);
     expect(images.length).toBe(3);
     for (const img of images) {
       expect(img.decoding).toBe('async');
@@ -125,16 +142,70 @@ describe('pre-decoding what the window mints', () => {
     globalThis.Image = undefined;
     setChapterImageDirs('/ch/raws', null);
     const ps = pages(1);
-    await setResidentWindow(ps, 0);
+    await settled(ps, 0);
     expect(ps[0].raw).toBe(minted[0]);
   });
 
   it('holds no handle for a page whose file will not read', async () => {
     setChapterImageDirs('/ch/missing', null);
     const ps = pages(1);
-    await setResidentWindow(ps, 0);
+    await settled(ps, 0);
     expect(ps[0].raw).toBe(null);
     expect(images.length).toBe(0);
+  });
+});
+
+describe('the asset-protocol mint', () => {
+  const asAsset = async (p) => `asset://localhost/${encodeURIComponent(p)}`;
+
+  it('hands over the asset URL, decoded and CORS-clean, with no file read', async () => {
+    fsx.assetUrl = asAsset;
+    try {
+      setChapterImageDirs('/ch/raws', null);
+      const ps = pages(1);
+      await settled(ps, 0);
+      expect(ps[0].raw).toBe(`asset://localhost/${encodeURIComponent('/ch/raws/p1.png')}`);
+      // No blob was minted: the URL is the protocol's, not a copy of the bytes.
+      expect(minted).toEqual([]);
+      expect(images.length).toBe(1);
+      expect(images[0].decoded).toBe(1);
+      // Every canvas that later draws this bitmap needs it untainted.
+      expect(images[0].crossOrigin).toBe('anonymous');
+    } finally {
+      fsx.assetUrl = async () => null;
+    }
+  });
+
+  it('falls back to reading the bytes when the asset will not decode', async () => {
+    fsx.assetUrl = async () => 'asset://localhost/undecodable';
+    try {
+      setChapterImageDirs('/ch/raws', null);
+      const ps = pages(1);
+      await settled(ps, 0);
+      // The protocol refused, the readFile did not - the page still draws.
+      expect(ps[0].raw).toBe(minted[0]);
+      expect(String(ps[0].raw).startsWith('blob:')).toBe(true);
+    } finally {
+      fsx.assetUrl = async () => null;
+    }
+  });
+
+  it('releases only the decoded handle when an asset page leaves the window', async () => {
+    fsx.assetUrl = asAsset;
+    try {
+      setChapterImageDirs('/ch/raws', null);
+      const ps = pages(1);
+      await settled(ps, 0);
+      const img = images[0];
+      releasePageImages(ps[0].id);
+      // The handle is the memory an asset entry holds; the URL is a stable
+      // pointer and there is nothing to revoke.
+      expect(img.releasedFrom).toBe('src');
+      expect(revoked).toEqual([]);
+      expect(ps[0].raw).toBe(null);
+    } finally {
+      fsx.assetUrl = async () => null;
+    }
   });
 });
 
@@ -145,10 +216,10 @@ describe('giving the bitmap back', () => {
   it('releases the decoded handle with the URL it was decoded from', async () => {
     setChapterImageDirs('/ch/raws', null);
     const ps = pages(8);
-    await setResidentWindow(ps, 0); // pages 1-3
+    await settled(ps, 0); // pages 1-3
     const held = images.slice();
     expect(held.length).toBe(3);
-    await setResidentWindow(ps, 7); // pages 6-8, so 1-3 all go
+    await settled(ps, 7); // pages 6-8, so 1-3 all go
     for (const img of held) {
       expect(img.releasedFrom).toBe('src');
       expect(revoked).toContain(img.url);
@@ -158,7 +229,7 @@ describe('giving the bitmap back', () => {
   it('releases it when one page is dropped on its own', async () => {
     setChapterImageDirs('/ch/raws', null);
     const ps = pages(1);
-    await setResidentWindow(ps, 0);
+    await settled(ps, 0);
     const img = images[0];
     releasePageImages(ps[0].id);
     expect(img.releasedFrom).toBe('src');
@@ -169,7 +240,7 @@ describe('giving the bitmap back', () => {
   it('releases every one of them when the chapter closes', async () => {
     setChapterImageDirs('/ch/raws', null);
     const ps = pages(3);
-    await setResidentWindow(ps, 1);
+    await settled(ps, 1);
     const held = images.slice();
     releaseAllPageImages();
     expect(held.length).toBe(3);
@@ -234,7 +305,7 @@ describe('the pixels go back with the picture', () => {
   it('forgets one page’s pixels when its images are released', async () => {
     setChapterImageDirs('/ch/raws', null);
     const ps = pages(3);
-    await setResidentWindow(ps, 0);
+    await settled(ps, 0);
     for (const p of ps) rememberPagePixels(p.id, p.raw, decoded);
     expect(pagePixelsHeld()).toBe(3);
     releasePageImages(ps[0].id);
@@ -246,10 +317,10 @@ describe('the pixels go back with the picture', () => {
   it('forgets them as the window slides', async () => {
     setChapterImageDirs('/ch/raws', null);
     const ps = pages(9);
-    await setResidentWindow(ps, 0); // pages 1-3
+    await settled(ps, 0); // pages 1-3
     for (const p of ps) if (p.raw) rememberPagePixels(p.id, p.raw, decoded);
     expect(pagePixelsHeld()).toBe(3);
-    await setResidentWindow(ps, 8); // pages 7-9, so 1-3 all go
+    await settled(ps, 8); // pages 7-9, so 1-3 all go
     expect(pagePixelsHeld()).toBe(0);
   });
 
@@ -260,7 +331,7 @@ describe('the pixels go back with the picture', () => {
   it('forgets all of them when the chapter is replaced', async () => {
     setChapterImageDirs('/ch/raws', null);
     const ps = pages(3);
-    await setResidentWindow(ps, 1);
+    await settled(ps, 1);
     for (const p of ps) rememberPagePixels(p.id, p.raw, decoded);
     expect(pagePixelsHeld()).toBe(3);
     setChapterImageDirs('/other/raws', null);
@@ -273,10 +344,10 @@ describe('the pixels go back with the picture', () => {
     const { withPageImages } = await import('./page-images.js');
     setChapterImageDirs('/ch/raws', null);
     const ps = pages(9);
-    await setResidentWindow(ps, 0);
+    await settled(ps, 0);
     await withPageImages(ps[0], async () => {
       rememberPagePixels(ps[0].id, ps[0].raw, decoded);
-      await setResidentWindow(ps, 8);
+      await settled(ps, 8);
       expect(pagePixelsHeld()).toBe(1);
     });
     expect(pagePixelsHeld()).toBe(0);

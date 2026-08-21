@@ -241,8 +241,10 @@ export function defaultStyle() {
     // comes from the text's own advance, `angle` (degrees, clockwise) turns
     // it, `inside` flips the text onto the inner face - the bottom arc of a
     // badge. Sits between `path` and `curve` in precedence: path > circle >
-    // arc.
-    circle: { on: false, angle: 0, inside: false },
+    // arc. `r` is a chosen radius in page px that replaces the advance-derived
+    // one; 0 means auto (the closed ring). With a radius set the text need not
+    // reach round - it is an arc centred on `angle`.
+    circle: { on: false, angle: 0, inside: false, r: 0 },
     uppercase: false,
     lineHeight: 1.1,
     letterSpacing: 0,
@@ -444,6 +446,8 @@ export function normalizeStyle(s) {
   circ.on = !!circ.on;
   circ.angle = ((num(circ.angle, 0) % 360) + 360) % 360;
   circ.inside = !!circ.inside;
+  // 0 is auto, and anything unreadable becomes auto rather than a wild ring.
+  circ.r = Math.min(4000, Math.max(0, num(circ.r, 0)));
 
   // The mask, shape by shape. A shape that is not one of the three kinds, or
   // whose numbers are not finite, is dropped rather than repaired - a mask
