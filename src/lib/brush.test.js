@@ -105,3 +105,61 @@ describe('strokeBounds', () => {
     expect(strokeBounds(normalizeInkStroke({ size: 20, pts: [[0, 0, 0]] }))).toBeNull();
   });
 });
+
+import { stabilisePath, smoothPath } from './brush.js';
+
+describe('stabilisePath', () => {
+  it('returns the path untouched at zero', () => {
+    const pts = [[0, 0, 1], [10, 5, 1], [20, 0, 1]];
+    expect(stabilisePath(pts, 0)).toEqual(pts);
+  });
+
+  it('pulls a spike towards its neighbours', () => {
+    const spiked = [[0, 0, 1], [10, 0, 1], [20, 50, 1], [30, 0, 1], [40, 0, 1]];
+    const out = stabilisePath(spiked, 80);
+    expect(out[2][1]).toBeLessThan(50);
+    expect(out[2][1]).toBeGreaterThan(0);
+  });
+
+  it('keeps the first point exactly where the pointer went down', () => {
+    const pts = [[3, 4, 1], [10, 0, 1], [20, 0, 1]];
+    expect(stabilisePath(pts, 100)[0]).toEqual([3, 4, 1]);
+  });
+
+  it('keeps the point count', () => {
+    const pts = Array.from({ length: 9 }, (_, i) => [i, i % 2, 1]);
+    expect(stabilisePath(pts, 50)).toHaveLength(9);
+  });
+});
+
+describe('smoothPath', () => {
+  it('returns the path untouched at zero strength', () => {
+    const pts = [[0, 0, 1], [10, 9, 1], [20, 0, 1]];
+    expect(smoothPath(pts, 0, 0)).toEqual(pts);
+  });
+
+  it('flattens a jagged middle', () => {
+    const pts = [[0, 0, 1], [10, 9, 1], [20, 0, 1]];
+    expect(smoothPath(pts, 100, 0)[1][1]).toBeLessThan(9);
+  });
+
+  it('leaves a corner sharper than the threshold alone', () => {
+    // A right angle: 90 degrees of turn, well past a 45 degree threshold.
+    const corner = [[0, 0, 1], [10, 0, 1], [10, 10, 1]];
+    expect(smoothPath(corner, 100, 45)[1]).toEqual([10, 0, 1]);
+    // With corner protection off, the same vertex does move.
+    expect(smoothPath(corner, 100, 0)[1]).not.toEqual([10, 0, 1]);
+  });
+
+  it('never moves the endpoints', () => {
+    const pts = [[0, 0, 1], [10, 9, 1], [20, 0, 1]];
+    const out = smoothPath(pts, 100, 0);
+    expect(out[0]).toEqual([0, 0, 1]);
+    expect(out.at(-1)).toEqual([20, 0, 1]);
+  });
+
+  it('handles a stroke too short to have a middle', () => {
+    expect(smoothPath([[0, 0, 1]], 100, 0)).toEqual([[0, 0, 1]]);
+    expect(smoothPath([[0, 0, 1], [1, 1, 1]], 100, 0)).toEqual([[0, 0, 1], [1, 1, 1]]);
+  });
+});

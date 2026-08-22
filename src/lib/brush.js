@@ -104,3 +104,75 @@ export function strokeBounds(stroke) {
   }
   return { minX, minY, maxX, maxY };
 }
+
+// ---------------------------------------------------------------------------
+// Correction: what the CSP guide groups under Correction, and what makes an
+// unsteady hand draw a clean letter.
+
+// Stabilisation. Each point is pulled towards the running average of the points
+// behind it, which is why a high setting makes the stroke visibly trail the
+// cursor - the panel says so out loud rather than letting it read as lag. The
+// first point never moves: it is where the user put the pen down, and shifting
+// it makes the stroke start somewhere they did not click.
+export function stabilisePath(pts, amount) {
+  const a = Math.min(100, Math.max(0, Number(amount) || 0)) / 100;
+  if (a <= 0 || !pts?.length) return pts ?? [];
+  // 0..100 maps to a window of 1..16 points. Past that the trail is so long the
+  // stroke stops following the hand at all.
+  const win = Math.max(1, Math.round(a * 15) + 1);
+  const out = [[...pts[0]]];
+  for (let i = 1; i < pts.length; i++) {
+    let sx = 0, sy = 0, n = 0;
+    for (let j = Math.max(0, i - win + 1); j <= i; j++) {
+      sx += pts[j][0];
+      sy += pts[j][1];
+      n++;
+    }
+    const ax = sx / n;
+    const ay = sy / n;
+    out.push([
+      pts[i][0] + (ax - pts[i][0]) * a,
+      pts[i][1] + (ay - pts[i][1]) * a,
+      pts[i][2] ?? 1,
+    ]);
+  }
+  return out;
+}
+
+// The turn at vertex i, in degrees. 0 is straight on, 180 is a full reversal.
+function turnDegrees(pts, i) {
+  const [ax, ay] = pts[i - 1];
+  const [bx, by] = pts[i];
+  const [cx, cy] = pts[i + 1];
+  const u = Math.hypot(bx - ax, by - ay);
+  const v = Math.hypot(cx - bx, cy - by);
+  if (u === 0 || v === 0) return 0;
+  const dot = ((bx - ax) * (cx - bx) + (by - ay) * (cy - by)) / (u * v);
+  return (Math.acos(Math.min(1, Math.max(-1, dot))) * 180) / Math.PI;
+}
+
+// Post-correction: one smoothing pass over the finished stroke. A vertex whose
+// turn exceeds `sharpDeg` is left exactly where it is - that is the guide's
+// sharp-angle setting, and it is what keeps a boxy letter's corners boxy while
+// the wobble between them is ironed out. `sharpDeg` of 0 protects nothing.
+export function smoothPath(pts, strength, sharpDeg) {
+  const k = Math.min(100, Math.max(0, Number(strength) || 0)) / 100;
+  if (k <= 0 || !pts || pts.length < 3) return pts ?? [];
+  const guard = Math.max(0, Number(sharpDeg) || 0);
+  const out = [[...pts[0]]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    if (guard > 0 && turnDegrees(pts, i) >= guard) {
+      out.push([...pts[i]]);
+      continue;
+    }
+    const mx = (pts[i - 1][0] + pts[i + 1][0]) / 2;
+    const my = (pts[i - 1][1] + pts[i + 1][1]) / 2;
+    out.push([
+      pts[i][0] + (mx - pts[i][0]) * k,
+      pts[i][1] + (my - pts[i][1]) * k,
+      pts[i][2] ?? 1,
+    ]);
+  }
+  out.push([...pts.at(-1)]);
+  return out;
+}
