@@ -65,3 +65,51 @@ describe('ink style block', () => {
     expect(before.size).toBe(30);
   });
 });
+
+import { inkActive, inkExtent } from './text-paint.js';
+
+describe('inkActive', () => {
+  it('is false when off, and false when on with nothing drawn', () => {
+    expect(inkActive({ on: false, strokes: [{}] })).toBe(false);
+    expect(inkActive({ on: true, strokes: [] })).toBe(false);
+    expect(inkActive(undefined)).toBe(false);
+  });
+
+  it('is true when on with at least one stroke', () => {
+    expect(inkActive({ on: true, strokes: [{}] })).toBe(true);
+  });
+});
+
+describe('inkExtent', () => {
+  it('is zero for inactive ink', () => {
+    expect(inkExtent({ on: false, strokes: [] })).toBe(0);
+  });
+
+  it('reports how far the stamp radius reaches past the box origin', () => {
+    const ink = normalizeStyle({
+      ink: { on: true, strokes: [{ size: 40, pts: [[0, 0, 1], [10, 0, 1]] }] },
+    }).ink;
+    // A 40 px tip centred on x = 0 reaches 20 px to the left of the origin.
+    expect(inkExtent(ink)).toBe(20);
+  });
+
+  it('takes the furthest of several strokes', () => {
+    const ink = normalizeStyle({
+      ink: {
+        on: true,
+        strokes: [
+          { size: 10, pts: [[0, 0, 1]] },
+          { size: 200, pts: [[0, 0, 1]] },
+        ],
+      },
+    }).ink;
+    expect(inkExtent(ink)).toBe(100);
+  });
+
+  it('is zero when every stroke is too faint to paint', () => {
+    const ink = normalizeStyle({
+      ink: { on: true, strokes: [{ size: 40, pts: [[0, 0, 0]] }] },
+    }).ink;
+    expect(inkExtent(ink)).toBe(0);
+  });
+});

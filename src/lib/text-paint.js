@@ -6,6 +6,8 @@
 // actually drawn, where a gradient starts and ends, what one pattern tile looks
 // like - is answered here once, so a change lands on both at the same time.
 
+import { strokeStamps, strokeBounds } from './brush.js';
+
 // A stroke's `width` is the VISIBLE band the user asked for, but neither a
 // canvas stroke nor `-webkit-text-stroke` can draw a band: both draw a line
 // CENTRED on the glyph outline, half of it falling inside the glyph. So each
@@ -871,6 +873,105 @@ export function drawClipShapes(ctx, shapes) {
 // Whether the mask changes anything at all: on, with at least one shape.
 export function clipActive(clip) {
   return !!(clip?.on && (clip.shapes?.length ?? 0) > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Hand-drawn ink.
+//
+// The same arrangement the mask uses: one painter, called by the editor's
+// overlay canvas and by the exporter's box canvas, so what is on screen and
+// what lands in the file are the one drawing. Coordinates are box-local page
+// px; the caller has already translated to the box's top-left.
+
+// Whether the ink draws anything at all: on, with at least one stroke.
+export function inkActive(ink) {
+  return !!(ink?.on && (ink.strokes?.length ?? 0) > 0);
+}
+
+// How far the ink reaches outside the box past its origin, in page px on the
+// furthest edge. The export pads its canvas by this so a stroke drawn over the
+// box edge is not cut off - the same job `motionBlurExtent` does for the smear.
+// Only the outward overhang counts: ink inside the box needs no padding, and
+// the origin sides are the only ones a stroke can be measured against without
+// the box's size. Measuring the far edges the same way - from the origin - would
+// pad every inked box by its own width, since ink normally covers the box.
+export function inkExtent(ink) {
+  if (!inkActive(ink)) return 0;
+  let out = 0;
+  for (const k of ink.strokes) {
+    const b = strokeBounds(k);
+    if (!b) continue;
+    out = Math.max(out, -b.minX, -b.minY);
+  }
+  return Math.ceil(Math.max(0, out));
+}
+
+// One stamp of a round tip. `hardness` 100 is a flat disc; below that the edge
+// falls off, which is the only way a synthesised tip can look like anything
+// other than a marker pen.
+function stampRound(ctx, s, color, hardness, flatness) {
+  const r = s.size / 2;
+  ctx.save();
+  ctx.translate(s.x, s.y);
+  if (s.angle) ctx.rotate((s.angle * Math.PI) / 180);
+  if (flatness !== 1) ctx.scale(1, flatness);
+  ctx.globalAlpha = s.alpha;
+  if (hardness >= 100) {
+    ctx.fillStyle = color;
+  } else {
+    // A radial ramp from solid to clear. The solid core is the hardness, so
+    // hardness 0 is a fully soft dab and 99 is a disc with a one-percent edge.
+    const g = ctx.createRadialGradient(0, 0, r * (hardness / 100), 0, 0, r);
+    g.addColorStop(0, color);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+  }
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// Paint every stroke. Stamps overlap heavily by design, so each stroke is drawn
+// into its own layer and composited once: stamping straight onto the target at
+// a stroke opacity below 1 would darken every overlap and turn a smooth line
+// into a string of beads.
+export function drawInk(ctx, ink, makeCanvas) {
+  if (!inkActive(ink)) return;
+  const alloc = makeCanvas ?? ((w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    return c;
+  });
+  for (const k of ink.strokes) {
+    const stamps = strokeStamps(k);
+    if (!stamps.length) continue;
+    const solid = k.opacity >= 0.999;
+    if (solid) {
+      for (const s of stamps) stampRound(ctx, s, k.color, k.hardness, k.flatness);
+      continue;
+    }
+    // The layer is only as big as the target; the caller's transform already
+    // places the box, so the layer copies that transform rather than guessing
+    // its own bounds.
+    const t = ctx.getTransform();
+    const layer = alloc(ctx.canvas.width, ctx.canvas.height);
+    const lctx = layer.getContext('2d');
+    lctx.setTransform(t);
+    for (const s of stamps) {
+      stampRound(lctx, { ...s, alpha: 1 }, k.color, k.hardness, k.flatness);
+    }
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = k.opacity;
+    ctx.drawImage(layer, 0, 0);
+    ctx.restore();
+    // Hand the pixels back rather than waiting for a collection: a batch export
+    // renders one of these per stroke per page.
+    layer.width = 0;
+    layer.height = 0;
+  }
 }
 
 // Which fill the style asks for. Pattern beats gradient when both are on, which

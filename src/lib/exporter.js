@@ -16,6 +16,9 @@ import {
   motionBlurExtent,
   drawClipShapes,
   clipActive,
+  inkActive,
+  inkExtent,
+  drawInk,
   TILE_SS,
 } from './text-paint.js';
 import { withPageImages } from './page-images.js';
@@ -166,6 +169,10 @@ function layoutBox(box, p) {
       strokeOut,
       shadowOut > 0 ? strokeOut + shadowOut : 0,
       s.roughen.on ? s.roughen.amount + 2 : 0,
+      // Ink is drawn in box-local px and may be drawn right over the box edge,
+      // so its overhang has to be padded for like any other thing that paints
+      // outside the letters.
+      inkExtent(s.ink),
     ) +
       (s.blur > 0 ? s.blur * 3 : 0) +
       motionBlurExtent(s.motionBlur) +
@@ -528,6 +535,16 @@ function renderBox(box, p) {
   ctx.imageSmoothingQuality = 'high';
   paintShadows(ctx, box, L, SS);
   paintBox(ctx, box, L);
+  // Ink sits over the type, under the blur and the smear: it is part of the
+  // picture those operate on, not something applied afterwards. Shapes are
+  // box-local page px and (L.ox, L.oy) is the box's top-left in the footprint,
+  // the same translation the mask uses below.
+  if (inkActive(s.ink)) {
+    ctx.save();
+    ctx.translate(L.ox, L.oy);
+    drawInk(ctx, s.ink);
+    ctx.restore();
+  }
   // Blur first, then roughen - the order the editor's filter list states, and a
   // CSS filter list is applied left to right: `filter: blur() url(#rough)` blurs
   // the clean picture and then crumples the blurred one. Doing it the other way
@@ -666,12 +683,14 @@ function paintBoxOnPage(ctx, box, p) {
   // A shadow, a whole-text blur, the directional smear or the visibility mask
   // is an operation on the composite in device pixels (see paintShadows /
   // renderBox), so a box with any of them takes the raster path too - the
-  // direct draw has no composite to work on.
+  // direct draw has no composite to work on. Ink is here for the other reason:
+  // the direct draw paints glyphs only, so an inked box would lose its strokes.
   const composited =
     (s.shadows ?? []).length > 0 ||
     (s.blur ?? 0) > 0 ||
     (s.motionBlur?.on && ((s.motionBlur.x ?? 0) !== 0 || (s.motionBlur.y ?? 0) !== 0)) ||
-    clipActive(s.clip);
+    clipActive(s.clip) ||
+    inkActive(s.ink);
   if (rot !== 0 && !s.roughen.on && opaque && !composited) {
     // Rotated text: paint glyphs DIRECTLY at the angle so they rasterize sharp
     // (rotating a pre-rendered bitmap would resample and soften it). Pivot
