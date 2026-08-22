@@ -163,3 +163,106 @@ describe('smoothPath', () => {
     expect(smoothPath([[0, 0, 1], [1, 1, 1]], 100, 0)).toEqual([[0, 0, 1], [1, 1, 1]]);
   });
 });
+
+import { widthFactors, buildStroke, defaultBrushSettings, DYN_SOURCES } from './brush.js';
+
+const raw = (n, dx = 10, dt = 10, pressure = 0.5) =>
+  Array.from({ length: n }, (_, i) => ({ x: i * dx, y: 0, pressure, t: i * dt }));
+
+describe('widthFactors', () => {
+  it('is flat at 1 when the source is off', () => {
+    expect(widthFactors(raw(4), 'off', 100, 1)).toEqual([1, 1, 1, 1]);
+  });
+
+  it('follows pen pressure', () => {
+    const pts = [
+      { x: 0, y: 0, pressure: 0, t: 0 },
+      { x: 10, y: 0, pressure: 1, t: 10 },
+    ];
+    const w = widthFactors(pts, 'pressure', 100, 1);
+    expect(w[0]).toBeLessThan(w[1]);
+    expect(w[1]).toBeCloseTo(1, 6);
+  });
+
+  it('at amount 0 the source no longer changes anything', () => {
+    const pts = [
+      { x: 0, y: 0, pressure: 0, t: 0 },
+      { x: 10, y: 0, pressure: 1, t: 10 },
+    ];
+    expect(widthFactors(pts, 'pressure', 0, 1)).toEqual([1, 1]);
+  });
+
+  it('thins the fast part of a stroke and leaves the slow ends thick', () => {
+    // Slow, then fast, then slow - the same shape the guide describes.
+    const pts = [
+      { x: 0, y: 0, pressure: 0.5, t: 0 },
+      { x: 5, y: 0, pressure: 0.5, t: 100 },
+      { x: 200, y: 0, pressure: 0.5, t: 120 },
+      { x: 205, y: 0, pressure: 0.5, t: 220 },
+    ];
+    const w = widthFactors(pts, 'velocity', 100, 1);
+    expect(w[2]).toBeLessThan(w[0]);
+    expect(w[2]).toBeLessThan(w[3]);
+  });
+
+  it('is deterministic for random with a fixed seed', () => {
+    expect(widthFactors(raw(6), 'random', 100, 9))
+      .toEqual(widthFactors(raw(6), 'random', 100, 9));
+    expect(widthFactors(raw(6), 'random', 100, 9))
+      .not.toEqual(widthFactors(raw(6), 'random', 100, 10));
+  });
+
+  it('never returns a factor outside 0..1', () => {
+    for (const src of DYN_SOURCES) {
+      for (const w of widthFactors(raw(8), src, 100, 2)) {
+        expect(w).toBeGreaterThanOrEqual(0);
+        expect(w).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('handles a single point without dividing by zero', () => {
+    expect(widthFactors(raw(1), 'velocity', 100, 1)).toEqual([1]);
+  });
+});
+
+describe('buildStroke', () => {
+  it('produces a stroke the data model accepts unchanged', () => {
+    const s = { ...defaultBrushSettings(), size: 30 };
+    const k = buildStroke(raw(5), s);
+    expect(k).not.toBeNull();
+    expect(k.size).toBe(30);
+    expect(k.brush).toBe('round');
+    expect(k.pts.length).toBeGreaterThan(1);
+    expect(k.pts[0]).toHaveLength(3);
+    expect(normalizeInkStroke(k)).toEqual(k);
+  });
+
+  it('keeps a tap as a one-point stroke', () => {
+    const k = buildStroke(raw(1), defaultBrushSettings());
+    expect(k.pts).toHaveLength(1);
+  });
+
+  it('returns null for an empty gesture', () => {
+    expect(buildStroke([], defaultBrushSettings())).toBeNull();
+    expect(buildStroke(null, defaultBrushSettings())).toBeNull();
+  });
+
+  it('gives every stroke its own seed so two identical drags differ under jitter', () => {
+    const s = { ...defaultBrushSettings(), angleJitter: 100 };
+    expect(buildStroke(raw(5), s).seed).not.toBe(buildStroke(raw(5), s).seed);
+  });
+
+  it('bakes correction into the points rather than storing the settings', () => {
+    const shaky = [
+      { x: 0, y: 0, pressure: 0.5, t: 0 },
+      { x: 10, y: 40, pressure: 0.5, t: 10 },
+      { x: 20, y: 0, pressure: 0.5, t: 20 },
+    ];
+    const s = { ...defaultBrushSettings(), stabilise: 90, postCorrect: 100 };
+    const k = buildStroke(shaky, s);
+    expect(k.stabilise).toBeUndefined();
+    expect(k.postCorrect).toBeUndefined();
+    expect(Math.max(...k.pts.map((p) => p[1]))).toBeLessThan(40);
+  });
+});

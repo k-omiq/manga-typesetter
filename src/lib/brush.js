@@ -176,3 +176,107 @@ export function smoothPath(pts, strength, sharpDeg) {
   out.push([...pts.at(-1)]);
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Capture: a raw pointer gesture becomes a stored stroke.
+
+// What can drive the tip's width along a stroke.
+export const DYN_SOURCES = ['off', 'pressure', 'velocity', 'random'];
+
+// The tool's live settings. Everything the brush panel edits sits here; the
+// subset that decides how a finished stroke draws is copied onto the stroke by
+// `buildStroke`, and the rest (the correction group) is baked into its points.
+export function defaultBrushSettings() {
+  return {
+    brush: 'round',
+    size: 24,
+    color: '#000000',
+    opacity: 1,
+    spacing: 10,
+    hardness: 100,
+    angle: 0,
+    angleJitter: 0,
+    flatness: 1,
+    antialias: true,
+    // Velocity by default: it is the setting the CSP guide leads with, and it
+    // is the one that reads as hand lettering rather than as a marker pen.
+    dyn: { src: 'velocity', amount: 70 },
+    taperIn: { on: true, len: 20, ratio: 60 },
+    taperOut: { on: true, len: 20, ratio: 60 },
+    stabilise: 12,
+    postCorrect: 35,
+    sharpAngles: { on: false, deg: 45 },
+  };
+}
+
+// How much smaller the thinnest part of a stroke may get. Zero would break the
+// stroke into beads wherever the source bottomed out.
+const MIN_W = 0.08;
+
+// The width factor at every raw point. `raw` is the captured gesture:
+// [{ x, y, pressure, t }], t in ms from the start of the stroke.
+export function widthFactors(raw, source, amount, seed) {
+  const n = raw?.length ?? 0;
+  if (!n) return [];
+  const a = Math.min(100, Math.max(0, Number(amount) || 0)) / 100;
+  if (a <= 0 || source === 'off' || !DYN_SOURCES.includes(source)) {
+    return new Array(n).fill(1);
+  }
+  const base = new Array(n).fill(1);
+  if (source === 'pressure') {
+    for (let i = 0; i < n; i++) {
+      base[i] = Math.min(1, Math.max(0, Number(raw[i].pressure) || 0));
+    }
+  } else if (source === 'random') {
+    const rnd = mulberry32(seed);
+    for (let i = 0; i < n; i++) base[i] = rnd();
+  } else if (source === 'velocity') {
+    // Speed per point, then normalised against this stroke's own fastest
+    // moment: a brush must behave the same on a page zoomed out as on one
+    // zoomed in, and an absolute px/ms threshold would not.
+    const speed = new Array(n).fill(0);
+    for (let i = 1; i < n; i++) {
+      const dt = Math.max(1, (Number(raw[i].t) || 0) - (Number(raw[i - 1].t) || 0));
+      speed[i] = Math.hypot(raw[i].x - raw[i - 1].x, raw[i].y - raw[i - 1].y) / dt;
+    }
+    speed[0] = speed[1] ?? 0;
+    const top = Math.max(...speed);
+    for (let i = 0; i < n; i++) base[i] = top > 0 ? 1 - speed[i] / top : 1;
+  }
+  // `amount` fades the whole effect back towards a constant full width, so the
+  // slider reads as strength rather than as a hard switch.
+  return base.map((b) => Math.min(1, Math.max(0, 1 - a * (1 - Math.max(MIN_W, b)))));
+}
+
+// Seeds have to differ between two identical drags or jitter would repeat, and
+// they have to be stable once stored. A counter is enough and, unlike a clock,
+// stays deterministic within a session.
+let seedCounter = 1;
+
+// One captured gesture as a storable stroke. This is the only place correction
+// runs: it is an input filter, so it is baked into the points. Re-running it on
+// every repaint would be slower and would let a settings change silently
+// rewrite ink the user already accepted.
+export function buildStroke(raw, settings) {
+  if (!raw?.length) return null;
+  const seed = seedCounter++;
+  const w = widthFactors(raw, settings.dyn?.src, settings.dyn?.amount, seed);
+  let pts = raw.map((p, i) => [p.x, p.y, w[i] ?? 1]);
+  pts = stabilisePath(pts, settings.stabilise);
+  pts = smoothPath(pts, settings.postCorrect, settings.sharpAngles?.on ? settings.sharpAngles.deg : 0);
+  return {
+    brush: settings.brush,
+    size: settings.size,
+    color: settings.color,
+    opacity: settings.opacity,
+    spacing: settings.spacing,
+    hardness: settings.hardness,
+    angle: settings.angle,
+    angleJitter: settings.angleJitter,
+    flatness: settings.flatness,
+    taperIn: { ...settings.taperIn },
+    taperOut: { ...settings.taperOut },
+    seed,
+    pts,
+  };
+}
