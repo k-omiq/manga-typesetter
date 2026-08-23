@@ -266,3 +266,29 @@ describe('buildStroke', () => {
     expect(Math.max(...k.pts.map((p) => p[1]))).toBeLessThan(40);
   });
 });
+
+import { strokeHit } from './brush.js';
+
+describe('strokeHit', () => {
+  const k = normalizeInkStroke({ size: 20, spacing: 25, pts: [[0, 0, 1], [100, 0, 1]] });
+
+  it('hits a point on the stroke', () => {
+    expect(strokeHit(k, 50, 0, 1)).toBe(true);
+  });
+
+  it('hits within the stamp radius, not only on the centre line', () => {
+    expect(strokeHit(k, 50, 9, 1)).toBe(true);
+  });
+
+  it('misses beyond the stamp radius plus the eraser radius', () => {
+    expect(strokeHit(k, 50, 40, 5)).toBe(false);
+  });
+
+  it('misses past the end of the stroke', () => {
+    expect(strokeHit(k, 200, 0, 5)).toBe(false);
+  });
+
+  it('is false for a stroke that paints nothing', () => {
+    expect(strokeHit(normalizeInkStroke({ size: 20, pts: [[0, 0, 0]] }), 0, 0, 5)).toBe(false);
+  });
+});

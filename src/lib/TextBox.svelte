@@ -48,7 +48,7 @@
   } from './text-paint.js';
   import { maskTool } from './mask-tool.svelte.js';
   import { brushTool, brushArmed } from './brush-tool.svelte.js';
-  import { buildStroke } from './brush.js';
+  import { buildStroke, strokeHit } from './brush.js';
   import { normalizeInkStroke } from './data.js';
 
   // pg defaults to current page; longstrip passes explicit page.
@@ -856,10 +856,52 @@
     record({ t: 'style', pageId: pg.id, boxId: box.id, before: styleBefore, after: cloneStyle(box.style) });
   }
 
+  // Erasing removes whole strokes the pointer crosses. There are no pixels to
+  // cut in a vector model, and a stroke-level eraser is the one that needs no
+  // second data shape to describe a half-erased stroke.
+  function onErasePointerDown(e) {
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    const pid = e.pointerId;
+    const styleBefore = cloneStyle(box.style);
+    let hitAny = false;
+    const rub = (ev) => {
+      const [x, y] = maskPoint(ev);
+      const r = brushTool.settings.size / 2;
+      const kept = s.ink.strokes.filter((k) => !strokeHit(k, x, y, r));
+      if (kept.length !== s.ink.strokes.length) {
+        s.ink.strokes = kept;
+        hitAny = true;
+      }
+    };
+    rub(e);
+    const move = (ev) => {
+      if (ev.pointerId !== pid) return;
+      rub(ev);
+    };
+    const ac = new AbortController();
+    const end = (ev) => {
+      if (ev.pointerId !== pid) return;
+      live.delete(ac);
+      ac.abort();
+      // One rub is one history step, however many strokes it took out.
+      if (!hitAny) return;
+      markUnsaved();
+      record({ t: 'style', pageId: pg.id, boxId: box.id, before: styleBefore, after: cloneStyle(box.style) });
+    };
+    live.add(ac);
+    document.addEventListener('pointermove', move, { signal: ac.signal });
+    document.addEventListener('pointerup', end, { signal: ac.signal });
+    document.addEventListener('pointercancel', end, { signal: ac.signal });
+  }
+
   function onInkPointerDown(e) {
     if (e.button !== 0 || !inkArmed || !pageFrameEl) return;
     e.preventDefault();
     e.stopPropagation();
+    if (brushTool.mode === 'erase') {
+      onErasePointerDown(e);
+      return;
+    }
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const pid = e.pointerId;
     const t0 = e.timeStamp;

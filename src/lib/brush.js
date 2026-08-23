@@ -280,3 +280,15 @@ export function buildStroke(raw, settings) {
     pts,
   };
 }
+
+// Whether an eraser of `radius` at (x, y) touches this stroke's ink. Tested
+// against the stamps rather than the stored points because those are where the
+// ink actually is: a fat tip on a sparse path covers far more than its
+// centreline, and erasing should follow what is visible.
+export function strokeHit(stroke, x, y, radius) {
+  const r = Math.max(0, Number(radius) || 0);
+  for (const s of strokeStamps(stroke)) {
+    if (Math.hypot(s.x - x, s.y - y) <= s.size / 2 + r) return true;
+  }
+  return false;
+}
