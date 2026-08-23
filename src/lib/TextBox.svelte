@@ -47,6 +47,9 @@
     TILE_SS,
   } from './text-paint.js';
   import { maskTool } from './mask-tool.svelte.js';
+  import { brushTool, brushArmed } from './brush-tool.svelte.js';
+  import { buildStroke } from './brush.js';
+  import { normalizeInkStroke } from './data.js';
 
   // pg defaults to current page; longstrip passes explicit page.
   let { box, pageFrameEl, pg = page() } = $props();
@@ -211,9 +214,24 @@
   // reaches outside it - a stroke drawn over the edge must not be cut off here
   // any more than it is on export.
   let inkEl = $state(null);
-  const inkPad = $derived(inkActive(s.ink) ? inkExtent(s.ink) : 0);
+  // The gesture in flight. Raw pointer samples, not stored points: `buildStroke`
+  // is what turns them into a stroke, once, when the pointer lifts. Declared
+  // here rather than beside the gesture because the repaint key below reads it.
+  let inkDraft = $state(null);
+  // The draft has no committed extent to measure, so while one is in flight the
+  // canvas is padded by the tip's own width. Without it the live stroke is
+  // clipped at the box edge and then jumps wider on release, which reads as the
+  // brush having moved rather than as the canvas having grown.
+  const inkPad = $derived(
+    Math.max(
+      inkActive(s.ink) ? inkExtent(s.ink) : 0,
+      inkDraft?.length ? Math.ceil(brushTool.settings.size) : 0,
+    ),
+  );
   const inkKey = $derived(
-    inkActive(s.ink) ? JSON.stringify(s.ink) + `|${box.w}|${box.h}|${z}` : '',
+    (inkActive(s.ink) || inkDraft?.length)
+      ? JSON.stringify(s.ink) + '|' + (inkDraft?.length ?? 0) + `|${box.w}|${box.h}|${z}`
+      : '',
   );
   let inkDrawn = '';
   let inkLive = null; // non-reactive twin of inkEl: what the pixel release acts on
@@ -247,6 +265,12 @@
     ctx.scale(z, z);
     ctx.translate(inkPad, inkPad);
     drawInk(ctx, s.ink);
+    // The stroke under the pointer, drawn with the same painter so what the
+    // user is watching is what they will get when they lift.
+    if (inkDraft?.length) {
+      const preview = buildStroke($state.snapshot(inkDraft), $state.snapshot(brushTool.settings));
+      if (preview) drawInk(ctx, { on: true, strokes: [preview] });
+    }
   });
   // A box scrolled off the page keeps its canvas alive otherwise, and a chapter
   // of inked boxes is exactly the shape that put 2 GB in the webview before.
@@ -744,6 +768,11 @@
   // with one undo record each, like the path gizmo's drags.
   const maskArmed = $derived(selected && !editing && !bulkOn && s.clip?.on && maskTool.id);
 
+  // The brush draws into the SELECTED box only, and never while its text is
+  // being edited or while the bulk panel owns the selection. Same gate the mask
+  // tool uses, for the same reason: two things must not own one pointer.
+  const inkArmed = $derived(selected && !editing && !bulkOn && brushArmed());
+
   // The gesture in progress: a shape being drawn, not yet in the style.
   const maskDraft = $state({ shape: null, poly: null });
 
@@ -810,6 +839,66 @@
       // An ellipse too small to see was a slip, not a shape.
       if (sh.kind === 'ellipse' && (sh.rx < 1 || sh.ry < 1)) return;
       commitMaskShape(sh);
+    };
+    live.add(ac);
+    document.addEventListener('pointermove', move, { signal: ac.signal });
+    document.addEventListener('pointerup', end, { signal: ac.signal });
+    document.addEventListener('pointercancel', end, { signal: ac.signal });
+  }
+
+  function commitInkStroke(stroke) {
+    const styleBefore = cloneStyle(box.style);
+    // Switching the block on is part of the same edit as the first stroke, so
+    // undo takes both away together rather than leaving an empty ink block on.
+    s.ink.on = true;
+    s.ink.strokes = [...s.ink.strokes, stroke];
+    markUnsaved();
+    record({ t: 'style', pageId: pg.id, boxId: box.id, before: styleBefore, after: cloneStyle(box.style) });
+  }
+
+  function onInkPointerDown(e) {
+    if (e.button !== 0 || !inkArmed || !pageFrameEl) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    const pid = e.pointerId;
+    const t0 = e.timeStamp;
+    const sample = (ev) => {
+      const [x, y] = maskPoint(ev);
+      // A mouse reports a flat 0.5 and a pen reports 0 on the up edge; both are
+      // handled by the width source, not here.
+      return { x, y, pressure: ev.pressure ?? 0.5, t: ev.timeStamp - t0 };
+    };
+    inkDraft = [sample(e)];
+    const move = (ev) => {
+      if (ev.pointerId !== pid || !inkDraft) return;
+      // Coalesced events give the full pointer trace on a device that batches
+      // them, which is what makes velocity dynamics read correctly on a tablet.
+      // An empty list means the engine kept no trace, not that the pointer did
+      // not move, so fall back to the event itself rather than drop the sample.
+      const coalesced = ev.getCoalescedEvents?.();
+      const evs = coalesced?.length ? coalesced : [ev];
+      for (const one of evs) {
+        const p = sample(one);
+        const last = inkDraft[inkDraft.length - 1];
+        // Half a page pixel of movement is below what any tip can show, and
+        // dropping those keeps a slow stroke from storing thousands of points.
+        if (Math.hypot(p.x - last.x, p.y - last.y) > 0.5) inkDraft.push(p);
+      }
+    };
+    const ac = new AbortController();
+    const end = (ev) => {
+      if (ev.pointerId !== pid) return;
+      live.delete(ac);
+      ac.abort();
+      const raw = inkDraft;
+      inkDraft = null;
+      if (!raw) return;
+      const stroke = buildStroke($state.snapshot(raw), $state.snapshot(brushTool.settings));
+      // Normalized at the boundary, so what is stored is already what a reload
+      // would hand back - the editor and a reopened file draw the same ink.
+      const norm = stroke && normalizeInkStroke(stroke);
+      if (norm) commitInkStroke(norm);
     };
     live.add(ac);
     document.addEventListener('pointermove', move, { signal: ac.signal });
@@ -1041,7 +1130,7 @@
       {/each}
     </div>
   {/if}
-    {#if inkActive(s.ink)}
+    {#if inkActive(s.ink) || inkDraft?.length}
       <!-- Inside the clip wrapper so the visibility mask hides ink the same way
            it hides letters; positioned off the box's own top-left, offset by the
            overhang the canvas was grown by. -->
@@ -1110,6 +1199,19 @@
     </svg>
   {/if}
 
+  {#if inkArmed}
+    <!-- The surface that turns a drag into a stroke. Full-box and on top, the
+         same shape the mask tool's capture rect has; without it the drag lands
+         on the box and moves it instead. Outside the clip wrapper so a mask
+         cannot hide the surface that captures the drag. -->
+    <div
+      class="ink-capture"
+      style="width:{box.w * z}px;height:{box.h * z}px"
+      onpointerdown={onInkPointerDown}
+      aria-hidden="true"
+    ></div>
+  {/if}
+
   {#if selected && !editing && !bulkOn}
     <div class="rotate-stem"></div>
     {#each corners as [kind, dir] (dir)}
@@ -1165,4 +1267,14 @@
   .mask-gizmo.excl .stroke { stroke: rgba(230, 60, 60, 0.3); }
   .mask-gizmo .draft { fill: none; stroke: #f90; stroke-width: 1.5; stroke-dasharray: 4 3; }
   .mask-gizmo .vert { fill: #f90; stroke: #fff; stroke-width: 1; }
+  /* The brush's capture surface. `touch-action: none` so a pen or a finger
+     draws instead of scrolling the page out from under the stroke. */
+  .ink-capture {
+    position: absolute;
+    left: 0;
+    top: 0;
+    cursor: crosshair;
+    touch-action: none;
+    z-index: 3;
+  }
 </style>
