@@ -40,6 +40,9 @@
     motionBlurPreviewTaps,
     drawClipShapes,
     clipActive,
+    inkActive,
+    inkExtent,
+    drawInk,
     OCTAVES,
     TILE_SS,
   } from './text-paint.js';
@@ -199,6 +202,63 @@
       `-webkit-mask-position:${pos};mask-position:${pos};` +
       `-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;`
     );
+  });
+
+  // ---- ink ----
+  // The strokes, drawn on a canvas over the box. The exporter paints the same
+  // strokes with the same painter, so this is a preview of the file rather than
+  // an approximation of it. It is sized to the box plus however far the ink
+  // reaches outside it - a stroke drawn over the edge must not be cut off here
+  // any more than it is on export.
+  let inkEl = $state(null);
+  const inkPad = $derived(inkActive(s.ink) ? inkExtent(s.ink) : 0);
+  const inkKey = $derived(
+    inkActive(s.ink) ? JSON.stringify(s.ink) + `|${box.w}|${box.h}|${z}` : '',
+  );
+  let inkDrawn = '';
+  let inkLive = null; // non-reactive twin of inkEl: what the pixel release acts on
+  $effect(() => {
+    const key = inkKey;
+    const el = inkEl;
+    if (!el) {
+      // The canvas is gone (ink switched off, or the box is being torn down).
+      // Hand its pixels back now, and forget what was drawn: switching the same
+      // ink back on mints a *new* blank canvas, and a remembered key would let
+      // it stay blank.
+      if (inkLive) {
+        inkLive.width = 0;
+        inkLive.height = 0;
+        inkLive = null;
+      }
+      inkDrawn = '';
+      return;
+    }
+    inkLive = el;
+    if (key === inkDrawn) return;
+    inkDrawn = key;
+    const w = Math.max(1, Math.round((box.w + inkPad * 2) * z));
+    const h = Math.max(1, Math.round((box.h + inkPad * 2) * z));
+    if (el.width !== w) el.width = w;
+    if (el.height !== h) el.height = h;
+    const ctx = el.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (!key) return;
+    ctx.scale(z, z);
+    ctx.translate(inkPad, inkPad);
+    drawInk(ctx, s.ink);
+  });
+  // A box scrolled off the page keeps its canvas alive otherwise, and a chapter
+  // of inked boxes is exactly the shape that put 2 GB in the webview before.
+  // Reads nothing reactive, so it runs once and its cleanup is the destroy path;
+  // it zeroes the twin rather than the binding, which teardown may already have
+  // nulled.
+  $effect(() => () => {
+    if (inkLive) {
+      inkLive.width = 0;
+      inkLive.height = 0;
+      inkLive = null;
+    }
   });
 
   const boxStyle = $derived(
@@ -981,6 +1041,17 @@
       {/each}
     </div>
   {/if}
+    {#if inkActive(s.ink)}
+      <!-- Inside the clip wrapper so the visibility mask hides ink the same way
+           it hides letters; positioned off the box's own top-left, offset by the
+           overhang the canvas was grown by. -->
+      <canvas
+        class="inkl"
+        bind:this={inkEl}
+        style="left:{-inkPad * z}px;top:{-inkPad * z}px;width:{(box.w + inkPad * 2) * z}px;height:{(box.h + inkPad * 2) * z}px"
+        aria-hidden="true"
+      ></canvas>
+    {/if}
   </div>
 
   {#if gizmoLine}
@@ -1067,6 +1138,12 @@
      child. Its border box IS the box rect, which is the frame the clip-path
      is stated in. */
   .clipwrap { position: absolute; inset: 0; display: flex; box-sizing: border-box; }
+  /* The ink layer. Absolute so it does not disturb the text's flex centring,
+     and never a pointer target: drawing is captured by the box, not by this. */
+  .inkl {
+    position: absolute;
+    pointer-events: none;
+  }
   /* The path gizmo. The svg itself lets clicks through to the box; only the
      anchors and handles take the pointer. Colours are TypeBubble's, which read
      well on both white pages and dark art. */
