@@ -66,6 +66,9 @@ import { neededHeight, growToFit } from './typeset.js';
 // the fallback path exactly as a page nobody has opened does.
 import { detectBalloon, detectBalloonAt, inscribedRect, shapeContainsPoint } from './balloon.js';
 import { pagePixelsFor, forgetPagePixels } from './page-pixels.js';
+// One-way, and it must stay that way: the brush tool's state module knows only
+// its own defaults, so `setTool` can disarm it without the two ever cycling.
+import { setBrushMode } from './brush-tool.svelte.js';
 
 export { PAGE_W, PAGE_H };
 
@@ -1516,7 +1519,7 @@ export function setPageDimsForSrc(src, w, h) {
 // leave a box behind. Anything outside this list is refused rather than stored:
 // an unknown tool is not an inert no-op, it is a canvas where every press falls
 // through to `deselect` and the only way out is pressing another tool.
-export const TOOLS = ['place', 'text', 'pan'];
+export const TOOLS = ['place', 'text', 'brush', 'pan'];
 export function setTool(t) {
   if (!TOOLS.includes(t)) return;
   // A translate chapter has no place and no text tool - the rail hides both and
@@ -1527,6 +1530,10 @@ export function setTool(t) {
   // box. See `placeActiveAt`/`addEmptyBox` for the second, deeper guard.
   if (isTranslateMode() && t !== 'pan') return;
   app.tool = t;
+  // The brush is the one tool with a mode of its own. Choosing it from the rail
+  // arms drawing; leaving it disarms, so a stray drag on the page after
+  // switching to the hand cannot lay down ink.
+  setBrushMode(t === 'brush' ? 'draw' : null);
 }
 
 // ---------- the chapter's workflow mode ----------

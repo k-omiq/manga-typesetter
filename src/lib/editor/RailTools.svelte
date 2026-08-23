@@ -104,7 +104,7 @@
 <!-- The whole strip carries the drag, but it is not the widget: a focusable
      separator is the ARIA window splitter, a range control in the same family
      as slider and scrollbar, and assistive technology is free to prune or
-     flatten a range control's children. Four tool buttons inside that subtree
+     flatten a range control's children. Five tool buttons inside that subtree
      could go unreachable in browse mode, so the role, the value and the
      keyboard live on the edge band below and the tool strip stays outside it. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -169,6 +169,18 @@
         data-tip="Text tool - click to add a box, drag to pan"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7V5h16v2" /><path d="M12 5v14" /><path d="M9 19h6" /></svg>
+      </button>
+      <!-- The brush is a pointer mode, not an effect: arming it changes what a
+           press on the page does, the way the hand tool does. Every other ink
+           setting lives under the Inspector's Effects tab; this one does not,
+           because it is a way of pointing. -->
+      <button
+        class:on={app.tool === 'brush'}
+        onclick={() => setTool('brush')}
+        aria-label="Brush tool"
+        data-tip="Brush tool - hand-letter inside the selected box"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20c0-3 1.5-4 3-4s2.5 1 2.5 2.5S8.5 21 7 21c-1.7 0-3-.4-3-1z" /><path d="M9.5 17.5 19.4 6.2a2 2 0 0 0-2.9-2.7L5.6 13.8" /></svg>
       </button>
     {/if}
     <button
