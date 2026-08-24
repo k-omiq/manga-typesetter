@@ -767,3 +767,20 @@ describe('a tags blob from the last release', () => {
     expect(tags.styleForLine({ n: 2, tags: ['whisper'] }, base).strokes).toEqual(base.strokes);
   });
 });
+
+// Ink is newer than any release on disk, so these are the gate: a saved project
+// has no `ink` key at all, and must come back with the off default rather than
+// undefined - every ink call site reads `style.ink` without guarding it.
+describe('a project saved before ink existed', () => {
+  it('loads a project saved before ink existed and gives it the default block', () => {
+    const s = normalizeStyle({ size: 28, color: '#111111' });
+    expect(s.ink).toEqual({ on: false, strokes: [] });
+  });
+
+  it('round-trips a project with ink through normalizeStyle unchanged', () => {
+    const once = normalizeStyle({
+      ink: { on: true, strokes: [{ size: 20, pts: [[0, 0, 1], [10, 5, 0.5]] }] },
+    });
+    expect(normalizeStyle(once)).toEqual(once);
+  });
+});

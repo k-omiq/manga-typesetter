@@ -16,7 +16,7 @@ import { fontCssFor, fontNameFor } from './store.svelte.js';
 import { resolveFace, postScriptNameFor } from './fonts.js';
 import { applyCase, canMeasure, layoutLines, BOX_PAD, blockYFor, balloonWidthsFor } from './measure.js';
 import { normalizeFit } from './data.js';
-import { strokeBands, clipActive } from './text-paint.js';
+import { strokeBands, clipActive, inkActive } from './text-paint.js';
 import { withPageImages } from './page-images.js';
 
 // Bumped when the embedded schema changes in a non-back-compatible way. Import
@@ -368,6 +368,9 @@ export function isRasterOnly(style) {
     // ink
     s.roughen?.on ||
     clipActive(s.clip) ||
+    // Hand-drawn strokes are not something Photoshop's type engine can
+    // re-render, so a box carrying them ships as pixels or loses them.
+    inkActive(s.ink) ||
     (s.blur ?? 0) > 0 ||
     (mb?.on && ((mb.x ?? 0) !== 0 || (mb.y ?? 0) !== 0)) ||
     s.pattern?.on ||

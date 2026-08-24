@@ -12,7 +12,7 @@ import {
   reconstructForeign,
   psdSelfTest,
 } from './psd.js';
-import { PAGE_W, PAGE_H, emptyFaces, defaultStyle } from './data.js';
+import { PAGE_W, PAGE_H, emptyFaces, defaultStyle, normalizeStyle } from './data.js';
 import { BOX_PAD } from './measure.js';
 import { app } from './store.svelte.js';
 import { _setPostScriptNameFor, _clearPostScriptNames } from './fonts.js';
@@ -210,6 +210,23 @@ describe('isRasterOnly', () => {
   // editable Photoshop type layer, and every switch above is off by default.
   it('is false for the app default style', () => {
     expect(isRasterOnly(defaultStyle())).toBe(false);
+  });
+});
+
+describe('isRasterOnly with ink', () => {
+  it('is false for a box with the ink block off', () => {
+    expect(isRasterOnly(normalizeStyle({ ink: { on: false, strokes: [] } }))).toBe(false);
+  });
+
+  it('is false for a box switched on but with nothing drawn', () => {
+    expect(isRasterOnly(normalizeStyle({ ink: { on: true, strokes: [] } }))).toBe(false);
+  });
+
+  it('is true for a box with a drawn stroke', () => {
+    const s = normalizeStyle({
+      ink: { on: true, strokes: [{ size: 20, pts: [[0, 0, 1], [10, 0, 1]] }] },
+    });
+    expect(isRasterOnly(s)).toBe(true);
   });
 });
 
