@@ -29,6 +29,8 @@
   import { gradientCss, patternTileCanvas, sampleStops } from './text-paint.js';
   import { insertPathAnchor } from './measure.js';
   import { maskTool, setMaskTool } from './mask-tool.svelte.js';
+  import BrushPanel from './BrushPanel.svelte';
+  import { brushArmed } from './brush-tool.svelte.js';
   import { prefs } from './prefs.svelte.js';
   // Which tab is open is session state shared with the keyboard - see
   // inspector-tabs.svelte.js. The panel is one of two writers, not the owner.
@@ -792,7 +794,13 @@
   </button>
 {/snippet}
 
-{#if !box}
+<!-- The brush takes the whole body, ahead of the selection check: while the tool
+     is armed the panel is the tool's options, and a letterer who has not clicked
+     a box yet still needs the size slider. `.insp` is the frame the shared
+     controls are laid out inside, so the panel keeps it. -->
+{#if brushArmed()}
+  <div class="insp"><BrushPanel /></div>
+{:else if !box}
   <div class="insp-empty">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" /><path d="M12 4v16" /><path d="M9 20h6" /></svg>
     <div>No text box selected.<br />Click a box, or use the Text tool to add one.</div>
@@ -1611,14 +1619,9 @@
     outline-offset: 1px;
   }
 
-  /* One tab's contents. Same rhythm the sub-sections had, minus their frame -
-     the tab is the frame now. */
-  .insp-pane {
-    display: flex;
-    flex-direction: column;
-    gap: 11px;
-    min-width: 0;
-  }
+  /* `.insp-pane` and `.slider-row .num-s` moved to styles.css - the brush panel
+     is a pane with slider rows of its own, and Svelte's scoping would have made
+     the second component restate them. */
 
   /* A heading inside a pane, for the two or three blocks a pane still groups. */
   .insp-sec {
@@ -1887,10 +1890,6 @@
     white-space: nowrap;
   }
 
-  /* The number that rides beside a slider rather than under it. */
-  .slider-row .num-s {
-    flex: 0 0 58px;
-  }
   /* The inline preset name field takes the room the menu takes, and the armed
      delete reads as the warning it is. */
   .preset-row input {

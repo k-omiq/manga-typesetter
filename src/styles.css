@@ -730,6 +730,11 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
    the user asked for fewer of those, not more. */
 .insp-rule{ height:1px; background:var(--line); margin:1px 0; }
 
+/* One tab's contents. Same rhythm the sub-sections had, minus their frame - the
+   tab is the frame now. Global because the brush panel is a pane too: it is
+   what the whole body becomes while the brush is armed. */
+.insp-pane{ display:flex; flex-direction:column; gap:11px; min-width:0; }
+
 /* Repeatable list items - a stroke, a shadow, a gradient stop. All three are
    one row: the colour, its numbers, and the control that removes it. They used
    to be three-row cards with a header apiece, which is how a letterer with two
@@ -816,6 +821,11 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
 .slider-row{ display:flex; align-items:center; gap:9px; }
 .slider-row input[type=range]{ flex:1 1 auto; }
 .slider-row .val{ flex:0 0 42px; text-align:right; font-variant-numeric:tabular-nums; color:var(--t2); font-size:12px; }
+/* The number that rides beside a slider rather than under it. Global rather
+   than scoped to the Inspector, because the brush panel is the second component
+   to lay out a row this way and a duplicated flex basis is how two panels drift
+   apart. */
+.slider-row .num-s{ flex:0 0 58px; }
 
 /* disabled sub-controls */
 .insp-sub-body.disabled{ opacity:.45; pointer-events:none; }

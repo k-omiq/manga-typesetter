@@ -21,6 +21,7 @@
   import Queue from '../Queue.svelte';
   import BulkStylePanel from '../BulkStylePanel.svelte';
   import { app, page, placedLineNs, isTranslateMode, isLongstrip, translatedCount } from '../store.svelte.js';
+  import { brushArmed } from '../brush-tool.svelte.js';
   import { loadPanels, clampAll } from './panels.svelte.js';
   import { setResidentWindow } from '../page-images.js';
   import { residentRadiusFor } from './strip.js';
@@ -165,7 +166,9 @@
   {/if}
 
   {#if !translate}
-    <FloatingPanel id="options" title="Text box options">
+    <!-- The title follows the body: the panel says what it is showing, and while
+         the brush is armed it is not showing a text box's options. -->
+    <FloatingPanel id="options" title={brushArmed() ? 'Brush' : 'Text box options'}>
       <Inspector />
     </FloatingPanel>
   {/if}
