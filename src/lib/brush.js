@@ -274,6 +274,9 @@ export function buildStroke(raw, settings) {
     angle: settings.angle,
     angleJitter: settings.angleJitter,
     flatness: settings.flatness,
+    // Absent reads as on: the smooth edge is what a brush gives by default, and
+    // only a deliberate false asks for the hard pixel edge.
+    antialias: settings.antialias !== false,
     taperIn: { ...settings.taperIn },
     taperOut: { ...settings.taperOut },
     seed,

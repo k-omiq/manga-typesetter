@@ -948,7 +948,11 @@ export function drawInk(ctx, ink, makeCanvas) {
     const stamps = strokeStamps(k);
     if (!stamps.length) continue;
     const solid = k.opacity >= 0.999;
-    if (solid) {
+    // Two reasons to detour through a layer: a translucent stroke must not let
+    // its own stamps darken each other where they overlap, and an aliased one
+    // needs its finished shape in hand before the edge can be cut hard.
+    const layered = !solid || k.antialias === false;
+    if (!layered) {
       for (const s of stamps) stampRound(ctx, s, k.color, k.hardness, k.flatness);
       continue;
     }
@@ -961,6 +965,15 @@ export function drawInk(ctx, ink, makeCanvas) {
     lctx.setTransform(t);
     for (const s of stamps) {
       stampRound(lctx, { ...s, alpha: 1 }, k.color, k.hardness, k.flatness);
+    }
+    if (k.antialias === false) {
+      // The pixel look CSP gives with anti-aliasing off: every pixel is either
+      // in the stroke or out of it, so the soft ramp the stamps painted is
+      // snapped to the nearest of the two at the halfway point.
+      const px = lctx.getImageData(0, 0, layer.width, layer.height);
+      const d = px.data;
+      for (let i = 3; i < d.length; i += 4) d[i] = d[i] >= 128 ? 255 : 0;
+      lctx.putImageData(px, 0, 0);
     }
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);

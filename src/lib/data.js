@@ -366,6 +366,10 @@ export function normalizeInkStroke(src) {
     // Flatness squashes the tip across its angle. 1 is round; 0 would be a
     // line with no area, so the floor is a hair above it.
     flatness: Math.min(1, Math.max(0.01, num(src.flatness, 1))),
+    // Only a literal false turns anti-aliasing off, so a stroke saved before
+    // the switch existed - and any junk in its place - keeps the smooth edge it
+    // was drawn with.
+    antialias: src.antialias !== false,
     taperIn: taper(src.taperIn, 20),
     taperOut: taper(src.taperOut, 20),
     // The seed makes angle jitter repeatable: the same stroke must draw the

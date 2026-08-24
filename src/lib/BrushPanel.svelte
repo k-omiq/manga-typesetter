@@ -41,7 +41,7 @@
       strokes: [{
         brush: s.brush, size: Math.min(s.size, 26), color: s.color, opacity: s.opacity,
         spacing: s.spacing, hardness: s.hardness, angle: s.angle,
-        angleJitter: s.angleJitter, flatness: s.flatness,
+        angleJitter: s.angleJitter, flatness: s.flatness, antialias: s.antialias,
         taperIn: { ...s.taperIn }, taperOut: { ...s.taperOut }, seed: 1, pts: sample,
       }],
     });

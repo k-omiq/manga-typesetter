@@ -59,6 +59,19 @@ describe('ink style block', () => {
     expect(k.pts).toEqual([[1, 2, 1]]);
   });
 
+  it('keeps anti-aliasing on for a stroke saved before the switch existed', () => {
+    expect(normalizeInkStroke({ pts: [[1, 2, 1]] }).antialias).toBe(true);
+  });
+
+  it('keeps anti-aliasing off when the stroke was drawn with it off', () => {
+    expect(normalizeInkStroke({ antialias: false, pts: [[1, 2, 1]] }).antialias).toBe(false);
+  });
+
+  it('reads anything but a literal false as anti-aliased', () => {
+    expect(normalizeInkStroke({ antialias: 'no', pts: [[1, 2, 1]] }).antialias).toBe(true);
+    expect(normalizeInkStroke({ antialias: 0, pts: [[1, 2, 1]] }).antialias).toBe(true);
+  });
+
   it('leaves a project saved before ink existed untouched apart from the default', () => {
     const before = normalizeStyle({ size: 30, clip: { on: true, shapes: [] } });
     expect(before.ink).toEqual({ on: false, strokes: [] });

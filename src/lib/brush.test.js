@@ -265,6 +265,20 @@ describe('buildStroke', () => {
     expect(k.postCorrect).toBeUndefined();
     expect(Math.max(...k.pts.map((p) => p[1]))).toBeLessThan(40);
   });
+
+  it('carries the anti-alias choice onto the stroke it stores', () => {
+    const on = buildStroke(raw(5), { ...defaultBrushSettings(), antialias: true });
+    const off = buildStroke(raw(5), { ...defaultBrushSettings(), antialias: false });
+    expect(on.antialias).toBe(true);
+    expect(off.antialias).toBe(false);
+    expect(normalizeInkStroke(off)).toEqual(off);
+  });
+
+  it('treats settings with no anti-alias field as anti-aliased', () => {
+    const s = defaultBrushSettings();
+    delete s.antialias;
+    expect(buildStroke(raw(5), s).antialias).toBe(true);
+  });
 });
 
 import { strokeHit } from './brush.js';
