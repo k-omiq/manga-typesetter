@@ -1,3 +1,6 @@
+// `pub` because nothing calls into it yet: the `.sut` parser lands before the
+// command that will reach it, and a private module with no caller is dead code.
+pub mod brush;
 mod detect;
 mod durability;
 mod memory;

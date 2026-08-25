@@ -14,6 +14,14 @@ rust-version = "1.77.2"
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# This crate only. The brush corpus test pushes a third of a billion pixels
+# through a Lanczos filter, and `image::imageops::resize` is generic, so it is
+# code-generated here rather than in `image` and inherits this crate's setting -
+# unoptimised that test is three minutes instead of seconds. The dependency tree
+# is untouched, so nothing else has to rebuild.
+[profile.dev.package.app]
+opt-level = 2
+
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
 
@@ -37,6 +45,13 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 libc = "0.2"
 ort = { version = "2.0.0-rc.10", features = ["download-binaries"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Brush import (src/brush). A `.sut` is a SQLite database whose material blobs
+# are TAR archives of zlib-compressed tiles, so all three are the file format,
+# not a service. rusqlite is `bundled` so the parser never depends on whatever
+# libsqlite3 the host happens to ship, and it only ever opens READ_ONLY.
+rusqlite = { version = "0.40", features = ["bundled"] }
+tar = "0.4"
+flate2 = "1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
