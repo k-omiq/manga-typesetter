@@ -90,9 +90,11 @@ export function strokeStamps(stroke) {
 
 // The box-local rectangle the stroke's ink actually reaches, stamp radius
 // included. Used to grow the export's padding and to size the editor's canvas;
-// null when the stroke paints nothing.
-export function strokeBounds(stroke) {
-  const stamps = strokeStamps(stroke);
+// null when the stroke paints nothing. A caller that has already laid the
+// stamps out - the painter has, once per stroke per frame - passes them in
+// rather than paying for the whole walk a second time.
+export function strokeBounds(stroke, laid) {
+  const stamps = laid ?? strokeStamps(stroke);
   if (!stamps.length) return null;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const s of stamps) {

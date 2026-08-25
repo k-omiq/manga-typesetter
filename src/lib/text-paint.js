@@ -986,21 +986,41 @@ export function erodeAlpha(alpha, w, h, r) {
   return out;
 }
 
-// The pass itself, in place. The band is what the erosion took off - every
-// pixel within `radius` of the stroke's edge - and it goes back on top scaled
-// by `power`, which is what makes the rim denser than the wash inside it. The
-// core, where the alpha is already flat for `radius` in every direction, comes
-// out untouched. Power 0 changes nothing, so the slider and the switch agree.
-export function waterEdgeAlpha(alpha, w, h, radius, power) {
+// The pass itself, in place over an ImageData's bytes. The band is what the
+// erosion took off - every pixel within `radius` of the stroke's edge - and it
+// does two things there, because a rim has to read as darker and only one of
+// the two can say that on its own:
+//
+//   - the alpha goes up by the band scaled by `power`, which is the pigment
+//     pooling: a soft edge gets denser rather than fading out;
+//   - the colour goes down towards black by the same amount, which is what
+//     shows on the brush people actually use. A hardness-100 stroke is already
+//     opaque to the rim, so there is no alpha left to add and an alpha-only
+//     pass would be invisible on the default brush and on every coloured one.
+//
+// The core - alpha already flat for `radius` in every direction - comes out
+// byte-identical, and power 0 changes nothing at all, so the slider and the
+// switch agree. ImageData is not premultiplied, so the colour under the band is
+// the ink's own and can be scaled directly; where there is no alpha there is no
+// band either, since the erosion has nothing to take off.
+export function waterEdgePixels(data, w, h, radius, power) {
   const p = Math.min(1, Math.max(0, Number(power) || 0));
   const r = Math.max(1, Math.round(Number(radius) || 0));
-  if (p <= 0) return alpha;
+  if (p <= 0) return data;
+  const n = w * h;
+  const alpha = new Uint8ClampedArray(n);
+  for (let i = 0, j = 3; i < n; i++, j += 4) alpha[i] = data[j];
   const er = erodeAlpha(alpha, w, h, r);
-  for (let i = 0; i < alpha.length; i++) {
+  for (let i = 0, j = 0; i < n; i++, j += 4) {
     const band = alpha[i] - er[i];
-    if (band > 0) alpha[i] = Math.min(255, alpha[i] + band * p);
+    if (band <= 0) continue;
+    const f = Math.max(0, 1 - (p * band) / 255);
+    data[j] *= f;
+    data[j + 1] *= f;
+    data[j + 2] *= f;
+    data[j + 3] = Math.min(255, alpha[i] + band * p);
   }
-  return alpha;
+  return data;
 }
 
 // Whether a stroke asks for the edge at all. Read twice - once to decide the
@@ -1014,8 +1034,8 @@ function wantsWaterEdge(k) {
 // what keeps a live stroke cheap - the alternative is reading a whole layer
 // back per stroke per frame - and the margin of clear pixels the padding buys
 // is what lets the erosion see an edge where the edge is.
-function inkRect(k, t, w, h, pad) {
-  const b = strokeBounds(k);
+function inkRect(k, stamps, t, w, h, pad) {
+  const b = strokeBounds(k, stamps);
   if (!b) return null;
   let x0 = Infinity;
   let y0 = Infinity;
@@ -1077,17 +1097,16 @@ export function drawInk(ctx, ink, makeCanvas) {
       // Once per stroke, over its own layer, and before the anti-aliasing snap
       // below: the edge is drawn on the soft alpha the stamps left, and the
       // pixel look is the last word on what is in the stroke and what is out.
+      // The snap only ever touches alpha, so the darkened rim survives it.
       // The radius is the band's page px through the caller's transform, which
-      // is what keeps the screen and the file the same picture.
+      // is what keeps the screen and the file the same picture. The stamps are
+      // handed on rather than laid out again: this runs per stroke per frame
+      // while the pointer is down.
       const r = Math.max(1, Math.round(k.waterEdgeWidth * transformScale(t)));
-      const rect = inkRect(k, t, layer.width, layer.height, r + 2);
+      const rect = inkRect(k, stamps, t, layer.width, layer.height, r + 2);
       if (rect) {
         const px = lctx.getImageData(rect.x, rect.y, rect.w, rect.h);
-        const d = px.data;
-        const a = new Uint8ClampedArray(rect.w * rect.h);
-        for (let i = 0, j = 3; i < a.length; i++, j += 4) a[i] = d[j];
-        waterEdgeAlpha(a, rect.w, rect.h, r, k.waterEdgePower);
-        for (let i = 0, j = 3; i < a.length; i++, j += 4) d[j] = a[i];
+        waterEdgePixels(px.data, rect.w, rect.h, r, k.waterEdgePower);
         lctx.putImageData(px, rect.x, rect.y);
       }
     }

@@ -131,13 +131,15 @@ describe('inkExtent', () => {
 // The watercolour edge
 // ===========================================================================
 // CSP's darkened rim: the band within `waterEdgeWidth` page px of a stroke's
-// outline is pushed denser by `waterEdgePower`. It is only visible in pixels,
-// and node has no canvas, so these tests bring the smallest renderer `drawInk`
-// can be driven through - a transform stack, a disc filled flat or through the
-// hardness ramp, the layer composite, and the image-data round trip the pass
-// itself uses. Only alpha is tracked, because alpha is the whole subject.
+// outline goes denser in alpha and darker in colour. It is only visible in
+// pixels, and node has no canvas, so these tests bring the smallest renderer
+// `drawInk` can be driven through - a transform stack, a disc filled flat or
+// through the hardness ramp, the layer composite, and the image-data round trip
+// the pass itself uses. Colour as well as alpha, because the rim on the brush
+// people actually use - a hard opaque tip - is a colour change and nothing
+// else: there is no alpha left to add to it.
 
-import { drawInk, transformScale, erodeAlpha, waterEdgeAlpha } from './text-paint.js';
+import { drawInk, transformScale, erodeAlpha, waterEdgePixels } from './text-paint.js';
 import { strokeStamps } from './brush.js';
 
 const mul = (m, n) => ({
@@ -163,9 +165,26 @@ const inv = (m) => {
 
 const IDENT = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 
+const hexRgb = (c) => [
+  parseInt(c.slice(1, 3), 16),
+  parseInt(c.slice(3, 5), 16),
+  parseInt(c.slice(5, 7), 16),
+];
+
 function canvasOf(w, h) {
-  const plane = new Uint8ClampedArray(w * h);
-  const cnv = { width: w, height: h, plane, reads: 0, writes: 0 };
+  const data = new Uint8ClampedArray(w * h * 4);
+  const cnv = { width: w, height: h, data, reads: 0, writes: 0 };
+  // Source-over on non-premultiplied bytes, which is what an ImageData holds
+  // and therefore what the pass reads back.
+  const over = (i, sr, sg, sb, sa) => {
+    if (sa <= 0) return;
+    const da = data[i + 3] / 255;
+    const oa = sa + da * (1 - sa);
+    data[i] = (sr * sa + data[i] * da * (1 - sa)) / oa;
+    data[i + 1] = (sg * sa + data[i + 1] * da * (1 - sa)) / oa;
+    data[i + 2] = (sb * sa + data[i + 2] * da * (1 - sa)) / oa;
+    data[i + 3] = 255 * oa;
+  };
   const ctx = {
     canvas: cnv,
     m: { ...IDENT },
@@ -196,7 +215,13 @@ function canvasOf(w, h) {
       this.m = mul(this.m, { a: Math.cos(r), b: Math.sin(r), c: -Math.sin(r), d: Math.cos(r), e: 0, f: 0 });
     },
     createRadialGradient(_x0, _y0, r0, _x1, _y1, r1) {
-      return { r0, r1, addColorStop() {} };
+      // The hardness ramp: the first stop is the ink, the last is clear, so the
+      // colour is the stop colour and the falloff is coverage.
+      const g = { r0, r1, color: '#000000' };
+      g.addColorStop = (pos, c) => {
+        if (pos === 0) g.color = c;
+      };
+      return g;
     },
     beginPath() {},
     arc(x, y, r) {
@@ -218,6 +243,7 @@ function canvasOf(w, h) {
         y1 = Math.max(y1, dy);
       }
       const g = this.fillStyle && typeof this.fillStyle === 'object' ? this.fillStyle : null;
+      const [sr, sg, sb] = hexRgb(g ? g.color : this.fillStyle);
       for (let py = Math.max(0, Math.floor(y0)); py <= Math.min(h - 1, Math.ceil(y1)); py++) {
         for (let px = Math.max(0, Math.floor(x0)); px <= Math.min(w - 1, Math.ceil(x1)); px++) {
           const dx = px + 0.5;
@@ -226,13 +252,9 @@ function canvasOf(w, h) {
           const ly = back.b * dx + back.d * dy + back.f - cy;
           const dist = Math.hypot(lx, ly);
           if (dist > r) continue;
-          // Flat unless a hardness ramp was set up, in which case the dab falls
-          // off from the solid core to nothing at the rim, as `stampRound` asks.
           let cov = 1;
           if (g) cov = dist <= g.r0 ? 1 : g.r1 > g.r0 ? 1 - (dist - g.r0) / (g.r1 - g.r0) : 0;
-          const src = Math.min(1, Math.max(0, cov)) * this.globalAlpha;
-          const i = py * w + px;
-          plane[i] = 255 * (src + (plane[i] / 255) * (1 - src));
+          over((py * w + px) * 4, sr, sg, sb, Math.min(1, Math.max(0, cov)) * this.globalAlpha);
         }
       }
     },
@@ -240,26 +262,31 @@ function canvasOf(w, h) {
       // Only ever the finished layer, over the target at the identity.
       for (let y = 0; y < src.height; y++) {
         for (let x = 0; x < src.width; x++) {
-          const s = (src.plane[y * src.width + x] / 255) * this.globalAlpha;
-          if (s <= 0) continue;
-          const i = (y + dy) * w + (x + dx);
-          plane[i] = 255 * (s + (plane[i] / 255) * (1 - s));
+          const j = (y * src.width + x) * 4;
+          over(((y + dy) * w + (x + dx)) * 4, src.data[j], src.data[j + 1], src.data[j + 2],
+            (src.data[j + 3] / 255) * this.globalAlpha);
         }
       }
     },
     getImageData(x, y, gw, gh) {
       cnv.reads++;
-      const data = new Uint8ClampedArray(gw * gh * 4);
+      const out = new Uint8ClampedArray(gw * gh * 4);
       for (let j = 0; j < gh; j++) {
-        for (let i = 0; i < gw; i++) data[(j * gw + i) * 4 + 3] = plane[(y + j) * w + (x + i)];
+        for (let i = 0; i < gw; i++) {
+          const s = ((y + j) * w + (x + i)) * 4;
+          const t = (j * gw + i) * 4;
+          for (let c = 0; c < 4; c++) out[t + c] = data[s + c];
+        }
       }
-      return { width: gw, height: gh, data };
+      return { width: gw, height: gh, data: out };
     },
     putImageData(img, x, y) {
       cnv.writes++;
       for (let j = 0; j < img.height; j++) {
         for (let i = 0; i < img.width; i++) {
-          plane[(y + j) * w + (x + i)] = img.data[(j * img.width + i) * 4 + 3];
+          const s = (j * img.width + i) * 4;
+          const t = ((y + j) * w + (x + i)) * 4;
+          for (let c = 0; c < 4; c++) data[t + c] = img.data[s + c];
         }
       }
     },
@@ -268,9 +295,22 @@ function canvasOf(w, h) {
   return cnv;
 }
 
-// A soft-tipped line across the canvas: hardness under 100 is what gives the
-// stroke a rim to darken in the first place, since a flat disc is already as
-// opaque as alpha goes and nothing can be added to it.
+const alphaOf = (cnv) => {
+  const a = new Uint8ClampedArray(cnv.width * cnv.height);
+  for (let i = 0, j = 3; i < a.length; i++, j += 4) a[i] = cnv.data[j];
+  return a;
+};
+
+const at = (cnv, x, y) => {
+  const i = (Math.round(y) * cnv.width + Math.round(x)) * 4;
+  return [cnv.data[i], cnv.data[i + 1], cnv.data[i + 2], cnv.data[i + 3]];
+};
+
+const W = 220;
+const H = 60;
+
+// A soft-tipped line across the canvas: hardness under 100 is what gives a
+// stroke an alpha ramp to make denser.
 const softLine = (extra) => ({
   size: 24,
   hardness: 30,
@@ -284,22 +324,22 @@ const softLine = (extra) => ({
   ...extra,
 });
 
-const W = 220;
-const H = 60;
+// The brush as it comes out of the box: a flat opaque disc, whose rim the pass
+// can only reach through the colour.
+const hardLine = (extra) => softLine({ hardness: 100, ...extra });
 
 function render(stroke, scale = 1, w = W, h = H) {
   const cnv = canvasOf(w * scale, h * scale);
   const ctx = cnv.getContext('2d');
   ctx.scale(scale, scale);
-  const k = normalizeInkStroke(stroke);
-  drawInk(ctx, { on: true, strokes: [k] }, (w, h) => canvasOf(w, h));
+  drawInk(ctx, { on: true, strokes: [normalizeInkStroke(stroke)] }, (cw, ch) => canvasOf(cw, ch));
   return cnv;
 }
 
-describe('the watercolour edge', () => {
-  it('darkens the rim and leaves the core exactly where it was', () => {
-    const off = render(softLine({ waterEdge: false })).plane;
-    const on = render(softLine({ waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 0.6 })).plane;
+describe('the watercolour edge on a soft tip', () => {
+  it('makes the rim denser and leaves the core exactly where it was', () => {
+    const off = alphaOf(render(softLine({ waterEdge: false })));
+    const on = alphaOf(render(softLine({ waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 0.6 })));
     let rimOff = 0;
     let rimOn = 0;
     let rim = 0;
@@ -321,18 +361,16 @@ describe('the watercolour edge', () => {
   it('runs once over the finished stroke, not once per stamp', () => {
     const k = normalizeInkStroke(softLine({ waterEdge: true }));
     expect(strokeStamps(k).length).toBeGreaterThan(50);
-    const cnv = render(softLine({ waterEdge: true }));
-    expect(cnv.reads).toBe(0); // the pass reads the stroke's layer, not the target
-    const layerReads = [];
-    const ctx = canvasOf(W, H).getContext('2d');
-    drawInk(ctx, { on: true, strokes: [k] }, (w, h) => {
+    expect(render(softLine({ waterEdge: true })).reads).toBe(0); // the layer is read, not the target
+    const layers = [];
+    drawInk(canvasOf(W, H).getContext('2d'), { on: true, strokes: [k] }, (w, h) => {
       const c = canvasOf(w, h);
-      layerReads.push(c);
+      layers.push(c);
       return c;
     });
-    expect(layerReads).toHaveLength(1);
-    expect(layerReads[0].reads).toBe(1);
-    expect(layerReads[0].writes).toBe(1);
+    expect(layers).toHaveLength(1);
+    expect(layers[0].reads).toBe(1);
+    expect(layers[0].writes).toBe(1);
   });
 
   it('is off for an opaque anti-aliased stroke that did not ask for it', () => {
@@ -352,15 +390,123 @@ describe('the watercolour edge', () => {
   });
 
   it('draws nothing different at zero strength', () => {
-    const off = render(softLine({ waterEdge: false })).plane;
-    const zero = render(softLine({ waterEdge: true, waterEdgePower: 0 })).plane;
+    const off = render(softLine({ waterEdge: false })).data;
+    const zero = render(softLine({ waterEdge: true, waterEdgePower: 0 })).data;
     expect(Array.from(zero)).toEqual(Array.from(off));
   });
 
   it('draws the same pixels twice', () => {
-    const a = render(softLine({ waterEdge: true, waterEdgePower: 0.7 })).plane;
-    const b = render(softLine({ waterEdge: true, waterEdgePower: 0.7 })).plane;
+    const a = render(softLine({ waterEdge: true, waterEdgePower: 0.7 })).data;
+    const b = render(softLine({ waterEdge: true, waterEdgePower: 0.7 })).data;
     expect(Array.from(a)).toEqual(Array.from(b));
+  });
+});
+
+// The default brush is a flat opaque disc. Its rim is already as dense as alpha
+// goes, so an alpha-only pass would do nothing at all on it - the rim there is
+// the colour going darker, which is what CSP draws and what the spec asks for.
+describe('the watercolour edge on the default hard tip', () => {
+  // Two pixels in from the outline of a 24 px tip centred on y = 30, against
+  // the middle of the stroke where the tube is flat.
+  const RIM = [110, 20];
+  const CORE = [110, 30];
+
+  it('darkens the rim of a grey stroke and leaves its core alone', () => {
+    const off = render(hardLine({ color: '#808080', waterEdge: false }));
+    const on = render(hardLine({ color: '#808080', waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 0.5 }));
+    expect(at(off, ...RIM)).toEqual([128, 128, 128, 255]);
+    // Half the band off a full-strength band is half the ink's own value.
+    expect(at(on, ...RIM)).toEqual([64, 64, 64, 255]);
+    expect(at(on, ...CORE)).toEqual(at(off, ...CORE));
+    expect(at(on, ...CORE)).toEqual([128, 128, 128, 255]);
+  });
+
+  it('keeps a coloured stroke its own colour while it darkens', () => {
+    const on = render(hardLine({ color: '#ff0000', waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 0.5 }));
+    const [r, g, b, a] = at(on, ...RIM);
+    const [cr] = at(on, ...CORE);
+    expect(r).toBeLessThan(cr); // the rim is darker than the ink inside it
+    expect(r).toBeGreaterThan(g); // and still red, not a grey smudge
+    expect(r).toBeGreaterThan(b);
+    expect(a).toBe(255); // an opaque stroke stays opaque
+    expect(at(on, ...CORE)).toEqual([255, 0, 0, 255]);
+  });
+
+  it('survives the anti-aliasing snap, which only ever touches alpha', () => {
+    // With anti-aliasing off the alpha is thrown to 0 or 255 straight after the
+    // pass, so a rim that lived in alpha alone would be wiped by it.
+    const on = render(hardLine({
+      color: '#ff0000', antialias: false, waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 0.5,
+    }));
+    const [r, , , a] = at(on, ...RIM);
+    expect(a).toBe(255);
+    expect(r).toBeLessThan(at(on, ...CORE)[0]);
+    expect(at(on, ...CORE)).toEqual([255, 0, 0, 255]);
+  });
+
+  it('reaches in from the outline as far as the band and no further', () => {
+    const on = render(hardLine({ color: '#808080', waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 1 }));
+    // The tip is 24 px across on y = 30, so its outline is y = 18. Four px in
+    // is the last darkened row; the fifth is the ink's own grey.
+    expect(at(on, 110, 21)[0]).toBe(0);
+    expect(at(on, 110, 23)[0]).toBe(128);
+  });
+});
+
+// The parity rule the whole app runs on: the editor draws at the zoom, the
+// exporter at its supersample, and the two have to be the same picture. A band
+// stated in page px is the one part of the pass that could quietly stop being -
+// it is the only thing measured in pixels rather than derived from the stroke.
+describe('the watercolour edge at two scales', () => {
+  // One dab of a fully soft tip, with nothing overlapping it: alpha falls
+  // linearly from the centre to the rim, so the band adds a flat 255*r/R*power
+  // across the cone and the arithmetic is readable straight off the picture.
+  const tap = (extra) => ({
+    size: 100,
+    hardness: 0,
+    spacing: 10,
+    opacity: 1,
+    color: '#000000',
+    antialias: true,
+    taperIn: { on: false },
+    taperOut: { on: false },
+    pts: [[80, 80, 1]],
+    ...extra,
+  });
+  // The mean alpha over a rectangle stated in page px, whatever the scale it
+  // was drawn at - which is the only way to compare two resolutions at all.
+  const mean = (cnv, scale, x0, y0, x1, y1) => {
+    let sum = 0;
+    let n = 0;
+    for (let y = Math.round(y0 * scale); y < Math.round(y1 * scale); y++) {
+      for (let x = Math.round(x0 * scale); x < Math.round(x1 * scale); x++) {
+        sum += cnv.data[(y * cnv.width + x) * 4 + 3];
+        n++;
+      }
+    }
+    return sum / n;
+  };
+  // A patch a third of the way out from the centre: dense enough to be well
+  // inside the ink, far enough from the middle that nothing there is clipped
+  // at 255 and the band has room to show.
+  const patch = (scale, extra) => mean(render(tap(extra), scale, 160, 160), scale, 100, 77, 110, 83);
+  const added = (scale, width) =>
+    patch(scale, { waterEdge: true, waterEdgeWidth: width, waterEdgePower: 0.5 }) -
+    patch(scale, { waterEdge: false });
+
+  it('darkens by the same amount at 1x, 2x and 3x', () => {
+    const one = added(1, 4);
+    expect(one).toBeGreaterThan(8);
+    expect(added(2, 4)).toBeCloseTo(one, 0);
+    expect(added(3, 4)).toBeCloseTo(one, 0);
+  });
+
+  it('is the band that decides it, not the resolution', () => {
+    // Twice the band, twice the pigment - so the number above is measuring the
+    // setting rather than something constant about the stroke.
+    const ratio = added(2, 8) / added(2, 4);
+    expect(ratio).toBeGreaterThan(1.9);
+    expect(ratio).toBeLessThan(2.1);
   });
 });
 
@@ -381,30 +527,31 @@ describe('transformScale', () => {
   });
 });
 
-describe('waterEdgeAlpha', () => {
-  // A plane that ramps 255 down to 0 over 25 columns, 10 per column, constant
-  // down the rows: the arithmetic of the band is exact on it.
+describe('waterEdgePixels', () => {
+  // Black ink whose alpha ramps 255 down to 0 over 25 columns, constant down
+  // the rows: the arithmetic of the band is exact on it, and black ink takes
+  // the colour half of the pass out of the picture.
   const ramp = (w, h) => {
-    const a = new Uint8ClampedArray(w * h);
+    const d = new Uint8ClampedArray(w * h * 4);
     for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) a[y * w + x] = Math.max(0, Math.min(255, (50 - x) * 10));
+      for (let x = 0; x < w; x++) d[(y * w + x) * 4 + 3] = Math.max(0, Math.min(255, (50 - x) * 10));
     }
-    return a;
+    return d;
   };
+  const A = (d, w, x, y) => d[(y * w + x) * 4 + 3];
 
   it('adds the band the erosion took off, scaled by the power', () => {
     const w = 80;
     const h = 40;
     const before = ramp(w, h);
-    const after = waterEdgeAlpha(ramp(w, h), w, h, 3, 0.5);
-    const row = 20 * w;
+    const after = waterEdgePixels(ramp(w, h), w, h, 3, 0.5);
     // Down a falling ramp the smallest alpha within 3 px is the one 3 px along,
     // so the band is 30 and half of it goes back on.
-    expect(after[row + 30]).toBe(before[row + 30] + 15);
+    expect(A(after, w, 30, 20)).toBe(A(before, w, 30, 20) + 15);
     // Flat and saturated: the erosion takes nothing, so nothing is added.
-    expect(after[row + 5]).toBe(255);
+    expect(A(after, w, 5, 20)).toBe(255);
     // Clear on both sides of the window: nothing to darken.
-    expect(after[row + 70]).toBe(0);
+    expect(A(after, w, 70, 20)).toBe(0);
   });
 
   it('reaches in from the edge exactly as far as the radius', () => {
@@ -413,28 +560,49 @@ describe('waterEdgeAlpha', () => {
     const w = 80;
     const h = 40;
     const step = () => {
-      const a = new Uint8ClampedArray(w * h);
-      for (let y = 0; y < h; y++) for (let x = 0; x < 50; x++) a[y * w + x] = 128;
-      return a;
+      const d = new Uint8ClampedArray(w * h * 4);
+      for (let y = 0; y < h; y++) for (let x = 0; x < 50; x++) d[(y * w + x) * 4 + 3] = 128;
+      return d;
     };
-    const row = 20 * w;
     const changed = (r) => {
       const before = step();
-      const after = waterEdgeAlpha(step(), w, h, r, 1);
+      const after = waterEdgePixels(step(), w, h, r, 1);
       let n = 0;
       // Away from the plane's own borders, which erode to nothing by design.
-      for (let x = 30; x < 60; x++) if (after[row + x] !== before[row + x]) n++;
+      for (let x = 30; x < 60; x++) if (A(after, w, x, 20) !== A(before, w, x, 20)) n++;
       return n;
     };
     expect(changed(3)).toBe(3);
     expect(changed(6)).toBe(6);
   });
 
-  it('leaves the plane alone at zero power', () => {
+  it('darkens the colour under the band and nothing outside it', () => {
+    // Opaque grey with a hard edge at column 50: no alpha to add, so the rim is
+    // the colour alone - the case the default brush is in.
+    const w = 80;
+    const h = 40;
+    const d = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < 50; x++) {
+        const i = (y * w + x) * 4;
+        d[i] = 200;
+        d[i + 1] = 200;
+        d[i + 2] = 200;
+        d[i + 3] = 255;
+      }
+    }
+    waterEdgePixels(d, w, h, 4, 0.5);
+    const px = (x) => Array.from(d.slice((20 * w + x) * 4, (20 * w + x) * 4 + 4));
+    expect(px(48)).toEqual([100, 100, 100, 255]); // in the band: half as bright
+    expect(px(40)).toEqual([200, 200, 200, 255]); // past it: the ink as it was
+    expect(px(60)).toEqual([0, 0, 0, 0]); // clear stays clear, colour included
+  });
+
+  it('leaves the pixels alone at zero power', () => {
     const w = 40;
     const h = 20;
     const before = ramp(w, h);
-    expect(Array.from(waterEdgeAlpha(ramp(w, h), w, h, 5, 0))).toEqual(Array.from(before));
+    expect(Array.from(waterEdgePixels(ramp(w, h), w, h, 5, 0))).toEqual(Array.from(before));
   });
 });
 
@@ -486,62 +654,5 @@ describe('the watercolour edge on a stroke that predates it', () => {
     expect(k.waterEdgeWidth).toBe(20);
     expect(k.waterEdgePower).toBe(1);
     expect(normalizeInkStroke({ waterEdgeWidth: 0, pts: [[1, 2, 1]] }).waterEdgeWidth).toBe(1);
-  });
-});
-
-// The parity rule the whole app runs on: the editor draws at the zoom, the
-// exporter at its supersample, and the two have to be the same picture. A band
-// stated in page px is the one part of the pass that could quietly stop being -
-// it is the only thing measured in pixels rather than derived from the stroke.
-describe('the watercolour edge at two scales', () => {
-  // One dab of a fully soft tip, with nothing overlapping it: alpha falls
-  // linearly from the centre to the rim, so the band adds a flat 255*r/R*power
-  // across the cone and the arithmetic is readable straight off the picture.
-  const tap = (extra) => ({
-    size: 100,
-    hardness: 0,
-    spacing: 10,
-    opacity: 1,
-    color: '#000000',
-    antialias: true,
-    taperIn: { on: false },
-    taperOut: { on: false },
-    pts: [[80, 80, 1]],
-    ...extra,
-  });
-  // The mean alpha over a rectangle stated in page px, whatever the scale it
-  // was drawn at - which is the only way to compare two resolutions at all.
-  const mean = (cnv, scale, x0, y0, x1, y1) => {
-    let sum = 0;
-    let n = 0;
-    for (let y = Math.round(y0 * scale); y < Math.round(y1 * scale); y++) {
-      for (let x = Math.round(x0 * scale); x < Math.round(x1 * scale); x++) {
-        sum += cnv.plane[y * cnv.width + x];
-        n++;
-      }
-    }
-    return sum / n;
-  };
-  // A patch a third of the way out from the centre: dense enough to be well
-  // inside the ink, far enough from the middle that nothing there is clipped
-  // at 255 and the band has room to show.
-  const patch = (scale, extra) => mean(render(tap(extra), scale, 160, 160), scale, 100, 77, 110, 83);
-  const added = (scale, width) =>
-    patch(scale, { waterEdge: true, waterEdgeWidth: width, waterEdgePower: 0.5 }) -
-    patch(scale, { waterEdge: false });
-
-  it('darkens by the same amount at 1x, 2x and 3x', () => {
-    const one = added(1, 4);
-    expect(one).toBeGreaterThan(8);
-    expect(added(2, 4)).toBeCloseTo(one, 0);
-    expect(added(3, 4)).toBeCloseTo(one, 0);
-  });
-
-  it('is the band that decides it, not the resolution', () => {
-    // Twice the band, twice the pigment - so the number above is measuring the
-    // setting rather than something constant about the stroke.
-    const ratio = added(2, 8) / added(2, 4);
-    expect(ratio).toBeGreaterThan(1.9);
-    expect(ratio).toBeLessThan(2.1);
   });
 });
