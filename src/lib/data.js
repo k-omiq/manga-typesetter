@@ -370,6 +370,14 @@ export function normalizeInkStroke(src) {
     // the switch existed - and any junk in its place - keeps the smooth edge it
     // was drawn with.
     antialias: src.antialias !== false,
+    // The watercolour edge reads the other way round: only a literal true asks
+    // for the rim, so a stroke saved before the pass existed - which is every
+    // stroke drawn so far - loads as the plain ink it was drawn as.
+    waterEdge: src.waterEdge === true,
+    // The band is stated in page px so it comes out the same width at any zoom
+    // and any export scale. Past 20 px the rim stops being a rim.
+    waterEdgeWidth: Math.min(20, Math.max(1, num(src.waterEdgeWidth, 4))),
+    waterEdgePower: Math.min(1, Math.max(0, num(src.waterEdgePower, 0.5))),
     taperIn: taper(src.taperIn, 20),
     taperOut: taper(src.taperOut, 20),
     // The seed makes angle jitter repeatable: the same stroke must draw the

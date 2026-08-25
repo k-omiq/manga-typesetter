@@ -932,6 +932,111 @@ function stampRound(ctx, s, color, hardness, flatness) {
   ctx.restore();
 }
 
+// ---------------------------------------------------------------------------
+// The watercolour edge: CSP's darkened rim, where the pigment pools as the
+// water dries. It is a post-pass over the finished stroke's alpha, never a
+// property of the tip - a stamp has no idea where the stroke's outline is, so
+// running it per dab would ring every overlap down the middle of the line
+// instead of drawing one rim around the whole thing.
+
+// How many device px one page px is worth under `t`. The editor hands drawInk
+// its zoom, the exporter its supersample and the brush panel its pixel ratio,
+// and a band stated in page px has to come out the same width in all three - so
+// the pass takes its radius from the transform it was actually given rather
+// than from a scale passed alongside it. The square root of the determinant is
+// the area scale, which stays honest under rotation and mirroring.
+export function transformScale(t) {
+  const det = Math.abs((t?.a ?? 1) * (t?.d ?? 1) - (t?.b ?? 0) * (t?.c ?? 0));
+  return det > 0 ? Math.sqrt(det) : 1;
+}
+
+// The smallest value in every window of 2r+1 along one line of the plane.
+// Anything past the ends counts as clear, so the first and last r entries erode
+// to nothing - which is what they are, since the ink stops there. A monotonic
+// deque, so the cost is the plane and not the plane times the radius: the
+// radius follows the zoom, and a 20 px band at 400% is an 80 px window.
+function minLine(src, dst, n, base, stride, r, dq) {
+  let head = 0;
+  let tail = 0;
+  for (let j = 0; j < n; j++) {
+    const v = src[base + j * stride];
+    while (tail > head && src[base + dq[tail - 1] * stride] >= v) tail--;
+    dq[tail++] = j;
+    // The window ending at j is centred on j - r, and is only whole once that
+    // centre is r past the start.
+    const i = j - r;
+    if (i >= r) {
+      while (dq[head] < j - 2 * r) head++;
+      dst[base + i * stride] = src[base + dq[head] * stride];
+    }
+  }
+}
+
+// The alpha plane shrunk by r px on every side: a pixel keeps its value only if
+// nothing fainter sits within r of it. Two separable passes, which makes the
+// structuring element a square rather than a disc - at these radii that is a
+// fraction of a pixel out at the diagonals, and it costs an order of magnitude
+// less than the true disc.
+export function erodeAlpha(alpha, w, h, r) {
+  const dq = new Int32Array(Math.max(w, h));
+  const tmp = new Uint8ClampedArray(w * h);
+  for (let y = 0; y < h; y++) minLine(alpha, tmp, w, y * w, 1, r, dq);
+  const out = new Uint8ClampedArray(w * h);
+  for (let x = 0; x < w; x++) minLine(tmp, out, h, x, w, r, dq);
+  return out;
+}
+
+// The pass itself, in place. The band is what the erosion took off - every
+// pixel within `radius` of the stroke's edge - and it goes back on top scaled
+// by `power`, which is what makes the rim denser than the wash inside it. The
+// core, where the alpha is already flat for `radius` in every direction, comes
+// out untouched. Power 0 changes nothing, so the slider and the switch agree.
+export function waterEdgeAlpha(alpha, w, h, radius, power) {
+  const p = Math.min(1, Math.max(0, Number(power) || 0));
+  const r = Math.max(1, Math.round(Number(radius) || 0));
+  if (p <= 0) return alpha;
+  const er = erodeAlpha(alpha, w, h, r);
+  for (let i = 0; i < alpha.length; i++) {
+    const band = alpha[i] - er[i];
+    if (band > 0) alpha[i] = Math.min(255, alpha[i] + band * p);
+  }
+  return alpha;
+}
+
+// Whether a stroke asks for the edge at all. Read twice - once to decide the
+// stroke needs a layer, once to run the pass - so it is stated once here.
+function wantsWaterEdge(k) {
+  return k?.waterEdge === true && +k.waterEdgePower > 0 && +k.waterEdgeWidth > 0;
+}
+
+// The device-px rectangle the pass has to touch: the stroke's own ink, grown by
+// the band and a pixel of slack, clipped to the layer. Bounding the read is
+// what keeps a live stroke cheap - the alternative is reading a whole layer
+// back per stroke per frame - and the margin of clear pixels the padding buys
+// is what lets the erosion see an edge where the edge is.
+function inkRect(k, t, w, h, pad) {
+  const b = strokeBounds(k);
+  if (!b) return null;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const [x, y] of [[b.minX, b.minY], [b.maxX, b.minY], [b.minX, b.maxY], [b.maxX, b.maxY]]) {
+    const dx = t.a * x + t.c * y + t.e;
+    const dy = t.b * x + t.d * y + t.f;
+    if (dx < x0) x0 = dx;
+    if (dx > x1) x1 = dx;
+    if (dy < y0) y0 = dy;
+    if (dy > y1) y1 = dy;
+  }
+  const rx = Math.max(0, Math.floor(x0 - pad));
+  const ry = Math.max(0, Math.floor(y0 - pad));
+  const rw = Math.min(w, Math.ceil(x1 + pad)) - rx;
+  const rh = Math.min(h, Math.ceil(y1 + pad)) - ry;
+  if (rw <= 0 || rh <= 0) return null;
+  return { x: rx, y: ry, w: rw, h: rh };
+}
+
 // Paint every stroke. Stamps overlap heavily by design, so each stroke is drawn
 // into its own layer and composited once: stamping straight onto the target at
 // a stroke opacity below 1 would darken every overlap and turn a smooth line
@@ -948,10 +1053,12 @@ export function drawInk(ctx, ink, makeCanvas) {
     const stamps = strokeStamps(k);
     if (!stamps.length) continue;
     const solid = k.opacity >= 0.999;
-    // Two reasons to detour through a layer: a translucent stroke must not let
-    // its own stamps darken each other where they overlap, and an aliased one
-    // needs its finished shape in hand before the edge can be cut hard.
-    const layered = !solid || k.antialias === false;
+    const water = wantsWaterEdge(k);
+    // Three reasons to detour through a layer: a translucent stroke must not
+    // let its own stamps darken each other where they overlap, an aliased one
+    // needs its finished shape in hand before the edge can be cut hard, and the
+    // watercolour edge is a pass over that finished shape too.
+    const layered = !solid || k.antialias === false || water;
     if (!layered) {
       for (const s of stamps) stampRound(ctx, s, k.color, k.hardness, k.flatness);
       continue;
@@ -965,6 +1072,24 @@ export function drawInk(ctx, ink, makeCanvas) {
     lctx.setTransform(t);
     for (const s of stamps) {
       stampRound(lctx, { ...s, alpha: 1 }, k.color, k.hardness, k.flatness);
+    }
+    if (water) {
+      // Once per stroke, over its own layer, and before the anti-aliasing snap
+      // below: the edge is drawn on the soft alpha the stamps left, and the
+      // pixel look is the last word on what is in the stroke and what is out.
+      // The radius is the band's page px through the caller's transform, which
+      // is what keeps the screen and the file the same picture.
+      const r = Math.max(1, Math.round(k.waterEdgeWidth * transformScale(t)));
+      const rect = inkRect(k, t, layer.width, layer.height, r + 2);
+      if (rect) {
+        const px = lctx.getImageData(rect.x, rect.y, rect.w, rect.h);
+        const d = px.data;
+        const a = new Uint8ClampedArray(rect.w * rect.h);
+        for (let i = 0, j = 3; i < a.length; i++, j += 4) a[i] = d[j];
+        waterEdgeAlpha(a, rect.w, rect.h, r, k.waterEdgePower);
+        for (let i = 0, j = 3; i < a.length; i++, j += 4) d[j] = a[i];
+        lctx.putImageData(px, rect.x, rect.y);
+      }
     }
     if (k.antialias === false) {
       // The pixel look CSP gives with anti-aliasing off: every pixel is either

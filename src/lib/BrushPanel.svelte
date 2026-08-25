@@ -42,6 +42,7 @@
         brush: s.brush, size: Math.min(s.size, 26), color: s.color, opacity: s.opacity,
         spacing: s.spacing, hardness: s.hardness, angle: s.angle,
         angleJitter: s.angleJitter, flatness: s.flatness, antialias: s.antialias,
+        waterEdge: s.waterEdge, waterEdgeWidth: s.waterEdgeWidth, waterEdgePower: s.waterEdgePower,
         taperIn: { ...s.taperIn }, taperOut: { ...s.taperOut }, seed: 1, pts: sample,
       }],
     });
@@ -127,6 +128,31 @@
             <input class="num-s" type="number" min="1" max="100" step="1" value={Math.round(s.flatness * 100)} aria-label="Flatness, percent" onchange={(e) => (s.flatness = Math.min(1, Math.max(0.01, Number(e.target.value) / 100)))} />
           </div>
         </div>
+        <div class="switch-row">
+          <button type="button" class="switch" class:on={s.waterEdge} role="switch" aria-checked={s.waterEdge} aria-label="Watercolour edge" onclick={() => (s.waterEdge = !s.waterEdge)}><span class="knob"></span></button>
+          <span class="lbl2">Watercolour edge</span>
+        </div>
+        <!-- Hidden rather than greyed, unlike the taper's numbers: with the
+             edge off these two say nothing at all, and Shape is already the
+             longest section in the panel. -->
+        {#if s.waterEdge}
+          <div class="nest">
+            <div class="grp">
+              <span class="lbl">Band</span>
+              <div class="slider-row">
+                <input type="range" min="1" max="20" step="1" value={s.waterEdgeWidth} title="How far in from the stroke's edge the rim darkens, in page px" aria-label="Watercolour edge band" oninput={(e) => num(s, 'waterEdgeWidth', e.target.value, 1, 20)} />
+                <input class="num-s" type="number" min="1" max="20" step="1" value={s.waterEdgeWidth} aria-label="Watercolour edge band, page px" onchange={(e) => num(s, 'waterEdgeWidth', e.target.value, 1, 20)} />
+              </div>
+            </div>
+            <div class="grp">
+              <span class="lbl">Strength</span>
+              <div class="slider-row">
+                <input type="range" min="0" max="100" step="1" value={Math.round(s.waterEdgePower * 100)} title="How much denser the rim goes than the ink inside it" aria-label="Watercolour edge strength" oninput={(e) => (s.waterEdgePower = Math.min(1, Math.max(0, Number(e.target.value) / 100)))} />
+                <input class="num-s" type="number" min="0" max="100" step="1" value={Math.round(s.waterEdgePower * 100)} aria-label="Watercolour edge strength, percent" onchange={(e) => (s.waterEdgePower = Math.min(1, Math.max(0, Number(e.target.value) / 100)))} />
+              </div>
+            </div>
+          </div>
+        {/if}
       </div>
     </div>
 

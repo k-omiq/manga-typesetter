@@ -279,6 +279,33 @@ describe('buildStroke', () => {
     delete s.antialias;
     expect(buildStroke(raw(5), s).antialias).toBe(true);
   });
+
+  it('carries the watercolour edge onto the stroke it stores', () => {
+    const s = { ...defaultBrushSettings(), waterEdge: true, waterEdgeWidth: 7, waterEdgePower: 0.25 };
+    const k = buildStroke(raw(5), s);
+    expect(k.waterEdge).toBe(true);
+    expect(k.waterEdgeWidth).toBe(7);
+    expect(k.waterEdgePower).toBe(0.25);
+    expect(normalizeInkStroke(k)).toEqual(k);
+  });
+
+  it('treats settings with no watercolour edge as plain ink', () => {
+    // The opposite reading to anti-aliasing: the rim is a look, so nothing but
+    // a deliberate true asks for it.
+    const s = defaultBrushSettings();
+    delete s.waterEdge;
+    delete s.waterEdgeWidth;
+    delete s.waterEdgePower;
+    const k = buildStroke(raw(5), s);
+    expect(k.waterEdge).toBe(false);
+    expect(k.waterEdgeWidth).toBe(4);
+    expect(k.waterEdgePower).toBe(0.5);
+    expect(normalizeInkStroke(k)).toEqual(k);
+  });
+
+  it('starts the tool with the edge off', () => {
+    expect(defaultBrushSettings().waterEdge).toBe(false);
+  });
 });
 
 import { strokeHit } from './brush.js';

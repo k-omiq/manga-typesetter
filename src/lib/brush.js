@@ -198,6 +198,11 @@ export function defaultBrushSettings() {
     angleJitter: 0,
     flatness: 1,
     antialias: true,
+    // The watercolour edge is off by default: it is a look, not a default, and
+    // a brush that rings every stroke without being asked reads as a bug.
+    waterEdge: false,
+    waterEdgeWidth: 4,
+    waterEdgePower: 0.5,
     // Velocity by default: it is the setting the CSP guide leads with, and it
     // is the one that reads as hand lettering rather than as a marker pen.
     dyn: { src: 'velocity', amount: 70 },
@@ -277,6 +282,11 @@ export function buildStroke(raw, settings) {
     // Absent reads as on: the smooth edge is what a brush gives by default, and
     // only a deliberate false asks for the hard pixel edge.
     antialias: settings.antialias !== false,
+    // The opposite reading to anti-aliasing: only a deliberate true asks for
+    // the rim, so settings from before the pass existed draw plain ink.
+    waterEdge: settings.waterEdge === true,
+    waterEdgeWidth: Number.isFinite(+settings.waterEdgeWidth) ? +settings.waterEdgeWidth : 4,
+    waterEdgePower: Number.isFinite(+settings.waterEdgePower) ? +settings.waterEdgePower : 0.5,
     taperIn: { ...settings.taperIn },
     taperOut: { ...settings.taperOut },
     seed,
