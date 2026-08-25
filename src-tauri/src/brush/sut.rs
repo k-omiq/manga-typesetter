@@ -297,12 +297,14 @@ impl<'a> Pages<'a> {
                 // 10 and 11 are SQLite's internal-use serial types; a record
                 // carrying one is not a record this parser can read.
                 10 | 11 => return None,
+                // A serial type is a `u64` on the wire; on a 32-bit target one
+                // too large to be a length is a length this parser cannot read.
                 _ if s % 2 == 0 => {
-                    let n = (s as usize - 12) / 2;
+                    let n = usize::try_from(s).ok()?.checked_sub(12)? / 2;
                     (Value::Blob(rec.get(vo..vo.checked_add(n)?)?.to_vec()), n)
                 }
                 _ => {
-                    let n = (s as usize - 13) / 2;
+                    let n = usize::try_from(s).ok()?.checked_sub(13)? / 2;
                     let bytes = rec.get(vo..vo.checked_add(n)?)?;
                     (Value::Text(String::from_utf8_lossy(bytes).into_owned()), n)
                 }
@@ -465,11 +467,12 @@ fn attribute(att: &[u8]) -> Option<(u32, u32, u32, u32, usize)> {
         let name_end = o.checked_add(4)?.checked_add(nl.checked_mul(2)?)?;
         let name = att.get(o + 4..name_end.min(att.len()))?;
         if is_key(name, "Parameter") {
-            let n = size.checked_sub(4 + nl * 2)? / 4;
+            let used = 4usize.checked_add(nl.checked_mul(2)?)?;
+            let n = size.checked_sub(used)? / 4;
             if n < 9 {
                 return None;
             }
-            let p = |k: usize| be_u32(att, name_end + k * 4);
+            let p = |k: usize| be_u32(att, name_end.checked_add(k.checked_mul(4)?)?);
             return Some((p(0)?, p(1)?, p(2)?, p(3)?, p(8)? as usize));
         }
         o = o.checked_add(size)?;
@@ -592,13 +595,14 @@ fn collect_tiles(body: &[u8], plane: usize, grids: &mut Vec<(usize, Vec<(u32, Ti
     for pi in 0..count {
         let Some(seg) = raw.get(pi * plane..(pi + 1) * plane) else { break };
         let Some(t) = tile(seg, tw, th, plane) else { continue };
-        let slot = match grids.iter_mut().find(|(p, _)| *p == pi) {
-            Some(s) => &mut s.1,
+        let at = match grids.iter().position(|(p, _)| *p == pi) {
+            Some(at) => at,
             None => {
                 grids.push((pi, Vec::new()));
-                &mut grids.last_mut().expect("just pushed").1
+                grids.len() - 1
             }
         };
+        let slot = &mut grids[at].1;
         match slot.iter_mut().find(|(i, _)| *i == idx) {
             Some(existing) => existing.1 = t,
             None => slot.push((idx, t)),
@@ -630,10 +634,15 @@ fn assemble(tiles: &[(u32, Tile)], w: u32, h: u32, cols: u32, rows: u32) -> Opti
         if r >= rows || c >= cols {
             continue;
         }
-        let (x0, y0) = ((c * bw) as usize, (r * bh) as usize);
-        if x0 >= ow as usize {
+        // Widened before the multiply, not after: `cols` and the tile size are
+        // both read straight out of the file, and a corrupted pair whose product
+        // leaves `u32` must land outside the image rather than wrap into it.
+        let x0 = c as u64 * bw as u64;
+        let y0 = r as u64 * bh as u64;
+        if x0 >= ow as u64 || y0 >= oh as u64 {
             continue;
         }
+        let (x0, y0) = (x0 as usize, y0 as usize);
         let n = (bw as usize).min(ow as usize - x0);
         for ty in 0..bh as usize {
             let y = y0 + ty;
@@ -740,6 +749,10 @@ mod tests {
         assert_eq!(total, 124, "124 tips across the corpus");
         assert!(fallbacks.is_empty(), "every corpus tip is pixel source; fell back: {fallbacks:?}");
         assert!(max_diff <= TRUST_MAX_DIFF, "worst agreement with CSP's preview was {max_diff}");
+        println!(
+            "corpus: {} files, {with_tips} yielding, {total} tips, worst diff {max_diff:.3}",
+            files.len()
+        );
     }
 
     #[test]
@@ -794,6 +807,24 @@ mod tests {
         assert_eq!(v[1].as_int(), Some(-1));
         assert_eq!(v[2].as_text(), Some("tabl"));
         assert_eq!(v[3].as_blob(), Some(&[0xDE, 0xAD][..]));
+    }
+
+    #[test]
+    fn a_tile_origin_past_u32_lands_outside_the_image_rather_than_wrapping() {
+        // 90_000 columns of 50_000 px is 4.5e9, past `u32::MAX`: multiplied at
+        // u32 that panics in debug and wraps to 205_032_704 in release, which
+        // would blit a tile into the middle of a 16 px image.
+        let big = vec![(90_000u32, Tile { w: 50_000, h: 1, px: vec![255; 50_000] })];
+        assert!(assemble(&big, 16, 16, 100_000, 1).is_none(), "nothing was written");
+
+        // The ordinary grid still lands where it should.
+        let ok = vec![
+            (0u32, Tile { w: 2, h: 2, px: vec![1, 2, 3, 4] }),
+            (1u32, Tile { w: 2, h: 2, px: vec![5, 6, 7, 8] }),
+        ];
+        let img = assemble(&ok, 4, 2, 2, 1).unwrap();
+        assert_eq!(img.dimensions(), (4, 2));
+        assert_eq!(img.into_raw(), vec![1, 2, 5, 6, 3, 4, 7, 8]);
     }
 
     #[test]
