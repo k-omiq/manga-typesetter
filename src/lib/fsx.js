@@ -225,4 +225,11 @@ export const fsx = {
   async homeDir() {
     return (await path()).homeDir();
   },
+  // Where app-wide data lives - the brush library, and anything else that
+  // belongs to the install rather than to a project. On every platform this
+  // sits inside the home directory, so it is already inside the one filesystem
+  // scope this app is granted (see src-tauri/capabilities/default.json).
+  async appDataDir() {
+    return (await path()).appDataDir();
+  },
 };
