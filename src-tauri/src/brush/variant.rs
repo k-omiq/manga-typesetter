@@ -168,7 +168,9 @@ struct Row(HashMap<&'static str, f64>);
 
 impl Row {
     fn num(&self, key: &str) -> Option<f64> {
-        self.0.get(key).copied()
+        // A NaN or infinity would survive every clamp below and then fail the
+        // whole IPC reply at serialisation, so it is dropped like a non-number.
+        self.0.get(key).copied().filter(|v| v.is_finite())
     }
 
     fn int(&self, key: &str) -> Option<i64> {

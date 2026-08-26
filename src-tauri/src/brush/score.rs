@@ -123,8 +123,19 @@ impl Scorer {
             }
         }
         // The pixels were unreadable or did not match. The thumbnail is small
-        // but it is certainly this brush, so ship it and say so.
-        oracle.map(|image| Tip { image, source: TipSource::Thumbnail, diff: best_diff })
+        // but it is certainly this brush, so ship it and say so. CSP caps its
+        // own thumbnails at 300 px; a file that does not is cut down to the
+        // promised size rather than trusted.
+        oracle.map(|image| {
+            let (w, h) = image.dimensions();
+            let side = w.max(h);
+            let image = if side > 300 {
+                fit(&image, w * 300 / side, h * 300 / side)
+            } else {
+                image
+            };
+            Tip { image, source: TipSource::Thumbnail, diff: best_diff }
+        })
     }
 }
 
