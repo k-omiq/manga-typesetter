@@ -1,5 +1,5 @@
-// `pub` because nothing calls into it yet: the `.sut` parser lands before the
-// command that will reach it, and a private module with no caller is dead code.
+// `pub` because the `.sut` parser and its scorer are reachable from the crate's
+// tests as well as from the `brush_import` command below.
 pub mod brush;
 mod detect;
 mod durability;
@@ -19,6 +19,7 @@ pub fn run() {
       detect::engine::detect_models_cache,
       detect::engine::detect_models_cache_clear,
       detect::engine::detect_health,
+      brush::brush_import,
       memory::process_memory,
       durability::fsync_path
     ])
