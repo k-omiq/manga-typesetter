@@ -22,6 +22,17 @@
 
   let { open = $bindable() } = $props();
 
+  // ---------- tabs ----------
+  // Same shape as the Inspector's strip: a handful of panes, one job each,
+  // instead of one long scroll where the section you want is always elsewhere.
+  const TABS = [
+    { id: 'general', label: 'General', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3" /><path d="M1 14h6M9 8h6M17 16h6" /></svg>' },
+    { id: 'typesetting', label: 'Typesetting', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7V4h16v3" /><path d="M9 20h6" /><path d="M12 4v16" /></svg>' },
+    { id: 'shortcuts', label: 'Shortcuts', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6" /></svg>' },
+    { id: 'system', label: 'System', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" /></svg>' },
+  ];
+  let tab = $state('general');
+
   // ---------- shortcuts ----------
   // The registry is a fixed list; only which combo each row shows is reactive,
   // and that comes from `comboFor` reading the preferences.
@@ -291,7 +302,30 @@
       </button>
     </div>
 
+    <div class="set-tabs" role="tablist" aria-label="Settings sections">
+      {#each TABS as t (t.id)}
+        <button
+          role="tab"
+          id="set-tab-{t.id}"
+          class="set-tab"
+          class:on={tab === t.id}
+          aria-selected={tab === t.id}
+          aria-controls="set-pane-{t.id}"
+          onclick={() => {
+            // A row waiting for keys stops waiting when its pane goes away.
+            if (capturing) { capture.end(); capturing = null; captureErr = ''; }
+            tab = t.id;
+          }}
+        >
+          {@html t.icon}
+          <span>{t.label}</span>
+        </button>
+      {/each}
+    </div>
+
     <div class="modal-body">
+      {#if tab === 'general'}
+      <div class="set-pane" role="tabpanel" id="set-pane-general" aria-labelledby="set-tab-general">
       <div class="settings-section">
         <div class="settings-title">APPEARANCE</div>
         <div class="field">
@@ -319,6 +353,56 @@
         <div class="qhint">Puts the Text Box Options and Text Queue windows back to their starting size and place.</div>
       </div>
 
+      <div class="settings-section">
+        <div class="settings-title">LIBRARY</div>
+        <div class="field">
+          <span>Folder</span>
+          <code class="path" title={library.root}>{library.root}</code>
+        </div>
+        <button
+          class="btn"
+          disabled={!isTauri() || !!app.chapterRef}
+          title={app.chapterRef ? 'Close the open chapter first' : 'Pick a different library folder'}
+          onclick={chooseRoot}
+        >
+          Change folder…
+        </button>
+        {#if app.chapterRef}
+          <div class="qhint">Close the open chapter before changing the library folder.</div>
+        {/if}
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-title">EXPORT</div>
+        <div class="model-card">
+          <div class="mc-top">
+            <div class="mc-title">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+              <div>
+                <div class="mc-name">Default export folder</div>
+                <div class="mc-sub path" title={app.exportDir || ''}>
+                  {app.exportDir || 'Not set - the export dialog asks each time'}
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="mc-desc">Where <b>Export</b> saves by default. You can still choose a different folder at export time.</p>
+          <div class="mc-actions">
+            <button class="btn" disabled={!isTauri()} onclick={onChangeExportDir}>Change…</button>
+            {#if app.exportDir}
+              <button class="btn" onclick={() => { saveExportPrefs('', app.exportName); toast('Cleared default export folder'); }}>Clear</button>
+            {/if}
+          </div>
+          {#if !isTauri()}
+            <div class="qhint">Choosing a folder needs the desktop app; browser exports download to your default location.</div>
+          {/if}
+        </div>
+      </div>
+      </div>
+      {/if}
+
+      {#if tab === 'typesetting'}
+      <div class="set-pane" role="tabpanel" id="set-pane-typesetting" aria-labelledby="set-tab-typesetting">
       <!-- The typesetting engine used to hang off every text box as its own
            Inspector sub-menu, which put a half-finished feature in front of
            everyone editing a line of dialogue. It is one preference, it applies
@@ -386,6 +470,11 @@
         </div>
       </div>
 
+      </div>
+      {/if}
+
+      {#if tab === 'shortcuts'}
+      <div class="set-pane" role="tabpanel" id="set-pane-shortcuts" aria-labelledby="set-tab-shortcuts">
       <!-- Every key the editor answers to by name. The three contextual ones -
            Escape, Tab and the arrows - are listed at the bottom as what they
            are: fixed, because their meaning depends on what is selected. -->
@@ -443,27 +532,11 @@
           is selected. Hold <b>Shift</b> with an arrow for a bigger nudge.
         </div>
       </div>
-
-      <div class="settings-section">
-        <div class="settings-title">LIBRARY</div>
-        <div class="field">
-          <span>Folder</span>
-          <code class="path" title={library.root}>{library.root}</code>
-        </div>
-        <button
-          class="btn"
-          disabled={!isTauri() || !!app.chapterRef}
-          title={app.chapterRef ? 'Close the open chapter first' : 'Pick a different library folder'}
-          onclick={chooseRoot}
-        >
-          Change folder…
-        </button>
-        {#if app.chapterRef}
-          <div class="qhint">Close the open chapter before changing the library folder.</div>
-        {/if}
       </div>
+      {/if}
 
-
+      {#if tab === 'system'}
+      <div class="set-pane" role="tabpanel" id="set-pane-system" aria-labelledby="set-tab-system">
       <div class="srow">
         <span class="slabel">Detection engine</span>
         <span class="dot {sidecarOk ? 'ok' : app.sidecar?.status === 'error' ? 'err' : 'off'}"></span>
@@ -598,33 +671,6 @@
         </div>
       </div>
 
-      <div class="group-label">Export</div>
-
-      <!-- Default export directory -->
-      <div class="model-card">
-        <div class="mc-top">
-          <div class="mc-title">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
-            <div>
-              <div class="mc-name">Default export folder</div>
-              <div class="mc-sub path" title={app.exportDir || ''}>
-                {app.exportDir || 'Not set - the export dialog asks each time'}
-              </div>
-            </div>
-          </div>
-        </div>
-        <p class="mc-desc">Where <b>Export</b> saves by default. You can still choose a different folder at export time.</p>
-        <div class="mc-actions">
-          <button class="btn" disabled={!isTauri()} onclick={onChangeExportDir}>Change…</button>
-          {#if app.exportDir}
-            <button class="btn" onclick={() => { saveExportPrefs('', app.exportName); toast('Cleared default export folder'); }}>Clear</button>
-          {/if}
-        </div>
-        {#if !isTauri()}
-          <div class="qhint">Choosing a folder needs the desktop app; browser exports download to your default location.</div>
-        {/if}
-      </div>
-
       {#if DEV}
         <div class="group-label">Developer</div>
 
@@ -657,11 +703,68 @@
           {/if}
         </div>
       {/if}
+      </div>
+      {/if}
     </div>
   </div>
 </div>
 
 <style>
+  /* The tab strip, same grammar as the Inspector's: icon over label, the open
+     one filled with the accent. It lives between the head and the scrolling
+     body, so it never scrolls away. */
+  .set-tabs {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(64px, 1fr));
+    gap: 4px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .set-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    height: 46px;
+    padding: 0 2px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--t2);
+    font-family: inherit;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    cursor: pointer;
+    min-width: 0;
+  }
+  .set-tab :global(svg) {
+    width: 18px;
+    height: 18px;
+  }
+  .set-tab span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  .set-tab:hover {
+    color: var(--text);
+    background: var(--surface);
+  }
+  .set-tab.on {
+    color: var(--accent-fg);
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .set-tab:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
   .srow {
     display: flex;
     align-items: center;
