@@ -1,0 +1,53 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Rust / Tauri build output
+src-tauri/target
+
+# Python: untracked FLUX inpainting server, its venv and weight caches
+python/.venv
+python/**/__pycache__
+python/_*.json
+python/_*.txt
+python/build-sidecar/
+
+# Downloaded ML model caches (multi-GB HF snapshots, never commit)
+python/models/
+
+# Vendored upstream clones (GPL; re-fetched from their own repos)
+external/
+
+# Copyrighted sample manga + hand-made translation sample
+tsuki117raw/
+tsuki117.json
+
+# Prebuilt binaries / build artifacts
+*.exe
+
+# Editor and OS files
+.vscode
+.idea
+.claude
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Local packaged build artifacts (unsigned dev bundles)
+dist-app/
+
+# Internal working notes stay local
+docs/

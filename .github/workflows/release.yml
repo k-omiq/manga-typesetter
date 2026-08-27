@@ -1,0 +1,184 @@
+name: Release
+
+# Builds signed installers for mac (apple silicon) and windows, then publishes
+# them plus latest.json to the R2 bucket behind https://update-typesetter.komiq.cc.
+# Installed apps poll that URL and offer the update in-app.
+#
+# Trigger: push a tag like v0.2.0 (tag message becomes the release notes),
+# or run manually with workflow_dispatch and type the notes.
+#
+# Required repo secrets:
+#   TAURI_SIGNING_PRIVATE_KEY  - content of the updater signing key
+#   CLOUDFLARE_API_TOKEN       - API token with Account R2 Storage: Edit
+#   CLOUDFLARE_ACCOUNT_ID      - Cloudflare account id
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "Release notes shown in the in-app update dialog"
+        required: false
+        default: ""
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: darwin-aarch64
+          # No intel mac: ort-sys ships no prebuilt onnxruntime for
+          # x86_64-apple-darwin, so the target cannot build.
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+      - run: npm ci
+      - name: Build app
+        run: npx tauri build --target ${{ matrix.target }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+      - name: Collect updater artifacts
+        shell: bash
+        # Renamed to MangaTypesetter_<version>_<platform>.<ext>: the platform tag keeps
+        # the two mac architectures from clobbering each other under one R2 key, and
+        # dropping the space in "Manga Typesetter" keeps update URLs unencoded-safe.
+        run: |
+          set -euo pipefail
+          # node, not python3: the windows runner's git-bash has no reliable python3.
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          OUT="out/${{ matrix.platform }}"
+          PREFIX="MangaTypesetter_${VERSION}_${{ matrix.platform }}"
+          mkdir -p "$OUT"
+          case "${{ matrix.platform }}" in
+            darwin-*)
+              SRC=$(ls "$BUNDLE"/macos/*.app.tar.gz)
+              cp "$SRC" "$OUT/$PREFIX.app.tar.gz"
+              cp "$SRC.sig" "$OUT/$PREFIX.app.tar.gz.sig"
+              DMG=$(ls "$BUNDLE"/dmg/*.dmg 2>/dev/null | head -1 || true)
+              [ -n "$DMG" ] && cp "$DMG" "$OUT/$PREFIX.dmg"
+              ;;
+            windows-*)
+              SRC=$(ls "$BUNDLE"/nsis/*-setup.exe)
+              cp "$SRC" "$OUT/$PREFIX-setup.exe"
+              cp "$SRC.sig" "$OUT/$PREFIX-setup.exe.sig"
+              ;;
+          esac
+          ls -la "$OUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: out/${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Publish to R2
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Resolve release notes
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            NOTES="${{ github.event.inputs.notes }}"
+          else
+            git fetch --depth=1 origin +refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}
+            NOTES=$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}")
+          fi
+          # Lightweight tags have no message; don't publish empty notes.
+          [ -n "$NOTES" ] || NOTES="Release ${GITHUB_REF_NAME:-$(date -u +%Y-%m-%d)}"
+          {
+            echo "notes<<NOTES_EOF"
+            echo "$NOTES"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build latest.json and upload
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RELEASE_NOTES: ${{ steps.notes.outputs.notes }}
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          if [ "${{ github.event_name }}" = "push" ] && [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match tauri.conf.json version v${VERSION} - bump the version before tagging" >&2
+            exit 1
+          fi
+          BASE_URL="https://update-typesetter.komiq.cc"
+          BUCKET="typesetter-updates"
+          echo "== publishing v$VERSION =="
+
+          python3 - "$VERSION" <<'PY'
+          import json, os, sys, glob, datetime
+          version = sys.argv[1]
+          base = "https://update-typesetter.komiq.cc"
+          platforms = {}
+          uploads = []  # (local, remote)
+          for pdir in sorted(glob.glob("artifacts/*")):
+              platform = os.path.basename(pdir)
+              sigs = glob.glob(pdir + "/*.sig")
+              if not sigs:
+                  sys.exit(f"no signature in {pdir}")
+              sig = sigs[0]
+              artifact = sig[:-4]
+              fname = os.path.basename(artifact)
+              remote = f"releases/v{version}/{fname}"
+              platforms[platform] = {
+                  "signature": open(sig).read().strip(),
+                  "url": f"{base}/{remote}",
+              }
+              uploads.append((artifact, remote))
+              for extra in glob.glob(pdir + "/*.dmg"):
+                  uploads.append((extra, f"releases/v{version}/{os.path.basename(extra)}"))
+          out = {
+              "version": version,
+              "notes": os.environ.get("RELEASE_NOTES", "").strip(),
+              "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "platforms": platforms,
+          }
+          json.dump(out, open("latest.json", "w"), indent=2)
+          json.dump([list(u) for u in uploads], open("uploads.json", "w"))
+          print(json.dumps(out, indent=2))
+          PY
+
+          npm i -g wrangler >/dev/null 2>&1
+          python3 -c "import json; [print(f'{l}\t{r}') for l, r in json.load(open('uploads.json'))]" | while IFS=$'\t' read -r LOCAL REMOTE; do
+            echo "uploading $REMOTE"
+            wrangler r2 object put "$BUCKET/$REMOTE" --file "$LOCAL" --remote
+          done
+          wrangler r2 object put "$BUCKET/latest.json" --file latest.json --remote
+          echo "== published: $BASE_URL/latest.json =="

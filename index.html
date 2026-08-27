@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Manga Typesetter</title>
+    <!-- The theme, before anything is painted. Everything in styles.css themes
+         off [data-theme] on this element, and the only other writer of it is
+         initTheme() in src/lib/theme.svelte.js - which runs from App's onMount,
+         i.e. after the module graph has loaded and the first frame is already on
+         screen. That is a visible flash of the wrong theme, and it got worse when
+         the preference gained a 'system' state: it used to hit only users who had
+         explicitly chosen dark, and now it hits every dark-OS user who has never
+         opened Settings. Inline and blocking, in the head, ahead of the
+         stylesheet, so the attribute is on the root before the first paint.
+
+         The duplication is deliberate and has to stay honest: KEY mirrors
+         theme.svelte.js's `mt.theme`, and the resolution rule mirrors its
+         `apply()` - 'light'/'dark' are an explicit choice, anything else
+         (including no stored value, and including a value from an older build)
+         follows the OS. A module import cannot be used here: it would be
+         deferred, which is exactly the problem being fixed. -->
+    <script>
+      (function () {
+        var saved = null;
+        try {
+          saved = localStorage.getItem('mt.theme');
+        } catch (e) {
+          /* private mode, blocked storage - fall through to the system */
+        }
+        var resolved =
+          saved === 'light' || saved === 'dark'
+            ? saved
+            : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
+        document.documentElement.dataset.theme = resolved;
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- The built-in families, and the exact set of faces the app promises for
+         them. BUILTIN_FONTS in src/lib/data.js carries a `faces` map that has
+         to say the same thing this URL says: a face requested here is real, and
+         a face missing here is one the browser will synthesise. The `ital` axis
+         is on the three families that actually have italics upstream (Comic
+         Neue, Nunito, Playfair Display) - faux italic is not acceptable in
+         lettering, so where a real slant exists it gets loaded. Bangers,
+         Patrick Hand, Permanent Marker and Architects Daughter have no italic
+         and no bold to load; their `faces` map admits that. -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:ital,wght@0,400;0,700;1,400;1,700&family=Patrick+Hand&family=Permanent+Marker&family=Architects+Daughter&family=Nunito:ital,wght@0,400;0,700;0,800;1,400;1,700;1,800&family=Playfair+Display:ital,wght@0,500;0,700;1,500;1,700&family=Luckiest+Guy&family=Creepster&family=Nosifer&family=Eater&family=Special+Elite&family=Rock+Salt&family=Fredericka+the+Great&family=Indie+Flower&family=Gloria+Hallelujah&family=Shadows+Into+Light&family=Kalam:wght@400;700&family=Caveat:wght@400;700&family=Amatic+SC:wght@400;700&family=Bebas+Neue&family=Anton&family=Oswald:wght@400;700&family=Black+Ops+One&family=Bungee&family=Chewy&family=Boogaloo&family=Press+Start+2P&family=Cinzel:wght@400;700&family=Mansalva&family=Sedgwick+Ave&family=Grandstander:ital,wght@0,400;0,700;1,400;1,700&family=Delius&family=Schoolbell&family=Walter+Turncoat&family=Just+Another+Hand&family=Mouse+Memoirs&family=Lilita+One&family=Titan+One&family=Sigmar+One&family=Rubik+Mono+One&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
