@@ -914,13 +914,13 @@ export function inkExtent(ink) {
 // edge in its own pixels, and CSP ignores the setting for a pattern tip in the
 // same way. The stroke still stores it, for the moment the letterer switches
 // the same settings back to round.
-function stampRound(ctx, s, color, hardness, flatness) {
+function stampRound(ctx, s, alpha, color, hardness, flatness) {
   const r = s.size / 2;
   ctx.save();
   ctx.translate(s.x, s.y);
   if (s.angle) ctx.rotate((s.angle * Math.PI) / 180);
   if (flatness !== 1) ctx.scale(1, flatness);
-  ctx.globalAlpha = s.alpha;
+  ctx.globalAlpha = alpha;
   if (hardness >= 100) {
     ctx.fillStyle = color;
   } else {
@@ -966,9 +966,14 @@ function stampRound(ctx, s, color, hardness, flatness) {
 // mostly bookkeeping.
 const MIP_MIN = 32;
 
-// How many colours of one tip are kept. A stroke is one colour and the panel's
-// preview is often another; a third is a colour nobody is drawing with any more.
-const TINT_SLOTS = 2;
+// How many colours of one tip are kept. Two was too tight: a page that letters
+// in three colours with one brush evicts a chain it is about to need again, and
+// the rebuild is a full-canvas tint - up to 2048 x 2048 - run synchronously in
+// the middle of a pointer move. Four covers a page's palette, and the memory it
+// can cost is bounded on both sides: a chain is at most TINT_MAX squared of
+// RGBA plus its halvings, so 16 MB and change, four of them is ~67 MB per tip,
+// and how many tips can be alive at once is the library's own 24 MP budget.
+const TINT_SLOTS = 4;
 
 // The longest side a tinted chain is built at. The corpus has tips up to
 // 2352 x 11394, and a tinted copy of one is 107 MB of canvas held for as long
@@ -1108,7 +1113,7 @@ export function pickTipLevel(levels, devicePx) {
 // a tall tip stays tall and a stroke's size means the same thing whichever
 // brush is loaded; `flatness` then squashes the tip's own y axis, exactly as it
 // squashes the round dab's, so the two tips read the same at the same setting.
-function stampTip(ctx, s, levels, natural, flatness, smooth, scale) {
+function stampTip(ctx, s, alpha, levels, natural, flatness, smooth, scale) {
   const [nw, nh] = natural;
   const f = s.size / Math.max(nw, nh);
   const dw = nw * f;
@@ -1118,13 +1123,15 @@ function stampTip(ctx, s, levels, natural, flatness, smooth, scale) {
   ctx.translate(s.x, s.y);
   if (s.angle) ctx.rotate((s.angle * Math.PI) / 180);
   if (flatness !== 1) ctx.scale(1, flatness);
-  ctx.globalAlpha = s.alpha;
+  ctx.globalAlpha = alpha;
   // The pixel look CSP gives with anti-aliasing off starts here: a tip drawn
   // through a smoothing resample would arrive with a soft edge for the snap to
   // find, and half of it would land on the wrong side.
   ctx.imageSmoothingEnabled = smooth;
   if (smooth) ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(pickTipLevel(levels, Math.max(dw, dh) * scale), -dw / 2, -dh / 2, dw, dh);
+  // The tip's longest side IS the stamp's size, so that - through the
+  // transform - is the device size the chain has to answer for.
+  ctx.drawImage(pickTipLevel(levels, s.size * scale), -dw / 2, -dh / 2, dw, dh);
   ctx.restore();
 }
 
@@ -1296,9 +1303,13 @@ export function drawInk(ctx, ink, makeCanvas, tips) {
     const tip = tipFor(k, tips);
     const levels = tip ? tipLevels(tip, k.color, alloc) : null;
     const natural = levels ? tipSize(tip) : null;
+    // The alpha is an argument rather than a field of the stamp, because the
+    // layer below draws every stamp at full strength and the stroke's own
+    // opacity is applied once to the finished layer. Cloning each stamp to say
+    // so allocated an object per dab per frame while the pointer was down.
     const stamp = levels
-      ? (c, s) => stampTip(c, s, levels, natural, k.flatness, k.antialias !== false, scale)
-      : (c, s) => stampRound(c, s, k.color, k.hardness, k.flatness);
+      ? (c, st, alpha) => stampTip(c, st, alpha, levels, natural, k.flatness, k.antialias !== false, scale)
+      : (c, st, alpha) => stampRound(c, st, alpha, k.color, k.hardness, k.flatness);
     const solid = k.opacity >= 0.999;
     const water = wantsWaterEdge(k);
     // Three reasons to detour through a layer: a translucent stroke must not
@@ -1307,7 +1318,7 @@ export function drawInk(ctx, ink, makeCanvas, tips) {
     // watercolour edge is a pass over that finished shape too.
     const layered = !solid || k.antialias === false || water;
     if (!layered) {
-      for (const s of stamps) stamp(ctx, s);
+      for (const s of stamps) stamp(ctx, s, s.alpha);
       continue;
     }
     // The layer is only as big as the target; the caller's transform already
@@ -1316,7 +1327,7 @@ export function drawInk(ctx, ink, makeCanvas, tips) {
     const layer = alloc(ctx.canvas.width, ctx.canvas.height);
     const lctx = layer.getContext('2d');
     lctx.setTransform(t);
-    for (const s of stamps) stamp(lctx, { ...s, alpha: 1 });
+    for (const s of stamps) stamp(lctx, s, 1);
     if (water) {
       // Once per stroke, over its own layer, and before the anti-aliasing snap
       // below: the edge is drawn on the soft alpha the stamps left, and the

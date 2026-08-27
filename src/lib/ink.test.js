@@ -1016,9 +1016,9 @@ describe('the tinted mip chain', () => {
     expect(tip.tinted.get('#000000').map((c) => [c.width, c.height])).toEqual([[TINT_MAX, 32]]);
   });
 
-  it('keeps at most two colours of one tip', () => {
+  it('keeps a page\'s palette of one tip and then lets the oldest go', () => {
     const tip = tipOf('big', BIG.image);
-    for (const color of ['#000000', '#ff0000', '#00ff00']) {
+    for (const color of ['#101010', '#000000', '#ff0000', '#00ff00', '#0000ff']) {
       drawInk(
         canvasOf(TW, TH).getContext('2d'),
         { on: true, strokes: [normalizeInkStroke(dab({ brush: 'big', color }))] },
@@ -1026,8 +1026,11 @@ describe('the tinted mip chain', () => {
         tipMap(tip),
       );
     }
-    expect(tip.tinted.size).toBe(2);
-    expect([...tip.tinted.keys()]).toEqual(['#ff0000', '#00ff00']);
+    // Four is a page's worth: a letterer who inks in three colours with one
+    // brush must not evict a chain they are about to need again, because the
+    // rebuild is a full-canvas tint in the middle of a pointer move.
+    expect(tip.tinted.size).toBe(4);
+    expect([...tip.tinted.keys()]).toEqual(['#000000', '#ff0000', '#00ff00', '#0000ff']);
   });
 });
 
