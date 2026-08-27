@@ -229,7 +229,15 @@ export const fsx = {
   // belongs to the install rather than to a project. On every platform this
   // sits inside the home directory, so it is already inside the one filesystem
   // scope this app is granted (see src-tauri/capabilities/default.json).
+  //
+  // Null wherever there is no Tauri host, which is `assetUrl`'s convention
+  // above rather than `homeDir`'s: this is a path the plugin resolves by IPC,
+  // so in the browser dev server and the test runner the real call throws a
+  // TypeError about `__TAURI_INTERNALS__` rather than failing as a filesystem
+  // call would. Callers get an answer they can test instead of an exception
+  // from inside a dynamic import.
   async appDataDir() {
+    if (!inTauri()) return null;
     return (await path()).appDataDir();
   },
 };

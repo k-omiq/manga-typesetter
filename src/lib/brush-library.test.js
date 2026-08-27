@@ -16,8 +16,13 @@ vi.mock('./fsx.js', () => {
       // The seam a test uses to break one write - see "reports a tip it could
       // not write". Keyed by path; the value is the message to throw.
       _fail: new Map(),
+      // The seam a test uses to make one write slow: path -> how many ticks it
+      // takes. A concurrency test needs to choose who finishes first rather
+      // than hoping the microtask order obliges.
+      _slow: new Map(),
+      // Null without a host, exactly as the real one is.
       async appDataDir() {
-        return '/appdata';
+        return globalThis.window?.__TAURI_INTERNALS__ ? '/appdata' : null;
       },
       async join(...parts) {
         return parts.join('/');
@@ -37,6 +42,10 @@ vi.mock('./fsx.js', () => {
         return tree.files.get(p);
       },
       async writeTextFileAtomic(p, c) {
+        // A real write is a round trip. Yielding here is what gives two
+        // concurrent writers a window to interleave in, which is the whole of
+        // what the queue exists to close.
+        await Promise.resolve();
         if (this._fail.has(p)) throw new Error(this._fail.get(p));
         requireParent(p);
         tree.files.set(p, c);
@@ -46,6 +55,7 @@ vi.mock('./fsx.js', () => {
         return tree.files.get(p);
       },
       async writeFileAtomic(p, bytes) {
+        for (let i = 0, n = this._slow.get(p) ?? 1; i < n; i++) await Promise.resolve();
         if (this._fail.has(p)) throw new Error(this._fail.get(p));
         requireParent(p);
         tree.files.set(p, bytes);
@@ -59,15 +69,22 @@ vi.mock('./fsx.js', () => {
 });
 
 // What the Rust command answers with. `h.result` is the next ImportResult;
-// `h.throws` makes the invoke itself fail, the way a command that is not
-// registered does.
-const h = vi.hoisted(() => ({ calls: [], result: null, throws: null }));
+// `h.byPath` answers per requested path instead, which is how two imports can
+// be in flight at once with different payloads; `h.throws` makes the invoke
+// itself fail, the way a command that is not registered does.
+const h = vi.hoisted(() => ({ calls: [], result: null, byPath: null, throws: null }));
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke(cmd, args) {
+  async invoke(cmd, args) {
     h.calls.push([cmd, args]);
-    if (h.throws) return Promise.reject(new Error(h.throws));
-    return Promise.resolve(h.result);
+    if (h.throws) throw new Error(h.throws);
+    if (h.byPath) {
+      // A real command is a round trip; yielding here is what lets two callers
+      // actually interleave rather than running one after the other by luck.
+      await Promise.resolve();
+      return { brushes: args.paths.flatMap((p) => h.byPath[p] ?? []), errors: [] };
+    }
+    return h.result;
   },
 }));
 
@@ -80,12 +97,14 @@ const {
   getBrush,
   resolveBrush,
   brushTip,
+  forgetBrushTips,
   removeBrush,
   brushDir,
   sanitiseBrushSettings,
   __resetBrushLibrary,
   BUILTIN_BRUSH,
   INDEX_SCHEMA,
+  TIP_BUDGET_PX,
 } = await import('./brush-library.svelte.js');
 
 const DIR = '/appdata/brushes';
@@ -131,9 +150,12 @@ beforeEach(() => {
   fsx._tree.dirs.clear();
   fsx._tree.files.clear();
   fsx._fail.clear();
+  fsx._slow.clear();
   h.calls.length = 0;
   h.result = null;
+  h.byPath = null;
   h.throws = null;
+  delete globalThis.createImageBitmap;
   __resetBrushLibrary();
   withTauri();
 });
@@ -180,6 +202,21 @@ describe('loading', () => {
     );
     await loadBrushLibrary();
     expect(installedBrushes.map((b) => b.id)).toEqual(['good']);
+  });
+
+  it('ignores a pngFile a hand edit put in the index', async () => {
+    await fsx.mkdir(DIR);
+    fsx._tree.files.set(
+      INDEX,
+      JSON.stringify({
+        schema: 1,
+        brushes: [{ id: 'aaa', name: 'Ink', pngFile: '../../../Documents/thesis.png' }],
+      }),
+    );
+    await loadBrushLibrary();
+    // Derived from the id, which is already known to be a plain name - so a
+    // later removeBrush unlinks a tip and never somebody's document.
+    expect(installedBrushes[0].pngFile).toBe('aaa.png');
   });
 
   it('tolerates a corrupt library.json and leaves the folder alone', async () => {
@@ -294,6 +331,94 @@ describe('importBrushes', () => {
     expect(out).toEqual({ added: 0, replaced: 0, previewQuality: 0, errors: [] });
     expect(h.calls).toHaveLength(0);
   });
+
+  it('installs one brush when a batch yields the same id twice', async () => {
+    // The same file selected twice, or two copies of it under other names - the
+    // id is hashed from the bytes, so both come back as one brush.
+    h.result = { brushes: [brush('aaa'), brush('aaa', { name: 'Copy' })], errors: [] };
+    const out = await importBrushes(['/x/one.sut', '/x/one-again.sut']);
+    expect(out).toEqual({ added: 1, replaced: 0, previewQuality: 0, errors: [] });
+    expect(installedBrushes.map((b) => b.id)).toEqual(['aaa']);
+    expect(getBrush('aaa').name).toBe('Brush aaa');
+  });
+
+  it('does not let two imports in flight at once clobber each other', async () => {
+    // One import first, so the lazily-imported Tauri module and the resolved
+    // folder are both warm and the two below really do race rather than one
+    // waiting on the other's module load.
+    h.result = { brushes: [brush('zzz')], errors: [] };
+    await importBrushes(['/x/warm.sut']);
+
+    h.result = null;
+    h.byPath = { '/x/one.sut': [brush('aaa')], '/x/two.sut': [brush('bbb')] };
+    // The first import's tip takes its time, so the second would otherwise
+    // finish and commit while the first still holds the pre-import list.
+    fsx._slow.set(`${DIR}/aaa.png`, 20);
+    const [r1, r2] = await Promise.all([
+      importBrushes(['/x/one.sut']),
+      importBrushes(['/x/two.sut']),
+    ]);
+    expect(r1.added).toBe(1);
+    expect(r2.added).toBe(1);
+    // Both survive: the second import read the list only once the first had
+    // committed, rather than building its index from the same starting point.
+    expect(installedBrushes.map((b) => b.id).sort()).toEqual(['aaa', 'bbb', 'zzz']);
+    expect(
+      JSON.parse(fsx._tree.files.get(INDEX))
+        .brushes.map((b) => b.id)
+        .sort(),
+    ).toEqual(['aaa', 'bbb', 'zzz']);
+  });
+
+  it('does not let a removal in flight lose a concurrent import', async () => {
+    h.result = { brushes: [brush('aaa'), brush('bbb')], errors: [] };
+    await importBrushes(['/x/one.sut']);
+    h.byPath = { '/x/two.sut': [brush('ccc')] };
+    const [gone, imported] = await Promise.all([
+      removeBrush('aaa'),
+      importBrushes(['/x/two.sut']),
+    ]);
+    expect(gone).toBe(true);
+    expect(imported.added).toBe(1);
+    expect(installedBrushes.map((b) => b.id).sort()).toEqual(['bbb', 'ccc']);
+    expect(
+      JSON.parse(fsx._tree.files.get(INDEX))
+        .brushes.map((b) => b.id)
+        .sort(),
+    ).toEqual(['bbb', 'ccc']);
+  });
+});
+
+describe('an index from a newer version', () => {
+  beforeEach(async () => {
+    await fsx.mkdir(DIR);
+    fsx._tree.files.set(
+      INDEX,
+      JSON.stringify({ schema: INDEX_SCHEMA + 1, brushes: [{ id: 'aaa', name: 'Future' }] }),
+    );
+    await loadBrushLibrary();
+  });
+
+  it('loads nothing and says why, rather than reading the rows it recognises', () => {
+    expect(installedBrushes).toHaveLength(0);
+    expect(brushLibrary.readOnly).toBe(true);
+    expect(brushLibrary.error).toMatch(/newer version/i);
+  });
+
+  it('refuses to import over it', async () => {
+    h.result = { brushes: [brush('bbb')], errors: [] };
+    const out = await importBrushes(['/x/one.sut']);
+    expect(out.added).toBe(0);
+    expect(out.errors[0].error).toMatch(/newer version/i);
+    // The command is never even asked, and the index is exactly as it was.
+    expect(h.calls).toHaveLength(0);
+    expect(JSON.parse(fsx._tree.files.get(INDEX)).schema).toBe(INDEX_SCHEMA + 1);
+  });
+
+  it('refuses to remove from it', async () => {
+    expect(await removeBrush('aaa')).toBe(false);
+    expect(JSON.parse(fsx._tree.files.get(INDEX)).schema).toBe(INDEX_SCHEMA + 1);
+  });
 });
 
 describe('id stability', () => {
@@ -368,6 +493,111 @@ describe('brushTip', () => {
     await loadBrushLibrary();
     expect(await brushTip('aaa')).toBe(null);
   });
+
+  it('drops the raw PNG once there is a decoded image to draw with', async () => {
+    fakeDecoder();
+    const tip = await brushTip('aaa');
+    expect(tip.image).toBeTruthy();
+    // Held once, not twice: the bitmap is the drawable and the PNG behind it is
+    // dead weight the moment it exists.
+    expect(tip.bytes).toBe(null);
+  });
+});
+
+// A decoder the node runner does not have. Returns the list of bitmaps that
+// have been close()d, which is the whole of the lifetime contract.
+function fakeDecoder() {
+  const closed = [];
+  globalThis.createImageBitmap = async () => ({
+    width: 1,
+    height: 1,
+    close() {
+      closed.push(this);
+    },
+  });
+  return closed;
+}
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+describe('the tip cache', () => {
+  // 10 MP each, so two fit inside the budget and three do not.
+  const BIG = { width: 4000, height: 2500 };
+
+  beforeEach(async () => {
+    h.result = { brushes: [brush('aaa', BIG), brush('bbb', BIG), brush('ccc', BIG)], errors: [] };
+    await importBrushes(['/x/one.sut']);
+  });
+
+  it('is bounded by a decoded-pixel budget, not by brush count', () => {
+    // 24 MP is ~96 MB of RGBA. The corpus's largest tip alone decodes to 107 MB,
+    // so an unbounded cache is a webview OOM rather than a slow leak.
+    expect(TIP_BUDGET_PX).toBe(24_000_000);
+    expect(BIG.width * BIG.height * 3).toBeGreaterThan(TIP_BUDGET_PX);
+  });
+
+  it('evicts the least recently used tip when the budget is passed', async () => {
+    const a1 = await brushTip('aaa');
+    const c1 = await brushTip('ccc');
+    await brushTip('bbb'); // 30 MP cached; aaa is oldest and goes
+
+    // ccc was used after aaa and is still the same object.
+    expect(await brushTip('ccc')).toBe(c1);
+    // A re-read is how an eviction is visible: the file answers differently now.
+    fsx._tree.files.set(`${DIR}/aaa.png`, Uint8Array.from([9, 9, 9]));
+    const a2 = await brushTip('aaa');
+    expect(a2).not.toBe(a1);
+    expect([...a2.bytes]).toEqual([9, 9, 9]);
+  });
+
+  it('counts a hit as a use, so touching a tip saves it from the next eviction', async () => {
+    const a1 = await brushTip('aaa');
+    const b1 = await brushTip('bbb');
+    expect(await brushTip('aaa')).toBe(a1); // touch: bbb is now the oldest
+    await brushTip('ccc');
+
+    expect(await brushTip('aaa')).toBe(a1);
+    fsx._tree.files.set(`${DIR}/bbb.png`, Uint8Array.from([7]));
+    const b2 = await brushTip('bbb');
+    expect(b2).not.toBe(b1);
+  });
+
+  it('lets go of an evicted bitmap without closing it', async () => {
+    const closed = fakeDecoder();
+    await brushTip('aaa');
+    await brushTip('bbb');
+    await brushTip('ccc');
+    await flush();
+    // A painter mid-frame may still hold the evicted one; closing it under
+    // drawImage throws, so eviction only drops the reference.
+    expect(closed).toHaveLength(0);
+  });
+
+  it('lets go of a removed brush without closing its bitmap either', async () => {
+    const closed = fakeDecoder();
+    await brushTip('aaa');
+    await removeBrush('aaa');
+    await flush();
+    expect(closed).toHaveLength(0);
+  });
+
+  it('closes every bitmap in forgetBrushTips, which is chapter teardown', async () => {
+    const closed = fakeDecoder();
+    await brushTip('aaa');
+    await brushTip('bbb');
+    forgetBrushTips();
+    await flush();
+    expect(closed).toHaveLength(2);
+  });
+
+  it('re-reads a tip that was dropped by a re-import', async () => {
+    const a1 = await brushTip('aaa');
+    h.result = { brushes: [brush('aaa', { ...BIG, tipPng: [5, 5] })], errors: [] };
+    await importBrushes(['/x/one.sut']);
+    const a2 = await brushTip('aaa');
+    expect(a2).not.toBe(a1);
+    expect([...a2.bytes]).toEqual([5, 5]);
+  });
 });
 
 describe('removeBrush', () => {
@@ -416,6 +646,10 @@ describe('without a Tauri host', () => {
 
   it('removes nothing', async () => {
     expect(await removeBrush('aaa')).toBe(false);
+  });
+
+  it('has no brush folder to name', async () => {
+    expect(await brushDir()).toBe(null);
   });
 });
 

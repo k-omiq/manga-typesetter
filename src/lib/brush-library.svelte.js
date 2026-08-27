@@ -19,6 +19,28 @@
 // unreadable index is an empty library that says so, and a plain browser with
 // no Tauri host - `vite dev`, the test runner - is an empty library too. The
 // panel that shows this list has no error path of its own and must not need one.
+//
+// ---------------------------------------------------------------------------
+// THE TIP LIFETIME CONTRACT - read this before stamping with a tip (2.4)
+// ---------------------------------------------------------------------------
+//
+// A decoded tip is an `ImageBitmap`, whose pixels live OUTSIDE the JS heap and
+// are not counted by anything that watches heap size. That corpus tip decodes
+// to 2352 * 11394 * 4 = 107 MB; a hundred of them is the class of leak this app
+// has already had to fix twice. So:
+//
+//   * The cache is bounded by `TIP_BUDGET_PX` decoded pixels and evicts least
+//     recently used first. An evicted tip is simply DROPPED - the cache lets go
+//     of its reference and the collector reclaims the bitmap once the last
+//     painter holding it has finished. It is never `close()`d on eviction,
+//     because a painter mid-frame may still be drawing with it and closing a
+//     bitmap out from under `drawImage` throws.
+//   * `close()` happens in exactly one place, `forgetBrushTips()`, which is for
+//     chapter teardown - the moment when no painter is live.
+//
+// What that asks of a painter: hold a tip across ONE frame, never across a
+// chapter close. Re-ask `brushTip(id)` next frame; a hit is a map lookup, and a
+// miss re-reads a file that is already in the OS page cache.
 import { fsx } from './fsx.js';
 import { defaultBrushSettings } from './brush.js';
 
@@ -31,6 +53,11 @@ export const INDEX_SCHEMA = 1;
 // what a stroke falls back to when its brush is gone.
 export const BUILTIN_BRUSH = 'round';
 
+// How many decoded tip pixels may be cached at once. 24 MP is ~96 MB of RGBA -
+// enough for a working set of a dozen ordinary tips, and small enough that the
+// worst case is a fraction of the webview's budget rather than a multiple of it.
+export const TIP_BUDGET_PX = 24_000_000;
+
 const DIR_NAME = 'brushes';
 const INDEX_NAME = 'library.json';
 
@@ -40,6 +67,10 @@ const SOURCES = ['pixels', 'thumbnail', 'round'];
 
 const NO_HOST =
   'Brush import needs the desktop app; the browser preview cannot read .sut files.';
+
+const FROM_FUTURE =
+  'The brush library was written by a newer version of this app. No brushes are ' +
+  'loaded, and importing is off so nothing here overwrites it. Update to use them.';
 
 // ---------------------------------------------------------------------------
 // State
@@ -58,9 +89,12 @@ export const brushLibrary = $state({
   // True once a load has finished, successfully or not. An empty list plus
   // `loaded` is "you have no brushes"; an empty list without it is "not yet".
   loaded: false,
-  // Set only when the library on disk was there and could not be read. A
+  // Set only when the library on disk was there and could not be used. A
   // missing folder is not an error, and neither is running without Tauri.
   error: '',
+  // The index on disk is from a schema this build does not know. Nothing may be
+  // written over it - see `FROM_FUTURE`.
+  readOnly: false,
 });
 
 // ---------------------------------------------------------------------------
@@ -82,16 +116,21 @@ async function getInvoke() {
 
 let dirCache = null;
 
-// `<appDataDir>/brushes`. Resolved once and remembered; a failure is not
-// remembered, so a call that lost the race with the host coming up can retry.
+// `<appDataDir>/brushes`, or null where there is no app data directory to be
+// inside - which is fsx's convention for a path only a Tauri host can answer
+// (see `assetUrl`). Resolved once and remembered; a failure is not remembered,
+// so a call that lost the race with the host coming up can retry.
 export async function brushDir() {
   if (dirCache) return dirCache;
-  dirCache = await fsx.join(await fsx.appDataDir(), DIR_NAME);
+  const base = await fsx.appDataDir();
+  if (!base) return null;
+  dirCache = await fsx.join(base, DIR_NAME);
   return dirCache;
 }
 
 async function indexPath() {
-  return fsx.join(await brushDir(), INDEX_NAME);
+  const dir = await brushDir();
+  return dir && fsx.join(dir, INDEX_NAME);
 }
 
 // ---------------------------------------------------------------------------
@@ -115,14 +154,11 @@ const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const validId = (id) =>
   typeof id === 'string' && ID_RE.test(id) && !id.includes('..') && id !== BUILTIN_BRUSH;
 
-// A name that resolves to a plain file inside its own directory.
-const isPlainFileName = (name) =>
-  typeof name === 'string' &&
-  name.trim().length > 0 &&
-  !name.includes('/') &&
-  !name.includes('\\') &&
-  name !== '.' &&
-  name !== '..';
+// The tip file for a brush. Derived, never read back off the index: a hand
+// edited `pngFile` is a name this module would go on to pass to `remove`, and
+// the only safe answer to "which file is this brush's?" is the one the id
+// already guarantees is a plain name inside the folder.
+const pngFileFor = (id) => `${id}.png`;
 
 // The settings an import speaks for, and only those.
 //
@@ -186,7 +222,7 @@ function sanitiseEntry(raw) {
     // that had nothing to be graded against, and `Number(null)` is 0 - which
     // would read as a perfect match against CSP's own preview.
     diff: typeof raw.diff === 'number' && Number.isFinite(raw.diff) ? raw.diff : null,
-    pngFile: isPlainFileName(raw.pngFile) ? raw.pngFile : `${id}.png`,
+    pngFile: pngFileFor(id),
     settings: sanitiseBrushSettings(raw.settings),
   };
 }
@@ -201,7 +237,7 @@ const rowOf = (e) => ({
   height: e.height,
   source: e.source,
   diff: e.diff,
-  pngFile: e.pngFile,
+  pngFile: pngFileFor(e.id),
   settings: sanitiseBrushSettings(e.settings),
 });
 
@@ -231,6 +267,7 @@ export function loadBrushLibrary({ force = false } = {}) {
 async function doLoad() {
   brushLibrary.loading = true;
   brushLibrary.error = '';
+  brushLibrary.readOnly = false;
   try {
     // No host: an empty library, and NOT an error. The browser preview is a
     // supported way to run this app and a red banner there would be noise.
@@ -241,7 +278,7 @@ async function doLoad() {
     let text = null;
     try {
       const p = await indexPath();
-      if (await fsx.exists(p)) text = await fsx.readTextFile(p);
+      if (p && (await fsx.exists(p))) text = await fsx.readTextFile(p);
     } catch {
       // The folder is not there yet, or the read failed. Either way there is
       // nothing installed as far as this session is concerned.
@@ -262,6 +299,18 @@ async function doLoad() {
       // away the one copy of the pixels.
       brushLibrary.error =
         'The brush library index could not be read. No brushes are loaded; re-import to rebuild it.';
+      replaceAll([]);
+      return;
+    }
+    // An index from a build that knows more than this one. Reading the rows we
+    // recognise and writing them back would silently DELETE whatever the newer
+    // schema added, so this build reads nothing and writes nothing - a downgrade
+    // is not allowed to cost the library. A missing `schema` is schema 1, which
+    // is what the first index that ever shipped would have looked like.
+    const schema = typeof parsed?.schema === 'number' ? parsed.schema : INDEX_SCHEMA;
+    if (schema > INDEX_SCHEMA) {
+      brushLibrary.error = FROM_FUTURE;
+      brushLibrary.readOnly = true;
       replaceAll([]);
       return;
     }
@@ -323,9 +372,11 @@ export function resolveBrush(id) {
 // Tips
 // ---------------------------------------------------------------------------
 
-// id -> Promise<tip | null>. One decode per brush per session; the stamping
-// path in 2.4 asks for this on every stroke.
+// id -> { promise: Promise<tip|null>, px }. Insertion order is least-recently-
+// used first: a hit moves its slot to the end. See the lifetime contract at the
+// top of this file for why eviction drops rather than closes.
 const tipCache = new Map();
+let tipPx = 0;
 
 function toBytes(v) {
   if (v instanceof Uint8Array) return v;
@@ -361,54 +412,126 @@ async function decodeTip(bytes) {
 // The tip a stamper draws with, or null when there is nothing to draw.
 //
 // Always the same wrapper shape, in every environment, so 2.4 has one thing to
-// hold: `{ id, width, height, source, bytes, image }`. `image` is the decoded
+// hold: `{ id, width, height, source, image, bytes }`. `image` is the decoded
 // `ImageBitmap`/`HTMLImageElement` in the app and null under node; `bytes` is
-// the raw greyscale PNG either way, which is what makes the node tests able to
-// check that the right file was read without a decoder.
+// the raw greyscale PNG and is dropped the moment there is a decoded image to
+// draw with, so a tip is never held twice. In node - no decoder - `bytes` is
+// what the tests read instead.
+//
+// Cached under `TIP_BUDGET_PX`. See the lifetime contract at the top: hold the
+// returned tip for a frame, not across a chapter close.
 export async function brushTip(id) {
   const entry = getBrush(id);
   if (!entry) return null;
-  let p = tipCache.get(entry.id);
-  if (!p) {
-    p = loadTip(entry);
-    tipCache.set(entry.id, p);
+  let slot = tipCache.get(entry.id);
+  if (slot) {
+    // Touch: move to the most-recently-used end of the insertion order.
+    tipCache.delete(entry.id);
+    tipCache.set(entry.id, slot);
+  } else {
+    slot = { promise: loadTip(entry), px: 0 };
+    tipCache.set(entry.id, slot);
   }
-  const tip = await p;
+  const tip = await slot.promise;
   // A failure is not remembered. The read can fail because the volume was busy
   // or the app was mid-import, and caching that would leave the brush blank for
   // the rest of the session.
-  if (!tip) tipCache.delete(entry.id);
+  if (!tip) {
+    dropTip(entry.id);
+    return null;
+  }
+  // Charged once, and only if this slot is still the cached one - a decode that
+  // lost its place to an eviction while it was in flight is not accounted for.
+  // The entry's own dimensions ARE the decoded size, which is what has to be
+  // budgeted whether or not this platform has a decoder to prove it.
+  if (!slot.px && tipCache.get(entry.id) === slot) {
+    slot.px = Math.max(1, entry.width * entry.height);
+    tipPx += slot.px;
+    evictTips();
+  }
   return tip;
 }
 
 async function loadTip(entry) {
   try {
-    const bytes = toBytes(await fsx.readFile(await fsx.join(await brushDir(), entry.pngFile)));
+    const dir = await brushDir();
+    if (!dir) return null;
+    const bytes = toBytes(await fsx.readFile(await fsx.join(dir, entry.pngFile)));
     if (!bytes?.length) return null;
+    const image = await decodeTip(bytes);
     return {
       id: entry.id,
       width: entry.width,
       height: entry.height,
       source: entry.source,
-      bytes,
-      image: await decodeTip(bytes),
+      image,
+      // Held only where there is nothing decoded to draw with. Keeping both
+      // would mean every tip in the cache costs its PNG on top of its bitmap.
+      bytes: image ? null : bytes,
     };
   } catch {
     return null;
   }
 }
 
-function forgetTip(id) {
-  const p = tipCache.get(id);
+// Let go of a cached tip WITHOUT closing it: a painter may still be holding the
+// bitmap for the frame it is in the middle of, and closing it under `drawImage`
+// throws. The collector reclaims it once the last holder is done.
+function dropTip(id) {
+  const slot = tipCache.get(id);
+  if (!slot) return;
   tipCache.delete(id);
-  // The bitmap holds decoded pixels outside the JS heap; a large tip is
-  // megabytes of them, so it is closed rather than left to the collector.
-  p?.then?.((t) => t?.image?.close?.())?.catch?.(() => {});
+  tipPx = Math.max(0, tipPx - slot.px);
 }
 
-// Drop every decoded tip. For the editor leaving a chapter, and for tests.
+// Least recently used first, down to the budget. The newest slot is never the
+// one evicted - it is at the end of the order, and a single tip larger than the
+// whole budget is kept until something else needs the room.
+function evictTips() {
+  for (const id of tipCache.keys()) {
+    if (tipPx <= TIP_BUDGET_PX || tipCache.size <= 1) break;
+    dropTip(id);
+  }
+}
+
+// Drop every decoded tip and release its pixels now. The ONLY place a bitmap is
+// closed, because it is the only moment no painter can be live: the editor
+// leaving a chapter. Calling this while a stroke is being drawn would close a
+// bitmap out from under `drawImage`.
 export function forgetBrushTips() {
-  for (const id of [...tipCache.keys()]) forgetTip(id);
+  const slots = [...tipCache.values()];
+  tipCache.clear();
+  tipPx = 0;
+  for (const s of slots) {
+    s.promise?.then?.(
+      (t) => t?.image?.close?.(),
+      () => {},
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Writing
+// ---------------------------------------------------------------------------
+
+// Every mutation of the index runs one at a time.
+//
+// Both writers read `installedBrushes`, await a filesystem round trip, and then
+// write the whole index back. Two of them overlapping - the panel's Import while
+// a delete is still landing - would each build their next index from the same
+// starting list and the second write would erase the first one's brush. So they
+// queue, and each one reads the list only once it is its turn.
+let writeQueue = Promise.resolve();
+
+function serialise(fn) {
+  const run = writeQueue.then(fn, fn);
+  // The queue must survive a failing link: one import that threw cannot be
+  // allowed to reject every write after it.
+  writeQueue = run.then(
+    () => {},
+    () => {},
+  );
+  return run;
 }
 
 // ---------------------------------------------------------------------------
@@ -432,21 +555,28 @@ export async function importBrushes(paths) {
     (p) => typeof p === 'string' && p.trim(),
   );
   const none = { added: 0, replaced: 0, previewQuality: 0, errors: [] };
+  const refuse = (error) => ({ ...none, errors: list.map((path) => ({ path, error })) });
   if (!list.length) return none;
 
   const invoke = await getInvoke();
-  if (!invoke) return { ...none, errors: list.map((path) => ({ path, error: NO_HOST })) };
+  if (!invoke) return refuse(NO_HOST);
 
   await loadBrushLibrary();
+  if (brushLibrary.readOnly) return refuse(FROM_FUTURE);
 
+  // Outside the queue: parsing a corpus is seconds of CPU in Rust, and there is
+  // nothing shared to protect until there are brushes to install.
   let result;
   try {
     result = await invoke('brush_import', { paths: list });
   } catch (e) {
-    const error = String(e?.message ?? e);
-    return { ...none, errors: list.map((path) => ({ path, error })) };
+    return refuse(String(e?.message ?? e));
   }
+  return serialise(() => install(result));
+}
 
+async function install(result) {
+  const none = { added: 0, replaced: 0, previewQuality: 0, errors: [] };
   const errors = (Array.isArray(result?.errors) ? result.errors : []).map((e) => ({
     path: String(e?.path ?? ''),
     error: String(e?.error ?? 'the file could not be read'),
@@ -454,7 +584,8 @@ export async function importBrushes(paths) {
   const incoming = Array.isArray(result?.brushes) ? result.brushes : [];
 
   // The list this import is aiming at, as plain rows. Built whole and only then
-  // committed, so a write that fails leaves memory agreeing with disk.
+  // committed, so a write that fails leaves memory agreeing with disk. Read
+  // here, inside the queue, so it is the list as of this call's turn.
   const next = installedBrushes.map(rowOf);
   const at = new Map(next.map((e, i) => [e.id, i]));
 
@@ -462,10 +593,15 @@ export async function importBrushes(paths) {
   let replaced = 0;
   let previewQuality = 0;
   const written = [];
+  // Ids this batch has already installed. Selecting the same file twice - or
+  // two copies of it under different names, which hash the same - must install
+  // one brush and count one, not write the same bytes twice and claim two.
+  const inBatch = new Set();
 
   let dir;
   try {
     dir = await brushDir();
+    if (!dir) throw new Error('there is no app data directory');
     await fsx.mkdir(dir);
   } catch (e) {
     return {
@@ -483,6 +619,7 @@ export async function importBrushes(paths) {
       errors.push({ path: String(raw?.name ?? raw?.id ?? ''), error: 'the brush had no usable id' });
       continue;
     }
+    if (inBatch.has(entry.id)) continue;
     const bytes = toBytes(raw?.tipPng);
     if (!bytes?.length) {
       errors.push({ path: entry.name, error: 'the brush arrived with no tip image' });
@@ -494,6 +631,7 @@ export async function importBrushes(paths) {
       errors.push({ path: entry.name, error: `the tip could not be written: ${e?.message ?? e}` });
       continue;
     }
+    inBatch.add(entry.id);
     written.push(entry.id);
     const i = at.get(entry.id);
     if (i === undefined) {
@@ -511,7 +649,7 @@ export async function importBrushes(paths) {
     if (entry.source !== 'pixels') previewQuality++;
   }
 
-  if (!written.length) return { added: 0, replaced: 0, previewQuality: 0, errors };
+  if (!written.length) return { ...none, errors };
 
   try {
     await fsx.writeTextFileAtomic(await indexPath(), indexJson(next));
@@ -520,9 +658,7 @@ export async function importBrushes(paths) {
     // alone so it still matches what is written, and the next import over the
     // same files rewrites both halves.
     return {
-      added: 0,
-      replaced: 0,
-      previewQuality: 0,
+      ...none,
       errors: [
         ...errors,
         { path: INDEX_NAME, error: `the brush index could not be written: ${e?.message ?? e}` },
@@ -530,7 +666,7 @@ export async function importBrushes(paths) {
     };
   }
 
-  for (const id of written) forgetTip(id);
+  for (const id of written) dropTip(id);
   replaceAll(next);
   brushLibrary.error = '';
   brushLibrary.loaded = true;
@@ -548,23 +684,33 @@ export async function importBrushes(paths) {
 export async function removeBrush(id) {
   if (!inTauri()) return false;
   await loadBrushLibrary();
-  const entry = getBrush(id);
-  if (!entry) return false;
-  const pngFile = entry.pngFile;
-  const next = installedBrushes.filter((b) => b.id !== id).map(rowOf);
-  // The index first. If the file removal fails after it, the brush is gone from
-  // the library and an orphan PNG is left behind, which is litter; the other
-  // order leaves an index entry pointing at a file that is not there, which is
-  // a brush that paints nothing.
-  await fsx.writeTextFileAtomic(await indexPath(), indexJson(next));
-  forgetTip(id);
-  replaceAll(next);
-  try {
-    await fsx.remove(await fsx.join(await brushDir(), pngFile));
-  } catch {
-    /* the entry is already gone; the orphan is swept by the next import */
-  }
-  return true;
+  if (brushLibrary.readOnly) return false;
+  return serialise(async () => {
+    const entry = getBrush(id);
+    if (!entry) return false;
+    const pngFile = entry.pngFile;
+    const next = installedBrushes.filter((b) => b.id !== id).map(rowOf);
+    // The index first. If the file removal fails after it, the brush is gone
+    // from the library and an orphan PNG is left behind, which is inert litter
+    // in a folder nothing else reads - a tip is only ever opened by name, from
+    // an index row. The other order leaves an index row pointing at a file that
+    // is not there, which is a brush that paints nothing.
+    //
+    // Nothing sweeps those orphans, deliberately: the only cheap sweep is "any
+    // .png the index does not name", and after a corrupt index that is every
+    // tip in the folder - including the ones whose `.sut` the letterer no
+    // longer has.
+    await fsx.writeTextFileAtomic(await indexPath(), indexJson(next));
+    dropTip(id);
+    replaceAll(next);
+    try {
+      const dir = await brushDir();
+      if (dir) await fsx.remove(await fsx.join(dir, pngFile));
+    } catch {
+      /* the entry is already gone; the file is inert either way */
+    }
+    return true;
+  });
 }
 
 // Tests only: forget the resolved folder and the shared load promise, so a
@@ -573,9 +719,12 @@ export function __resetBrushLibrary() {
   dirCache = null;
   loadInFlight = null;
   coreMod = null;
+  writeQueue = Promise.resolve();
   tipCache.clear();
+  tipPx = 0;
   replaceAll([]);
   brushLibrary.loading = false;
   brushLibrary.loaded = false;
   brushLibrary.error = '';
+  brushLibrary.readOnly = false;
 }
