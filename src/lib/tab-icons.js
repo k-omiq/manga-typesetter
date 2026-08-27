@@ -1,0 +1,53 @@
+// The Inspector's tab strip and the two fill pickers, as SVG markup strings.
+//
+// Strings rather than components because they are rendered with `{@html}` into
+// buttons that already carry their own state classes - a component per glyph
+// would be nine files and a wrapper element each, for line art that never takes
+// a prop. Every icon is a 20x20 viewBox drawn in `currentColor`, so a button
+// colours its icon by colouring itself.
+const wrap = (body) =>
+  `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+
+// A serif "A" with a baseline under it: the letter itself is the tab.
+export const iconText = wrap('<path d="M4 15L10 4l6 11"/><path d="M6.4 11.4h7.2"/><path d="M3 17.5h14"/>');
+
+// A paint drop: fill is what the glyph is made of.
+export const iconFill = wrap('<path d="M10 3.2c2.6 3 4.6 5.3 4.6 7.6a4.6 4.6 0 1 1-9.2 0c0-2.3 2-4.6 4.6-7.6Z"/>');
+
+// Sparkle: strokes, shadows and roughen are what is done to the glyph after.
+export const iconEffects = wrap(
+  '<path d="M7 3.5 8.1 6.6 11.2 7.7 8.1 8.8 7 11.9 5.9 8.8 2.8 7.7 5.9 6.6Z"/><path d="M14 10.5 14.8 12.7 17 13.5 14.8 14.3 14 16.5 13.2 14.3 11 13.5 13.2 12.7Z"/>',
+);
+
+// A frame with its measure marks: position, size, spacing.
+export const iconLayout = wrap('<rect x="3" y="4.5" width="14" height="11" rx="1.5"/><path d="M3 9h14"/><path d="M8 9v6.5"/>');
+
+// The rotation control's own glyph: an arc with an arrowhead.
+export const iconRotate = wrap(
+  '<path d="M16.5 10a6.5 6.5 0 1 1-2.4-5"/><path d="M16.6 2.2v3.3h-3.3"/>',
+);
+
+// Linear gradient: a swatch with a diagonal ramp through it.
+export const iconGradientLinear = wrap(
+  '<rect x="3" y="3" width="14" height="14" rx="2"/><path d="M4.5 15.5 15.5 4.5" stroke-width="1.2"/><path d="M7.5 16.5 16.5 7.5" stroke-width="1.2"/><path d="M3.5 12.5 12.5 3.5" stroke-width="1.2"/>',
+);
+
+// Radial gradient: rings out from a centre.
+export const iconGradientRadial = wrap(
+  '<rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="10" cy="10" r="1.4"/><circle cx="10" cy="10" r="4.4" stroke-width="1.2"/>',
+);
+
+// Pattern: a tile of dots.
+export const iconPattern = wrap(
+  '<rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="7.2" cy="7.2" r="1.1"/><circle cx="12.8" cy="7.2" r="1.1"/><circle cx="7.2" cy="12.8" r="1.1"/><circle cx="12.8" cy="12.8" r="1.1"/>',
+);
+
+// An arrow pointing UP, which the direction pad rotates for the other seven.
+export const iconArrowUp = wrap('<path d="M10 16V4.6"/><path d="M5.6 9 10 4.4 14.4 9"/>');
+
+export const tabIcons = {
+  text: iconText,
+  fill: iconFill,
+  effects: iconEffects,
+  layout: iconLayout,
+};

@@ -1,0 +1,1437 @@
+/* ===== Manga Typesetter - warm-neutral paper greyscale desktop UI ===== */
+:root{
+  --bg:#e8e7e3; --panel:#f6f5f2; --panel2:#efeeea;
+  --card:#fbfaf8; --surface:#fcfbf9; --paper:#fefdfb;
+  --art:#e4e2dd;
+  --line:rgba(42,38,32,.08); --line2:rgba(42,38,32,.15);
+  --text:#22211e; --t2:rgba(34,33,30,.66); --t3:rgba(34,33,30,.55);
+  --accent:#2c2b28; --accent-fg:#f8f7f4; --accent-soft:rgba(42,38,32,.075);
+  /* On-page chrome - selection outlines, transform handles, the rotation grip,
+     the text caret. Everything drawn OVER --paper, which is near-white in both
+     themes because a manga page is paper. --accent inverts with the theme and
+     goes near-white in dark, which made every one of those affordances vanish;
+     these two do not invert. --tintline is the solid stroke, --tint the
+     translucent one for dashed hover and target states. Kept declared in both
+     blocks, with the same values, so the "does not invert" part is explicit
+     rather than an omission someone later fills in. */
+  --tint:rgba(42,38,32,.45); --tintline:#2c2b28; --warn:#8a3f2a;
+  --edge:0 1px 1px rgba(42,38,32,.05), 0 5px 14px rgba(42,38,32,.07);
+  --edge-soft:0 1px 2px rgba(42,38,32,.05);
+  --scrim:rgba(42,38,32,.28);
+  /* Mirrored by RAIL_W in src/lib/editor/RailTools.svelte - see the note there. */
+  --rail-w:44px;
+  /* The height of the top-left pill band: `.pill-row` at top:12px, 32px tall,
+     with 8px of air under it. The reference sidebar starts here rather than at
+     the window's top edge, so the Home and project pills never sit on top of
+     the raw page - the rail does not, because its tool strip is already offset
+     by the same amount. Geometry, so both blocks carry the same value. */
+  --chrome-top:52px;
+  /* The air the canvas stage leaves around the page. Geometry, so both blocks
+     carry the same value. Not mirrored by anything in JS any more: `computeFit`
+     reads `.stage`'s computed padding off the element, so this is safe to
+     change on its own - the fit follows it, and `.stage` raises the top and
+     bottom to clear the floating chrome if this drops below it. */
+  --stage-pad:60px;
+  --radius:6px;
+  /* Not a token - the browser's own switch. Everything a page cannot paint is
+     drawn by the platform from this: the popup list a native <select> opens,
+     the caret and selection colours, form-control defaults. A themed <select>
+     with the wrong color-scheme still drops a white menu over a dark app, which
+     is what made the bulk editor's dropdowns unreadable. */
+  color-scheme:light;
+}
+:root[data-theme="dark"]{
+  --bg:#121313; --panel:#1a1b1c; --panel2:#202122;
+  --card:#1a1b1c; --surface:#212223; --paper:#f6f5f2;
+  --art:#0d0e0e;
+  --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.13);
+  --text:#e9e8e5; --t2:rgba(233,232,229,.64); --t3:rgba(233,232,229,.48);
+  --accent:#e9e8e5; --accent-fg:#141514; --accent-soft:rgba(233,232,229,.10);
+  /* Deliberately identical to light: see the note above. */
+  --tint:rgba(42,38,32,.45); --tintline:#2c2b28; --warn:#d98b6a;
+  --edge:0 0 0 1px rgba(255,255,255,.05), 0 6px 20px rgba(0,0,0,.42);
+  --edge-soft:0 0 0 1px rgba(255,255,255,.05);
+  --scrim:rgba(0,0,0,.6);
+  /* Geometry, so identical to light: see the note above. */
+  --chrome-top:52px;
+  /* Geometry, so identical to light: see the note above. */
+  --stage-pad:60px;
+  /* The one line the theme cannot express as a token - see the note above. */
+  color-scheme:dark;
+}
+
+*{ box-sizing:border-box; }
+html,body{ height:100%; margin:0; }
+body{
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP","Microsoft YaHei",sans-serif;
+  background:var(--bg); color:var(--text);
+  font-size:12.5px; overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+  font-variant-numeric:tabular-nums;
+  user-select:none; -webkit-user-select:none;
+}
+button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-nums; }
+
+/* ---------- scrollbars ---------- */
+::-webkit-scrollbar{ width:9px; height:9px; }
+::-webkit-scrollbar-track{ background:transparent; }
+::-webkit-scrollbar-thumb{ background:var(--line2); border-radius:5px; border:2px solid transparent; background-clip:padding-box; }
+::-webkit-scrollbar-thumb:hover{ background:var(--t3); background-clip:padding-box; }
+
+/* buttons */
+.btn{
+  height:30px; padding:0 11px; border:1px solid var(--line2);
+  background:var(--surface); color:var(--text); border-radius:var(--radius);
+  cursor:pointer; display:inline-flex; align-items:center; gap:6px; white-space:nowrap;
+  font-size:12.5px; transition:background .12s,border-color .12s;
+}
+.btn:hover{ background:var(--panel2); border-color:var(--t3); }
+.btn:disabled{ opacity:.45; cursor:default; background:var(--surface); border-color:var(--line2); color:var(--t2); }
+.btn svg{ width:15px; height:15px; opacity:.85; }
+.btn-accent{
+  background:var(--accent); border-color:var(--accent);
+  color:var(--accent-fg); font-weight:600;
+}
+.btn-accent:hover{ background:var(--accent); border-color:var(--accent); }
+
+/* ---------- editor shell ---------- */
+/* One layer for the page and a stack of chrome floating over it. Every child
+   orders itself against this one context - sidebar 20, rail 21, chrome 30,
+   bulk panel 40, panels 50+.
+   `position:fixed` makes this element a stacking context, so those numbers do
+   not compete with the modal overlay's 100 or the toast's 300. That is fine
+   only because both of those are siblings of the root in App.svelte, outside it
+   entirely. What must not happen here is a `transform`, `filter`, `backdrop-
+   filter`, `perspective`, `contain` or `will-change`: any of them additionally
+   makes the root the containing block for every `position:fixed` descendant,
+   which would tear `.pill-row`, `.fpanel` and `.panel-stub` off the viewport
+   they are positioned against and reparent them to this box. */
+.ed-root{ position:fixed; inset:0; background:var(--art); }
+/* Inset from the left by the sidebar plus the rail, and by nothing else. That
+   inset is what makes fit-to-window measure the canvas viewport rather than the
+   window: the scroll container inside fills this layer, and a ResizeObserver on
+   it re-fits whenever the rail moves. The floating panels are outside this
+   measurement on purpose - a panel dragged over the page covers it. */
+.ed-canvas{ position:absolute; inset:0 0 0 var(--canvas-left); }
+/* The bottom dock: zoom/undo and the pager side by side, centred over the
+   canvas viewport rather than the window, for the same reason. The row itself
+   spans the viewport and lets pointers through - only the two pills catch
+   them - so it never steals a click meant for the page beneath it. */
+.ed-dockrow{
+  position:absolute; left:var(--canvas-left); right:0; bottom:16px; z-index:30;
+  display:flex; align-items:center; justify-content:center; gap:10px;
+  pointer-events:none;
+}
+.ed-dockrow > *{ pointer-events:auto; }
+
+.editor-scroll{ position:absolute; inset:0; overflow:auto; }
+/* `width:max-content` is the whole reason the page stays reachable. A block
+   child of a scroll container is as wide as the container and no wider, so a
+   page zoomed past the viewport overflowed a box that could not grow - and
+   `justify-content:center` split that overflow evenly, putting half of it to
+   the LEFT of scroll position 0, where no amount of scrolling reaches it. That
+   is the clipping at 50%: both edges gone, and only the middle band scrollable.
+   Sized to its content instead, the stage grows with the page, centring only
+   ever has real free space to spend, and the 60px of air is preserved on all
+   four sides at every zoom rather than being eaten by the overflow. The height
+   never had the bug - `height:auto` was already growing - but it is the same
+   mechanism and it now reads as one rule.
+
+   The vertical padding is NOT plain --stage-pad, and the difference is what
+   makes "Fit" mean "visible". `.editor-scroll` above is `inset:0` of a layer
+   that is `inset:0` of a viewport-fixed root: it spans the FULL window height,
+   including the band under the chrome pills at the top and the band under the
+   zoom/pager dock at the bottom. Both float over it and neither insets it -
+   that is the full-bleed design, deliberately. So the page has to keep itself
+   out from under them, and this padding is the only thing that does it, at
+   every zoom: at fit it is the air around the page, and scrolled hard against
+   either end it is the strip that keeps the page's own edge in the clear.
+
+   The two numbers it is measured against, both read off this stylesheet:
+     top     `.pill-row` is top:12px and `.pill` is 32px tall → reaches 44px.
+             --chrome-top is that plus 8px of air, the same 52px the reference
+             sidebar starts below.
+     bottom  `.ed-dockrow` is bottom:16px and its pills are 38px tall (4px
+             padding + a 28px button + a 1px border, top and bottom) → 54px.
+   60px of air clears both, so today max() picks the air and nothing moves. It
+   is written as a max() because that is not a fact anyone should have to
+   rediscover: drop --stage-pad to 40 for a bigger page - an obvious future
+   tweak - and with a plain `padding:var(--stage-pad)` the page's bottom edge
+   would silently disappear behind the zoom dock at Fit, with the dock still
+   reporting the zoom as a fit. The fit itself is measured off whatever this
+   computes, not off a constant (see computeFit in Canvas.svelte), so the two
+   cannot drift. */
+.stage{
+  /* Not a token in :root, because it is not a value anything else may use: it
+     is this padding's knowledge of one specific piece of chrome. */
+  --dock-reach:54px;
+  width:max-content; min-width:100%; min-height:100%;
+  display:flex; align-items:center; justify-content:center;
+  padding:
+    max(var(--stage-pad), var(--chrome-top))
+    var(--stage-pad)
+    max(var(--stage-pad), var(--dock-reach));
+}
+.page-frame{
+  position:relative; background:var(--paper); box-shadow:var(--edge);
+  transform-origin:center center; flex:0 0 auto;
+}
+/* Held only for the length of a hand drag (Canvas sets .panning while the
+   pointer is down and moving). Promoting the frame keeps its raster cached so
+   the translate slides one texture instead of re-rasterizing the page mid-drag,
+   which flashed a one-frame shimmer across the whole page. Not permanent: the
+   frame is the biggest element on screen and a standing layer costs compositor
+   memory. */
+.page-frame.panning{ will-change: translate; }
+/* A paged chapter keeps its neighbouring pages mounted so a turn is a
+   visibility change rather than a teardown and a rebuild - see `mountedPages` in
+   Canvas.svelte. `display:none` and not `visibility:hidden`, because a hidden
+   frame must contribute nothing at all: it is a flex child of `.stage`, and one
+   that still took layout space would widen the scroll, raise a scrollbar and
+   shrink the viewport the Fit zoom is measured against. It also costs no paint,
+   while its `<img>` still loads - which is the half of it worth keeping. */
+.page-frame.page-off{ display:none; }
+/* A longstrip chapter's canvas: every page in one column, zero gap. `gap` is not
+   merely unset here, it must never be set - a webtoon's pages are cuts through
+   one continuous drawing, so any space between two of them is a white line
+   through the art, and the reader would see it as a defect in the page rather
+   than in the app.
+   The paper edge belongs to the column for the same reason: a per-frame shadow
+   is a seam drawn at every cut. `flex:0 0 auto` so a column zoomed past the
+   viewport overflows into the scroll rather than being squeezed back into it -
+   the same rule, and the same reason, as `.page-frame` above. */
+.strip{
+  display:flex; flex-direction:column; align-items:center; gap:0;
+  flex:0 0 auto; background:var(--paper); box-shadow:var(--edge);
+}
+.strip .page-frame{ box-shadow:none; }
+.strip.panning{ will-change: translate; }
+.page-frame img.page-img{ display:block; width:100%; height:100%; pointer-events:none; }
+.boxlayer{ position:absolute; inset:0; }
+/* A hand tool that only pans from the gaps between boxes is no hand tool on a
+   finished page. With the boxes deaf, a press anywhere lands on the layer and
+   starts a pan instead of dragging whatever it happened to be over - the box
+   keeps its own gesture, it just is not the one being made. The box being typed
+   into is spared: taking pointer events off a live caret would strand it. */
+.boxlayer.pan .tbox:not(.editing){ pointer-events:none; }
+
+/* placed text box */
+.tbox{
+  position:absolute; display:flex; align-items:center; justify-content:center;
+  text-align:center; cursor:move; padding:2px;
+  line-height:1.1; word-break:break-word; overflow:visible;
+}
+.tbox .txt{ width:100%; white-space:pre-wrap; }
+/* Shaped line breaking (typeset.js) renders one element per computed line, so
+   the browser must not wrap them a second time - the breaks are already where
+   the measurement put them, and the exporter is drawing the same strings. An
+   over-long word overflows rather than being split, which is the rule. */
+.tbox .txt.shaped{ white-space:normal; }
+.tbox .txt.shaped .tline{ white-space:pre; }
+.tbox.selected{ outline:1.5px solid var(--tintline); }
+.tbox:not(.selected):hover{ outline:1.5px dashed var(--tint); }
+
+/* bulk-style targeting mode */
+.tbox.bulk-on{ cursor:pointer; outline:1.5px dashed color-mix(in srgb, var(--tint) 70%, transparent); }
+.tbox.bulk-on:hover{ outline:1.5px dashed var(--tintline); }
+.tbox.bulk-target{ outline:2.5px solid var(--tintline); background:color-mix(in srgb, var(--tintline) 9%, transparent); }
+.tbox.bulk-target::after{
+  content:'✓'; position:absolute; top:-11px; right:-11px; z-index:8;
+  width:20px; height:20px; border-radius:50%; display:grid; place-items:center;
+  background:var(--tintline); color:var(--paper); font-size:12px; font-weight:800;
+  box-shadow:var(--edge-soft);
+}
+
+/* Japanese reference pill - sits above the box, outside the editable text */
+.jp-pill{
+  position:absolute; bottom:calc(100% + 46px); left:50%; transform:translateX(-50%);
+  max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  padding:3px 9px; border-radius:999px; pointer-events:none; z-index:6;
+  font-family:'Noto Sans JP','Hiragino Kaku Gothic Pro',sans-serif; font-size:12px; font-weight:600;
+  line-height:1.3; color:var(--paper); background:var(--tintline); border:1px solid var(--line2);
+  box-shadow:var(--edge-soft);
+}
+.jp-pill::after{
+  content:''; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+  border:5px solid transparent; border-top-color:var(--tintline);
+}
+.jp-pill.sfx{
+  font-style:italic; letter-spacing:.04em;
+}
+
+/* transform handles */
+.handle{ position:absolute; width:11px; height:11px; background:var(--paper); border:1.5px solid var(--tintline); border-radius:2px; z-index:5; }
+.handle.corner{ border-radius:2px; }
+.handle.side{ border-radius:50%; width:9px; height:9px; }
+.handle.nw{ left:-6px; top:-6px; cursor:nwse-resize; }
+.handle.ne{ right:-6px; top:-6px; cursor:nesw-resize; }
+.handle.sw{ left:-6px; bottom:-6px; cursor:nesw-resize; }
+.handle.se{ right:-6px; bottom:-6px; cursor:nwse-resize; }
+.handle.n{ left:50%; top:-5px; transform:translateX(-50%); cursor:ns-resize; }
+.handle.s{ left:50%; bottom:-5px; transform:translateX(-50%); cursor:ns-resize; }
+.handle.w{ left:-5px; top:50%; transform:translateY(-50%); cursor:ew-resize; }
+.handle.e{ right:-5px; top:50%; transform:translateY(-50%); cursor:ew-resize; }
+.rotate-stem{ position:absolute; left:50%; top:-26px; width:1.5px; height:20px; background:var(--tintline); transform:translateX(-50%); z-index:7; }
+.handle.rot{ left:50%; top:-32px; transform:translateX(-50%); border-radius:50%; width:13px; height:13px; cursor:grab; background:var(--tintline); border-color:var(--paper); z-index:7; }
+
+/* empty state */
+.empty-state{ position:absolute; inset:0; display:grid; place-items:center; }
+.dropzone{
+  width:min(440px,70%); padding:40px 30px; text-align:center;
+  border:2px dashed var(--line2); border-radius:14px; background:var(--panel2);
+}
+.dropzone .ico{ width:54px; height:54px; margin:0 auto 16px; color:var(--t2); }
+.dropzone h2{ margin:0 0 6px; font-size:17px; font-weight:600; }
+.dropzone p{ margin:0 0 20px; color:var(--t2); font-size:13px; }
+
+/* floating zoom + undo controls. Like the pager below it, this positions
+   nothing: `.ed-dockrow` places the pair, and a self-centring pill would fight
+   the row it now sits in. */
+.zoomdock{
+  display:flex; align-items:center; gap:2px; background:color-mix(in srgb, var(--panel) 92%, transparent);
+  border:1px solid var(--line); border-radius:9px; padding:4px;
+  box-shadow:var(--edge); backdrop-filter:blur(6px);
+}
+.zoomdock button{ height:28px; min-width:30px; padding:0 8px; border:none; background:transparent; color:var(--text); border-radius:6px; cursor:pointer; font-size:12.5px; display:grid; place-items:center; }
+.zoomdock button:hover{ background:var(--panel2); }
+.zoomdock button:disabled{ color:var(--t3); cursor:default; background:transparent; }
+/* Matched to the chrome pills' 16px rather than the rail's 17px: these buttons
+   are 28px tall, two shorter than the rail's. */
+.zoomdock button svg{ width:16px; height:16px; }
+/* Fit is a state, not just a verb - lit while the zoom still is the fit, so the
+   percentage beside it is readable as "this is the whole page" rather than as
+   an arbitrary number. Softer than the rail's `on`: this one is a readout. */
+.zoomdock button.on{ background:var(--accent-soft); }
+/* `.on` and `:hover` are both (0,2,1), so the lit Fit button took `.on` on
+   source order alone and lost every trace of hover feedback at exactly the
+   moment it is most often clicked - the one state where the user needs to know
+   the control is still a control. A third rule rather than a reorder: hovering
+   something already lit should read as more of the same, not as the neutral
+   grey the unlit buttons take, so it deepens the same tint instead. */
+.zoomdock button.on:hover{ background:color-mix(in srgb, var(--accent) 16%, transparent); }
+.zoomdock .zval{ min-width:52px; font-variant-numeric:tabular-nums; }
+.zoomdock .sep{ width:1px; height:18px; background:var(--line); margin:0 3px; }
+
+/* floating pager - same pill chrome as .zoomdock so the two dock pieces read
+   as one family. Neither positions itself: `.ed-dockrow` places both side by
+   side, bottom-centred over the canvas viewport. */
+.pager{
+  display:flex; align-items:center; gap:2px; background:color-mix(in srgb, var(--panel) 92%, transparent);
+  border:1px solid var(--line); border-radius:9px; padding:4px;
+  box-shadow:var(--edge); backdrop-filter:blur(6px);
+}
+.pager button{ height:28px; min-width:28px; padding:0 8px; border:none; background:transparent; color:var(--text); border-radius:6px; cursor:pointer; font-size:13px; display:grid; place-items:center; }
+.pager button:hover{ background:var(--panel2); }
+.pager button:disabled{ color:var(--t3); cursor:default; background:transparent; }
+.pager .pnum{ min-width:30px; font-variant-numeric:tabular-nums; }
+.pager input.pnum{
+  border:1px solid var(--line2); background:var(--surface); color:var(--text);
+  border-radius:6px; text-align:center; outline:none;
+}
+.pager input.pnum:focus{ border-color:var(--t3); }
+.pager .pof{ color:var(--t2); padding:0 4px 0 2px; white-space:nowrap; }
+
+/* queue list - inside the floating "Text queue" panel */
+.qlist{ padding:6px; display:flex; flex-direction:column; gap:4px; }
+.qrow{
+  display:flex; align-items:center; gap:9px; padding:8px 9px; border-radius:7px;
+  background:var(--surface); border:1px solid transparent; cursor:pointer;
+}
+.qrow:hover{ background:var(--panel2); }
+.qrow.active{ border-color:var(--accent); background:var(--accent-soft); }
+.qrow .badge{
+  flex:0 0 auto; width:22px; height:22px; border-radius:6px; display:grid; place-items:center;
+  font-size:11.5px; font-weight:700; font-variant-numeric:tabular-nums;
+  background:var(--panel2); color:var(--text);
+}
+.qrow.active .badge{ background:var(--accent); color:var(--accent-fg); }
+/* A free-typed row's badge carries a letter, not a number: its line number is
+   negative and internal (see `isFreeLine`). Outlined rather than filled so the
+   two kinds of row are told apart at a glance without a second colour. */
+.qrow .badge.free{ background:transparent; border:1px solid var(--line2); color:var(--t2); font-weight:800; }
+.qrow.active .badge.free{ background:var(--accent); border-color:var(--accent); color:var(--accent-fg); }
+.qrow .qcol{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:2px; }
+/* The active row is the editor, so it is the one row that grows. Its badge and
+   dot ride at the top rather than centring against a column three times their
+   height. */
+/* Not a pointer: the editing row is one element with the compact rows now, and
+   it inherits their `cursor:pointer` - which promised a click target across a
+   row where only the badge is one. */
+.qrow.editing{ align-items:flex-start; gap:9px; cursor:default; }
+.qrow.editing .badge, .qrow.editing .dot{ margin-top:3px; }
+/* The editing row's badge is a real button - see Queue.svelte - so it needs the
+   type's own metrics back, which `button` would otherwise override. */
+.qrow.editing button.badge{ border:0; font-family:inherit; cursor:pointer; }
+.qrow.editing .qcol{ gap:5px; }
+.qrow .preview{ font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); }
+.qrow.placed .preview{ color:var(--t2); }
+.qrow .qjp{ font-size:10.5px; color:var(--t2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* A line carries a list of tags now, not one kind, so the badges wrap as a group
+   rather than each claiming its own row. */
+.qrow .qtypes{ align-self:flex-start; display:flex; flex-wrap:wrap; gap:3px; max-width:100%; }
+.qrow .qtype{
+  align-self:flex-start; font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+  padding:1px 5px; border-radius:4px; background:var(--panel2); color:var(--t2);
+}
+/* Three line kinds, three treatments - dialogue is the unmarked default, SFX is
+   the loud one (filled, heavier, wider tracking), narration the quiet one
+   (outlined, no fill). No hue does any of the work. */
+.qrow .qtype.sfx{ background:var(--accent-soft); color:var(--text); font-weight:800; letter-spacing:.14em; }
+.qrow .qtype.narration{ background:transparent; color:var(--t2); border:1px solid var(--line2); padding:0 4px; }
+.qrow.sfx .preview{ font-style:italic; }
+.qrow.sfx .badge{ background:var(--accent); color:var(--accent-fg); }
+.qrow .dot{ flex:0 0 auto; width:8px; height:8px; border-radius:50%; }
+.qrow .dot.unplaced{ background:transparent; border:1.5px solid var(--t3); }
+.qrow .dot.placed{ background:var(--text); box-shadow:0 0 0 2px color-mix(in srgb, var(--text) 18%, transparent); }
+.qhint{ padding:10px 14px; color:var(--t2); font-size:12px; line-height:1.5; }
+
+/* "Add text", at the foot of the queue. Sticky rather than scrolled: the
+   scroll container is `.fpanel-body` and this sits last in `.qlist` inside it,
+   so it holds the bottom of the panel at every scroll position and still takes
+   its own row at the end of the flow - the list can never end under it. The
+   opaque background and the top rule are what stop rows showing through as they
+   pass beneath. The negative margins let both reach the panel's edges past
+   `.qlist`'s 6px padding, and the matching bottom padding keeps the button
+   itself off that edge.
+
+   `--panel` and not `--surface`: it sits over the panel's own ground, not over
+   a row. */
+.qadd{
+  position:sticky; bottom:0; z-index:1;
+  margin:2px -6px -6px; padding:7px 6px calc(6px + env(safe-area-inset-bottom, 0px));
+  background:var(--panel); border-top:1px solid var(--line);
+}
+.qadd-btn{
+  width:100%; display:flex; align-items:center; justify-content:center; gap:6px;
+  padding:7px 10px; border-radius:7px; border:1px dashed var(--line2);
+  background:transparent; color:var(--t2); font:inherit; font-size:12px; font-weight:600;
+  cursor:pointer;
+}
+.qadd-btn svg{ width:13px; height:13px; }
+.qadd-btn:hover:not(:disabled){ border-color:var(--accent); border-style:solid; background:var(--accent-soft); color:var(--text); }
+.qadd-btn:disabled{ opacity:.45; cursor:default; }
+
+/* The active row's inline translator, now inside the row itself rather than in a
+   block beneath it - so it needs no left inset of its own, it is already in the
+   row's own column past the badge. The JP line reuses `.qjp` from the compact
+   rows, but unclamped: in the editor it is reference material the user is
+   translating from and must be readable in full, not one ellipsised line. */
+.qrow.editing .qjp{ white-space:normal; overflow:visible; text-overflow:clip; overflow-wrap:anywhere; }
+.qrow.editing textarea{
+  /* No resize grip. The row grows with the panel, and the native handle only
+     ever let the user drag a textarea out of alignment with the rows around it. */
+  width:100%; resize:none; min-height:44px; background:var(--surface); color:var(--text);
+  border:1px solid var(--line2); border-radius:6px; padding:6px 8px; font-family:inherit; font-size:12.5px; outline:none;
+}
+.qrow.editing textarea:focus{ border-color:var(--accent); }
+
+/* Tag picker - four slots along the top of the editing row: the two most recent
+   tags, the pen that makes a new one, and the caret onto the full history. */
+.qtags{ display:flex; flex-wrap:wrap; align-items:center; gap:4px; }
+.qtag{
+  font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+  padding:2px 6px; border-radius:4px; border:1px solid var(--line2);
+  background:transparent; color:var(--t2); cursor:pointer; max-width:100%;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.qtag:hover{ border-color:var(--t3); color:var(--text); }
+/* Applied tags are filled, unapplied ones outlined - the same unmarked/marked
+   contrast the `.qtype` badges already use, so a lit chip and a badge read as the
+   same fact. */
+.qtag.on{ background:var(--accent); border-color:var(--accent); color:var(--accent-fg); }
+.qtag-ic{
+  flex:0 0 auto; width:20px; height:20px; display:grid; place-items:center; padding:0;
+  border-radius:5px; border:1px solid transparent; background:transparent; color:var(--t2); cursor:pointer;
+}
+.qtag-ic svg{ width:13px; height:13px; }
+.qtag-ic:hover{ background:var(--panel2); color:var(--text); }
+.qtag-ic.on{ background:var(--accent-soft); color:var(--text); border-color:var(--accent); }
+
+/* The history dropdown, in the flow rather than floating: the queue lives in a
+   short scrolling panel and an absolutely positioned menu would be clipped by it. */
+.qmenu{
+  display:flex; flex-direction:column; gap:1px; padding:3px;
+  border:1px solid var(--line2); border-radius:6px; background:var(--panel2);
+  max-height:150px; overflow-y:auto;
+}
+.qmenu-empty{ font-size:11px; color:var(--t2); padding:4px 6px; }
+.qmenu-row{ display:flex; align-items:center; gap:2px; }
+.qmenu-pick{
+  flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:5px; padding:3px 5px;
+  border:0; border-radius:5px; background:transparent; color:var(--t2); cursor:pointer;
+  font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;
+}
+.qmenu-pick:hover{ background:var(--surface); color:var(--text); }
+.qmenu-pick .nm{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* The tick holds its space whether or not it is drawn, so the names stay in one
+   column and the list does not jog sideways as tags are applied. */
+.qmenu-pick .tick{ flex:0 0 auto; width:11px; height:11px; visibility:hidden; }
+.qmenu-pick.on{ color:var(--text); }
+.qmenu-pick.on .tick{ visibility:visible; }
+
+/* Create / edit tag. Same surface as the dropdown it opens from. */
+.qtagform{
+  display:flex; flex-direction:column; gap:5px; padding:5px;
+  border:1px solid var(--line2); border-radius:6px; background:var(--panel2);
+}
+.qtf-top{ display:flex; align-items:center; gap:4px; }
+.qtf-name{
+  flex:1 1 auto; min-width:0; font-size:10px; font-weight:700; letter-spacing:.06em;
+  text-transform:uppercase; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.qtf-input{
+  flex:1 1 auto; min-width:0; background:var(--surface); color:var(--text);
+  border:1px solid var(--line2); border-radius:5px; padding:3px 6px;
+  font-family:inherit; font-size:11.5px; outline:none;
+}
+.qtf-input:focus{ border-color:var(--accent); }
+.qtf-go{
+  flex:0 0 auto; padding:3px 9px; border-radius:5px; border:1px solid var(--accent);
+  background:var(--accent); color:var(--accent-fg); font-size:11px; font-weight:700; cursor:pointer;
+}
+.qtf-row{ display:flex; align-items:center; gap:5px; }
+.qtf-lbl{ flex:0 0 46px; font-size:10px; text-transform:uppercase; letter-spacing:.4px; color:var(--t2); }
+.qtf-row select, .qtf-row input[type='number']{
+  flex:1 1 auto; min-width:0; background:var(--surface); color:var(--text);
+  border:1px solid var(--line2); border-radius:5px; padding:2px 4px; font-family:inherit; font-size:11.5px; outline:none;
+}
+.qtf-row input[type='color']{
+  flex:0 0 26px; height:20px; padding:0; border:1px solid var(--line2); border-radius:5px;
+  background:var(--surface); cursor:pointer;
+}
+/* The two things this form has to say in words: that the name was already
+   taken, and what deleting a tag does and does not do. Both wrap - they are
+   sentences, not labels - and both are the same quiet weight as `.bulk-note`. */
+.qtf-note{ font-size:10.5px; line-height:1.45; color:var(--t2); padding:0 1px; }
+.qtf-del{ display:flex; flex-direction:column; gap:5px; border-top:1px solid var(--line2); padding-top:5px; }
+.qtf-delrow{ display:flex; align-items:center; gap:5px; }
+.qtf-quiet{
+  align-self:flex-start; padding:3px 8px; border-radius:5px; border:1px solid var(--line2);
+  background:transparent; color:var(--t2); font-family:inherit; font-size:10.5px; cursor:pointer;
+}
+.qtf-quiet:hover{ border-color:var(--t3); color:var(--text); }
+/* Destructive, and drawn as such - outlined rather than filled, because the
+   filled accent in this form is `Save`, and the two must not look alike where
+   one press apart. */
+.qtf-danger{
+  padding:3px 8px; border-radius:5px; border:1px solid var(--warn);
+  background:transparent; color:var(--warn);
+  font-family:inherit; font-size:10.5px; font-weight:700; cursor:pointer;
+}
+.qtf-danger:hover{ background:color-mix(in srgb, var(--warn) 12%, transparent); }
+
+/* inspector */
+/* The panel is a window over the page and `.fpanel-body` is the only thing that
+   scrolls, so everything in here has to be free to be narrow: `min-width:0` all
+   the way down, or one number input's intrinsic width pushes a grid column out
+   and the whole panel scrolls sideways. */
+.insp{ padding:12px 12px 16px; display:flex; flex-direction:column; gap:8px; min-width:0; }
+.insp .grp{ display:flex; flex-direction:column; gap:6px; min-width:0; }
+.insp .lbl,.insp label.lbl{ font-size:11px; color:var(--t2); text-transform:uppercase; letter-spacing:.4px; }
+.insp textarea{
+  width:100%; resize:vertical; min-height:54px; background:var(--surface); color:var(--text);
+  border:1px solid var(--line2); border-radius:6px; padding:8px; font-family:inherit; font-size:13px; outline:none;
+}
+.insp textarea:focus,.insp input:focus,.insp select:focus,
+.bulk-panel input:focus,.bulk-panel select:focus,
+.export-modal input:focus,.export-modal select:focus{ border-color:var(--accent); }
+/* Every themed text/number/menu control in the app, in one rule. A native
+   <select> or <input> left unstyled paints itself the platform's own light
+   surface and takes `color:inherit` from the theme - which in dark mode is
+   near-white text on white, i.e. invisible. That is exactly what the bulk
+   panel's font, size, rotation, hex and stroke fields did, and the export
+   dialog's format menu and filename field with them; both were missing from
+   this selector rather than being deliberately native. Anything that grows a
+   native control belongs here too - the rule is per-container, so a new one
+   has to be added by hand. (`.export-modal` overrides the height below.)
+   The bulk entry names the whole panel rather than its body, because the
+   tag selector sits above the scrolling body: scoped to `.bulk-body` it was
+   the one native menu in that panel still painting itself white. */
+.insp select,.insp input[type=text],.insp input[type=number],
+.bulk-panel select,.bulk-panel input[type=text],.bulk-panel input[type=number],
+.export-modal select,.export-modal input[type=text],.export-modal input[type=number]{
+  height:30px; background:var(--surface); color:var(--text); border:1px solid var(--line2);
+  border-radius:6px; padding:0 8px; font-family:inherit; font-size:12.5px; outline:none; width:100%;
+}
+/* The Inspector runs one control height, 28px, for everything: menus, text and
+   number fields, segments, the add buttons. The shared rule above is 30px
+   because the bulk panel and the export dialog are laid out around that; this
+   is the inspector's own number, not a new one for the whole app. */
+.insp select,.insp input[type=text],.insp input[type=number]{ height:28px; }
+/* A native <select> keeps drawing the platform's own arrow at its right edge
+   whatever else it is given, and it reserves no room for it: the preset menu's
+   longest name ran straight underneath the glyph. `appearance:none` takes the
+   native arrow away and the two gradients draw the chevron we do leave room
+   for, in a theme token rather than the platform's grey. */
+.insp select{
+  -webkit-appearance:none; appearance:none; padding-right:24px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--t2) 50%),
+    linear-gradient(135deg, var(--t2) 50%, transparent 50%);
+  background-position:calc(100% - 14px) calc(50% - 1px), calc(100% - 10px) calc(50% - 1px);
+  background-size:4px 4px;
+  background-repeat:no-repeat;
+}
+/* Numbers read down their last digit, so a column of them is comparable at a
+   glance. The stepper sits in its own box after the text, so right-aligning
+   costs nothing here - only the compact list rows below drop it, and they say
+   why. */
+.insp input[type=number]{ text-align:right; }
+/* Hex is a code, not prose: fixed pitch so #ffffff and #1a1a1a are the same
+   width and the swatch beside them never moves. */
+.insp input.hex,.bulk-panel input.hex{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+}
+/* An invalid hex commit is flagged, not reverted: the field keeps what was
+   typed, with a warning border and a title saying what a valid one looks
+   like, until the next valid value lands. */
+.insp input.hex-bad{ border-color:var(--warn); }
+.row2{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+/* A grid item's default `min-width:auto` is the intrinsic width of whatever is
+   inside it, and a number input's intrinsic width is wider than half this
+   panel. Without this the two-up rows are what make the Inspector scroll
+   sideways. */
+.row2 > *{ min-width:0; }
+.field{ display:flex; flex-direction:column; gap:5px; min-width:0; }
+.size-row{ display:flex; align-items:center; gap:8px; }
+.size-row input[type=number]{ width:58px; flex:0 0 auto; }
+.size-row input[type=range]{ flex:1 1 auto; }
+
+input[type=range]{ -webkit-appearance:none; appearance:none; height:4px; background:var(--line2); border-radius:3px; outline:none; }
+/* The ring separates the thumb from the track; it is panel chrome, not paper,
+   so it takes the surface the slider actually sits on and follows the theme. */
+input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--accent); cursor:pointer; border:2px solid var(--panel); }
+
+/* segmented toggles */
+.seg{ display:flex; background:var(--surface); border:1px solid var(--line2); border-radius:6px; overflow:hidden; }
+/* nowrap because a segment is one line by definition: the theme control's
+   "System · dark" is the longest label in the app and a wrapped one would grow
+   the 28px row instead of the strip. */
+.seg button{ flex:1 1 auto; height:28px; border:none; background:transparent; color:var(--t2); cursor:pointer; display:grid; place-items:center; white-space:nowrap; }
+.seg button:not(:last-child){ border-right:1px solid var(--line); }
+.seg button:hover{ color:var(--text); }
+.seg button.on{ background:var(--accent); color:var(--accent-fg); }
+.seg button svg{ width:15px; height:15px; }
+
+/* color field */
+.color-field{ display:flex; align-items:center; gap:8px; }
+.swatch{ width:30px; height:30px; border-radius:6px; border:1px solid var(--line2); cursor:pointer; flex:0 0 auto; position:relative; overflow:hidden; }
+.swatch input[type=color]{ position:absolute; inset:-4px; width:140%; height:140%; border:none; padding:0; cursor:pointer; background:none; }
+.color-field .hex{ flex:1 1 auto; }
+/* 24 inside the Inspector, where the swatch shares a 28px row with the field
+   beside it; the base 30 stays for the bulk panel, whose fields are 30. */
+.insp .swatch{ width:24px; height:24px; border-radius:5px; }
+
+.insp .btn-danger{
+  margin-top:4px; height:32px; background:transparent; border:1px solid var(--warn);
+  color:var(--warn); border-radius:6px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:7px; font-size:12.5px;
+}
+.insp .btn-danger:hover{ background:color-mix(in srgb, var(--warn) 12%, transparent); }
+
+.insp-empty{ padding:30px 20px; text-align:center; color:var(--t3); font-size:12.5px; line-height:1.6; }
+.insp-empty svg{ width:34px; height:34px; opacity:.4; margin-bottom:10px; }
+
+/* ---------- modal ---------- */
+.modal-overlay{ position:fixed; inset:0; background:var(--scrim); display:none; align-items:center; justify-content:center; z-index:100; backdrop-filter:blur(2px); }
+.modal-overlay.open{ display:flex; }
+.modal{
+  width:min(760px,92vw); max-height:84vh; background:var(--panel); border:1px solid var(--line);
+  border-radius:12px; box-shadow:var(--edge); display:flex; flex-direction:column; overflow:hidden;
+}
+.modal-head{ height:50px; flex:0 0 auto; display:flex; align-items:center; gap:10px; padding:0 16px; border-bottom:1px solid var(--line); }
+.modal-head h3{ margin:0; font-size:15px; font-weight:600; }
+.modal-head .x{ margin-left:auto; width:30px; height:30px; border:none; background:transparent; color:var(--t2); cursor:pointer; border-radius:6px; display:grid; place-items:center; }
+.modal-head .x:hover{ background:var(--panel2); color:var(--text); }
+.modal-body{ flex:1 1 auto; overflow:auto; padding:16px; }
+
+.font-dropzone{
+  border:2px dashed var(--line2); border-radius:10px; padding:18px; text-align:center; color:var(--t2);
+  margin-bottom:18px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:12px;
+}
+.font-dropzone:hover,.font-dropzone.drag{ border-color:var(--accent); color:var(--text); background:var(--accent-soft); }
+.font-dropzone svg{ width:24px; height:24px; }
+.font-dropzone .sub{ font-size:11.5px; color:var(--t3); }
+
+.font-group-label{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--t2); margin:18px 4px 8px; font-weight:600; }
+.font-group-label:first-child{ margin-top:0; }
+.font-list{ display:flex; flex-direction:column; gap:8px; }
+.font-card{
+  display:flex; align-items:center; gap:14px; padding:12px 14px; background:var(--surface);
+  border:1px solid var(--line); border-radius:9px;
+}
+.font-card .meta{ flex:0 0 150px; }
+.font-card .meta .fname{ font-size:13px; font-weight:600; }
+.font-card .meta .ffile{ font-size:11px; color:var(--t3); margin-top:2px; }
+.font-card .sample{ flex:1 1 auto; font-size:22px; color:var(--text); overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.font-card .del{ flex:0 0 auto; width:28px; height:28px; border:1px solid var(--line2); background:transparent; color:var(--t2); border-radius:6px; cursor:pointer; display:grid; place-items:center; }
+.font-card .del:hover{ border-color:var(--warn); color:var(--warn); }
+.font-card .builtin-tag{ flex:0 0 auto; font-size:10.5px; color:var(--t3); border:1px solid var(--line); border-radius:10px; padding:2px 8px; }
+
+/* tooltips */
+[data-tip]{ position:relative; }
+[data-tip]:hover::after{
+  content:attr(data-tip); position:absolute; left:50%; top:calc(100% + 7px); transform:translateX(-50%);
+  background:var(--accent); color:var(--accent-fg); font-size:11px; padding:4px 8px; border-radius:5px; white-space:nowrap;
+  pointer-events:none; z-index:200; border:1px solid var(--accent);
+}
+/* The bottom dock is 16px off the window's floor, so a tip 7px below it lands
+   outside the window and is simply never seen - which is what happened to every
+   tooltip on the zoom pill. Both halves of the dock read upwards instead. The
+   pager's own tips arrived later than this rule, which sat here matching
+   nothing in the meantime; they are in Pager.svelte now. */
+.zoomdock [data-tip]:hover::after,.pager [data-tip]:hover::after{
+  top:auto; bottom:calc(100% + 7px);
+}
+
+/* toast */
+.toast{
+  position:fixed; bottom:38px; left:50%; transform:translateX(-50%) translateY(20px);
+  background:var(--accent); border:1px solid var(--accent); color:var(--accent-fg); padding:9px 16px; border-radius:8px;
+  font-size:12.5px; opacity:0; pointer-events:none; transition:opacity .2s,transform .2s; z-index:300;
+  box-shadow:var(--edge);
+}
+.toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+/* ===== v2 additions: editing, curve, effects, tools ===== */
+
+/* inline editing */
+.tbox.editing{ outline:1.5px solid var(--tintline); cursor:text; }
+.txt.editable{
+  width:100%; outline:none; cursor:text; white-space:pre-wrap; word-break:break-word;
+  user-select:text; -webkit-user-select:text; caret-color:var(--tintline);
+}
+
+/* curved (arc) text */
+.tbox .arc{ position:absolute; inset:0; }
+.arc-ch{ position:absolute; left:50%; top:50%; display:inline-block; transform-origin:center center; white-space:pre; }
+svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
+
+/* inspector collapsible sub-sections */
+/* The Inspector's headers are real <button>s (the bulk panel's are still divs,
+   because a header there carries its own tick control), so the rule resets the
+   button chrome as well as laying the strip out. Both forms land on the same
+   size and colour. */
+.insp-sub{ border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.insp-sub-head{
+  display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--surface);
+  cursor:pointer; user-select:none; font-size:11px; text-transform:uppercase; letter-spacing:.4px;
+  color:var(--t2); font-weight:600;
+  width:100%; border:none; text-align:left; font-family:inherit;
+}
+.insp-sub-head:hover{ color:var(--text); }
+.insp-sub-head:focus-visible{ outline:2px solid var(--accent); outline-offset:-2px; }
+.insp-sub-head .chev{ margin-left:auto; width:13px; height:13px; transition:transform .15s; color:var(--t3); }
+.insp-sub.closed .chev{ transform:rotate(-90deg); }
+.insp-sub-body{ padding:12px; display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); min-width:0; }
+.insp-sub.closed .insp-sub-body{ display:none; }
+
+/* A hairline between the things a section groups: fill, then strokes, then
+   shadows, then the two whole-box sliders. Cheaper than four more headers, and
+   the user asked for fewer of those, not more. */
+.insp-rule{ height:1px; background:var(--line); margin:1px 0; }
+
+/* Repeatable list items - a stroke, a shadow, a gradient stop. All three are
+   one row: the colour, its numbers, and the control that removes it. They used
+   to be three-row cards with a header apiece, which is how a letterer with two
+   strokes and a shadow ended up scrolling most of a screen to reach the
+   opacity slider.
+   The column widths live on the list as `--cols` so the caption strip and every
+   row underneath it are laid out by the same template - the names are said once
+   at the top instead of once per item, and they still sit over the field they
+   name. */
+.insp-list{ display:flex; flex-direction:column; gap:6px; min-width:0; }
+.insp-list.k-stroke{ --cols:24px minmax(0,1fr) 52px 52px 20px; }
+.insp-list.k-shadow{ --cols:24px repeat(4,minmax(0,1fr)) 20px; }
+.insp-row{ display:grid; grid-template-columns:var(--cols); align-items:center; gap:6px; min-width:0; }
+/* The stepper is what the compact rows cannot afford: four number fields in a
+   shadow row leaves each of them ~50px, and the spin box takes a third of that
+   before a digit is drawn. Arrow keys still step the value. */
+.insp-row input[type=number]{ padding:0 5px; -moz-appearance:textfield; }
+.insp-row input[type=number]::-webkit-inner-spin-button,
+.insp-row input[type=number]::-webkit-outer-spin-button{ -webkit-appearance:none; margin:0; }
+.insp-row input.hex{ padding:0 6px; }
+.insp-cap{
+  display:grid; grid-template-columns:var(--cols); gap:6px; align-items:end;
+  font-size:10px; text-transform:uppercase; letter-spacing:.8px; color:var(--t2);
+  text-align:right; padding-bottom:1px;
+}
+.insp-cap .left{ text-align:left; }
+/* Quiet until the row is under the pointer: the × is the only destructive
+   control in a list of twenty fields and it should not be the loudest thing in
+   the row. Focus brings it back for the keyboard. */
+.insp-row .icon-btn{ opacity:.45; transition:opacity .12s; }
+.insp-row:hover .icon-btn,.insp-row .icon-btn:focus-visible{ opacity:1; }
+.insp-row .icon-btn:disabled{ opacity:.25; }
+.insp-none{ font-size:11.5px; color:var(--t3); padding:1px 0; }
+
+.icon-btn{
+  margin-left:auto; flex:0 0 auto; width:20px; height:20px; padding:0;
+  border:none; background:transparent; color:var(--t3); border-radius:4px; cursor:pointer;
+  display:grid; place-items:center;
+}
+.icon-btn svg{ width:13px; height:13px; }
+.icon-btn:hover{ background:color-mix(in srgb, var(--warn) 14%, transparent); color:var(--warn); }
+.icon-btn:disabled{ opacity:.35; cursor:default; background:transparent; color:var(--t3); }
+
+.add-btn{
+  height:28px; width:100%; border:1px dashed var(--line2); border-radius:6px;
+  background:transparent; color:var(--t2); cursor:pointer; font-family:inherit; font-size:11.5px;
+  display:flex; align-items:center; justify-content:center; gap:6px;
+}
+.add-btn svg{ width:13px; height:13px; }
+.add-btn:hover{ border-color:var(--accent); color:var(--text); background:var(--accent-soft); }
+
+/* Preset picker: the menu takes the room, the two verbs sit tight beside it. */
+.preset-row{ display:flex; align-items:center; gap:6px; min-width:0; }
+.preset-row select{ flex:1 1 auto; min-width:0; }
+.preset-row .rbtn{ height:28px; }
+
+/* A control that cannot act right now is dimmed rather than hidden, so the
+   layout does not shift under the pointer (the height field under auto-height
+   is the case). */
+.insp input:disabled,.insp select:disabled{ opacity:.45; cursor:default; }
+
+/* toggle switch */
+.switch-row{ display:flex; align-items:center; gap:9px; }
+.switch-row .lbl2{ font-size:12px; color:var(--text); }
+.switch{
+  position:relative; width:34px; height:18px; border-radius:10px; flex:0 0 auto; cursor:pointer;
+  background:var(--panel2); border:1px solid var(--line2); transition:background .15s,border-color .15s;
+  /* The Inspector's switches are real <button>s (Space and Enter for free);
+     this strips the button chrome the element arrives with. */
+  padding:0; font-family:inherit;
+}
+/* Keyboard focus on the toggle: the track is the whole control, so the ring
+   wraps the pill rather than the knob. */
+.switch:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.switch.on{ background:var(--accent); border-color:var(--accent); }
+/* The track flips polarity between the two states AND between the two themes,
+   so a single knob colour cannot read in all four. It follows the track it is
+   sitting on instead: --t2 against the off track, --accent-fg against the on
+   one, which is the pairing --accent already requires everywhere else. */
+.switch .knob{ position:absolute; top:1px; left:1px; width:14px; height:14px; border-radius:50%; background:var(--t2); transition:transform .15s,background .15s; }
+.switch.on .knob{ background:var(--accent-fg); transform:translateX(16px); }
+
+/* slider-with-value row */
+.slider-row{ display:flex; align-items:center; gap:9px; }
+.slider-row input[type=range]{ flex:1 1 auto; }
+.slider-row .val{ flex:0 0 42px; text-align:right; font-variant-numeric:tabular-nums; color:var(--t2); font-size:12px; }
+
+/* disabled sub-controls */
+.insp-sub-body.disabled{ opacity:.45; pointer-events:none; }
+
+/* ===== Bulk style floating panel ===== */
+/* 320 rather than 300: every row is now tick + label + control on one line, and
+   at 300 the widest controls (the hex field beside its swatch) lost their last
+   digit. The panel is a window over the page, so the height is still capped and
+   `.bulk-body` scrolls - the group headers are what keep that scroll short. */
+/* Width and height come in on the element's own `style`, from the grip; the
+   `max-*` here are the ceilings neither the grip nor a drag may breach. The
+   height cap is inline too (`calc(100% - <top>px - 16px)`), because the cap has
+   to know where the panel's top ended up: a fixed `calc(100% - 32px)` is only
+   right for a panel at y=16, and dragged half way down the canvas it let the
+   foot - Cancel and Apply - hang off the bottom with no way to reach it. */
+.bulk-panel{
+  position:absolute; top:16px; left:16px; z-index:40;
+  width:320px; max-width:calc(100% - 32px); background:var(--surface); border:1px solid var(--line2);
+  border-radius:10px; box-shadow:var(--edge); display:flex; flex-direction:column;
+  min-height:0;
+}
+.bulk-head{ display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--line); font-size:13px; cursor:move; touch-action:none; user-select:none; }
+.bulk-head b{ font-weight:600; }
+.bulk-head .x{ margin-left:auto; width:26px; height:26px; border:none; background:transparent; color:var(--t2); cursor:pointer; border-radius:6px; display:grid; place-items:center; }
+.bulk-head .x:hover{ background:var(--panel2); color:var(--text); }
+.bulk-hint{ padding:8px 12px; font-size:11.5px; color:var(--t2); border-bottom:1px solid var(--line); }
+/* `min-height:0` is the whole of the scroll fix. A flex item's automatic
+   minimum size is its content, so this box refused to shrink below everything
+   inside it and the panel grew past its own max-height instead of scrolling -
+   the overflow went out of the bottom of the canvas rather than under a
+   scrollbar. Zero lets it take whatever the head and foot leave, which is what
+   makes `overflow-y:auto` mean anything. */
+.bulk-scroll{ flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; }
+.bulk-head,.bulk-foot{ flex:0 0 auto; }
+.bulk-body{ padding:12px; display:flex; flex-direction:column; gap:11px; }
+.bulk-body .grp{ display:flex; flex-direction:column; gap:6px; }
+.bulk-body label.lbl, .bulk-body .lbl, .bulk-tag .lbl{ font-size:11px; color:var(--t2); text-transform:uppercase; letter-spacing:.4px; }
+.bulk-foot{ display:flex; align-items:center; gap:8px; padding:10px 12px; border-top:1px solid var(--line); }
+.bulk-foot .cnt{ font-size:12px; color:var(--t2); margin-right:auto; }
+.bulk-foot .btn{ height:30px; }
+/* Same grip as FloatingPanel's, and deliberately the same picture: two
+   resizable floating windows over the same canvas should not have two different
+   affordances. */
+.bulk-grip{ position:absolute; right:0; bottom:0; width:16px; height:16px; cursor:nwse-resize; touch-action:none; }
+.bulk-grip::after{
+  content:""; position:absolute; right:3px; bottom:3px; width:8px; height:8px;
+  border-right:1.5px solid var(--t3); border-bottom:1.5px solid var(--t3);
+}
+
+/* The tag-driven edit, and its scope, above the hint that describes the
+   click-to-select one. Its own border is what says the scope pills belong to
+   this block and not to the boxes the user is about to click. */
+.bulk-tag{ padding:10px 12px; display:flex; flex-direction:column; gap:8px; border-bottom:1px solid var(--line); }
+.bulk-tag .trow{ display:grid; grid-template-columns:56px 1fr; align-items:center; gap:8px; }
+/* Word labels, not the icon glyphs the property rows carry - they need room
+   either side of the hairline or "Chapter" and "This page" read as one run. */
+.bulk-tag .seg button{ padding:0 10px; }
+/* The tag edit's own Apply, in the tag block rather than the footer, because the
+   footer's Apply belongs to the click-to-select flow and is disabled whenever no
+   box has been clicked. Without one here the tag edit had no mouse route at all
+   - it depended on the `<select>` still holding focus for its Enter. Sits in the
+   grid's control column, so it lines up under the selector it applies. */
+.bulk-tag .tag-go{ height:30px; justify-self:start; padding:0 12px; }
+.bulk-note{ font-size:11px; line-height:1.45; color:var(--t2); }
+
+/* One property, one row: the tick that says whether it takes part, its name,
+   and its own control - nothing else, or twenty-seven of these become the wall
+   the panel is not allowed to be. The label column is fixed so every control in
+   the panel starts at the same x. */
+.brow{ display:grid; grid-template-columns:14px 62px 1fr; align-items:center; gap:8px; }
+.brow > .lbl{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* A row nobody has ticked contributes nothing to the edit, and reads that way.
+   Dimmed rather than disabled: touching the control is how a row gets ticked. */
+.brow.off > *:not(.btick){ opacity:.5; }
+/* Content-width, so a lone Bold toggle does not stretch across the row the way
+   a full-width segment would and pretend to be three buttons. */
+.brow .seg{ width:max-content; max-width:100%; }
+.brow .seg button{ flex:0 0 auto; padding:0 10px; }
+.brow .color-field .hex{ flex:1 1 auto; min-width:0; }
+/* No swatch override here. It used to shrink to 26px square, from a time when
+   the hex beside it was 26px too; the hex now takes 30px from the panel-wide
+   input rule, and three colour rows sat 4px out of alignment with the field
+   they belong to. The base `.swatch` is already 30px - the same height - so the
+   row lines up by having no opinion rather than by carrying a second number
+   that has to be kept in step with the first. */
+
+/* Native, on purpose: the checkbox is the one control the platform draws
+   correctly in both themes once `color-scheme` is declared on :root, and
+   `accent-color` is what carries the app's tint into it. */
+.btick{ width:14px; height:14px; margin:0; flex:0 0 auto; accent-color:var(--accent); cursor:pointer; }
+/* Tighter than the Inspector's 11px: these rows are one line each, and the
+   panel has five groups' worth of them. */
+.bulk-body .insp-sub-body{ gap:8px; padding:9px 10px; }
+
+/* ===== Export dialog ===== */
+.export-modal{ width:440px; max-width:calc(100% - 32px); }
+.export-modal .modal-body{ display:flex; flex-direction:column; gap:16px; }
+.export-modal .grp{ display:flex; flex-direction:column; gap:6px; }
+.export-modal label.lbl, .export-modal .lbl{ font-size:11px; color:var(--t2); text-transform:uppercase; letter-spacing:.4px; }
+.export-modal input[type=text], .export-modal input[type=number], .export-modal select{ height:34px; }
+.exp-sub{ font-size:11px; color:var(--t2); }
+.exp-sub code, .exp-dir code{ background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:11px; }
+.exp-dir{ font-size:12px; color:var(--text); background:var(--panel2); border:1px solid var(--line); border-radius:7px; padding:9px 11px; word-break:break-all; }
+.exp-dir.warn{ color:var(--t2); }
+.exp-choices{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.exp-card{
+  display:flex; flex-direction:column; align-items:center; gap:5px; padding:16px 10px; cursor:pointer;
+  background:var(--surface); border:1px solid var(--line2); border-radius:9px; color:var(--text);
+}
+.exp-card:hover{ border-color:var(--accent); background:var(--accent-soft); }
+.exp-card svg{ width:26px; height:26px; color:var(--accent); margin-bottom:2px; }
+.exp-card .t{ font-size:13px; font-weight:600; }
+.exp-card .d{ font-size:11px; color:var(--t2); }
+
+/* ===== Inspector rotation quick control ===== */
+.rot-row{ display:flex; align-items:center; gap:4px; }
+.rot-row input[type=range]{ flex:1 1 0; min-width:0; }
+.rot-row .rbtn{ min-width:26px; padding:0 4px; flex-shrink:0; }
+/* The typed angle, beside the slider that drags it. Fixed and narrow: it holds
+   four characters at most and the slider should have the rest of the row. */
+.rot-row input.deg{ flex:0 0 46px; width:46px; padding:0 5px; -moz-appearance:textfield; }
+.rot-row input.deg::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+.rbtn{
+  flex:0 0 auto; height:26px; min-width:30px; padding:0 6px;
+  border:1px solid var(--line2); background:var(--surface); color:var(--text);
+  border-radius:5px; cursor:pointer; font-size:11px; font-variant-numeric:tabular-nums;
+  display:grid; place-items:center;
+}
+.rbtn:hover{ background:var(--panel2); border-color:var(--t3); }
+.rbtn.reset{ color:var(--t2); }
+.rbtn:disabled{ opacity:.4; cursor:default; background:var(--surface); border-color:var(--line2); }
+
+/* ---------- home screens ---------- */
+.home-scroll{ height:100vh; overflow-y:auto; overflow-x:hidden; background:var(--bg); }
+.home-frame{ min-height:100vh; display:flex; flex-direction:column; padding:26px 34px 64px; }
+.home-head{ display:flex; align-items:center; gap:16px; flex:none; }
+.home-head .spacer{ flex:1; }
+.wordmark{ font-size:12.5px; font-weight:600; letter-spacing:.3em; }
+
+.soft-btn{
+  height:28px; padding:0 12px; border:1px solid transparent; border-radius:7px;
+  background:var(--accent-soft); font-size:11.5px; color:var(--t2); cursor:pointer; white-space:nowrap;
+}
+.soft-btn.wide{ width:212px; height:40px; font-size:12.5px; color:var(--text); border-radius:8px; }
+.accent-btn{
+  width:212px; height:40px; border:none; border-radius:8px;
+  background:var(--accent); color:var(--accent-fg);
+  font-size:12.5px; font-weight:600; letter-spacing:.02em; cursor:pointer;
+}
+.name-input{
+  width:212px; height:40px; padding:0 12px; border:1px solid var(--line2); border-radius:8px;
+  background:var(--surface); color:var(--text); font-size:12.5px;
+}
+/* The layout picker in the create-a-project row: the same 212px column every
+   other control in `.home-actions` is, so the three of them read as one form
+   rather than a segmented control that wandered in. */
+.seg.new-layout{ width:212px; border-radius:8px; }
+.seg.new-layout button{ height:36px; font-size:11.5px; }
+
+.home-actions{ display:flex; flex-direction:column; align-items:center; gap:10px; padding:168px 0 152px; }
+.section-label{ font-size:10.5px; letter-spacing:.22em; color:var(--t3); margin-bottom:18px; }
+.section-label.spaced{ margin:56px 0 4px; }
+.home-empty{ padding:52px 0; font-size:12px; color:var(--t3); line-height:1.7; }
+.home-error{
+  padding:12px 0 20px; font-size:11.5px; color:var(--warn); line-height:1.7;
+  display:flex; flex-direction:column; align-items:flex-start; gap:10px; max-width:560px;
+}
+.confirm-note{ grid-column:1/-1; padding:8px 0 14px; font-size:11px; line-height:1.6; }
+.warn{ color:var(--warn); }
+
+.pgrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); gap:32px 20px; }
+.pcard{ display:flex; flex-direction:column; min-width:0; }
+.pcard-cover{
+  position:relative; aspect-ratio:2/3; width:100%; padding:0;
+  background:var(--card); border:none; border-radius:3px; box-shadow:var(--edge);
+  overflow:hidden; cursor:pointer;
+}
+.pcard-cover img{ width:100%; height:100%; object-fit:cover; display:block; }
+.pcard-meta{ padding-top:11px; min-width:0; }
+.pcard-name{ font-size:13px; font-weight:500; letter-spacing:-.01em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pcard-sub{ font-size:11px; color:var(--t3); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pcard-sub.small{ font-size:10.5px; margin-top:5px; }
+.pcard-del{
+  align-self:flex-start; margin-top:8px; padding:0; border:none; background:transparent;
+  font-size:10.5px; color:var(--t3); cursor:pointer;
+}
+.pcard-del:hover{ color:var(--warn); }
+.pcard.unreadable .pcard-cover{ cursor:default; opacity:.5; }
+
+.back-link{ border:none; background:transparent; padding:0; font-size:11.5px; color:var(--t3); cursor:pointer; letter-spacing:.04em; }
+.project-head{ display:flex; align-items:flex-end; gap:24px; margin-top:22px; }
+.project-title{ flex:1; min-width:0; }
+.project-name{ font-size:27px; font-weight:500; letter-spacing:-.02em; line-height:1.1; }
+.project-meta{ font-size:11.5px; color:var(--t3); margin-top:9px; }
+
+.chapter-table{ border-top:1px solid var(--line); }
+.chapter-row{ display:flex; align-items:center; border-bottom:1px solid var(--line); }
+.chapter-open{
+  flex:1; display:flex; align-items:center; gap:16px; min-width:0;
+  padding:14px 0; border:none; background:transparent; color:inherit; text-align:left; cursor:pointer;
+}
+.chapter-open:hover{ background:var(--accent-soft); }
+/* Status mark, number, title, then three right-aligned columns at the widths
+   the design specifies. Fixed widths so the columns line up down the table
+   rather than following each row's content. */
+.chapter-mark{ width:14px; flex:none; margin-left:8px; font-size:9px; line-height:1; text-align:center; color:var(--t3); }
+.chapter-mark.on{ color:var(--text); }
+.chapter-num{ width:72px; flex:none; font-size:13px; }
+.chapter-title{ flex:1; min-width:0; font-size:13px; }
+.chapter-sub{ font-size:11px; color:var(--t3); margin-top:4px; }
+.chapter-chip{ width:120px; flex:none; text-align:right; font-size:11px; color:var(--t2); }
+.chapter-pages{ width:130px; flex:none; text-align:right; font-size:11.5px; color:var(--t2); }
+.chapter-time{ width:104px; flex:none; text-align:right; font-size:11px; color:var(--t3); }
+.chapter-del,.chapter-act{ border:none; background:transparent; font-size:10.5px; color:var(--t3); cursor:pointer; padding:0 8px; }
+/* Only the destructive one turns --warn. */
+.chapter-del:hover{ color:var(--warn); }
+.chapter-act:hover{ color:var(--text); }
+.chapter-act:disabled{ opacity:.4; cursor:default; }
+.chapter-act:disabled:hover{ color:var(--t3); }
+/* The workflow-mode switch. It reads as a state badge rather than as a verb -
+   it says what the chapter IS, and pressing it is what makes it the other one -
+   so it is lit when it is not the default and quiet when it is. Fixed width, or
+   the two words either side of the switch would shift Sources and Delete along
+   the row as chapters differ. */
+.chapter-mode{ width:72px; flex:none; text-align:center; border:1px solid var(--line); border-radius:999px; padding:2px 8px; }
+.chapter-mode:hover{ border-color:var(--t3); }
+.chapter-mode.on{ color:var(--accent); border-color:var(--accent); }
+.chapter-mode.on:hover{ color:var(--accent); }
+
+/* Unreadable chapter rows (scan stubs from a chapter.json that failed to
+   parse): disabled and visibly flagged rather than clickable, same
+   treatment as .pcard.unreadable above. */
+.chapter-open:disabled{ cursor:default; opacity:.5; }
+.chapter-open:disabled:hover{ background:transparent; }
+.chapter-row.unreadable .chapter-num{ color:var(--t3); }
+
+/* ---------- new chapter dialog ---------- */
+/* `.field`, `.seg` and `.modal-head` are already taken by the inspector and the
+   existing modals, so the dialog's variants are scoped rather than redefined -
+   a bare `.field{flex-direction:row}` would relayout every inspector control. */
+.dialog-narrow{ width:380px; max-width:92vw; padding:18px; }
+.dialog-narrow .modal-head{
+  height:auto; flex:none; display:block; padding:0; border-bottom:none;
+  font-size:13px; font-weight:600; margin-bottom:18px;
+}
+.dialog-narrow .field,.settings-section .field{
+  display:flex; flex-direction:row; align-items:center; gap:12px; margin-bottom:12px;
+}
+.dialog-narrow .field > span,.settings-section .field > span{
+  width:110px; flex:none; font-size:11.5px; color:var(--t2);
+}
+.dialog-narrow .field input,.dialog-narrow .field select{
+  flex:1; min-width:0; height:30px; padding:0 9px;
+  border:1px solid var(--line2); border-radius:6px;
+  background:var(--surface); color:var(--text); font-size:12px;
+}
+.dialog-narrow .field input:focus,.dialog-narrow .field select:focus{ outline:none; border-color:var(--accent); }
+.dialog-narrow .field .soft-btn{ flex:1; min-width:0; height:30px; color:var(--text); }
+/* The mode picker. Sized to its two words rather than stretched across the row
+   like the pickers above it: those are one control filling the field, this is a
+   choice between two, and a full-width pair reads as two buttons rather than as
+   one switch. Same 30px as everything else on this row. */
+.dialog-narrow .field .seg{ flex:0 0 auto; }
+.dialog-narrow .field .seg button{ flex:0 0 auto; height:30px; padding:0 14px; font-size:11.5px; }
+.dialog-narrow .home-error{ padding:0 0 4px; }
+.modal-foot{ display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
+.modal-foot .soft-btn{ height:30px; }
+.accent-btn.narrow{ width:auto; height:30px; padding:0 16px; font-size:12px; }
+.accent-btn:disabled,.soft-btn:disabled{ opacity:.55; cursor:default; }
+
+/* ---------- settings: appearance + library ---------- */
+/* ---------- pairing summary + chapter sources sheet ---------- */
+.pair-note{ font-size:11px; line-height:1.6; color:var(--t2); padding:2px 0; }
+.pair-note.warn{ color:var(--warn); }
+.soft-btn.slim{ height:26px; padding:0 9px; font-size:11px; flex:0 0 auto; }
+.soft-btn.warn{ color:var(--warn); }
+
+/* The head, the bulk actions and the notes stay put; only the page list
+   scrolls, so a 200-page chapter never scrolls its own controls away. */
+.sources-sheet{ width:640px; max-width:94vw; padding:18px; }
+.sources-sheet > *{ flex:0 0 auto; }
+.sources-sheet .modal-head{ height:auto; padding:0 0 12px; }
+.sources-meta{ font-size:11.5px; color:var(--t2); padding:2px 0 12px; }
+.sources-bulk{ display:flex; flex-wrap:wrap; gap:8px; padding-bottom:10px; }
+.sources-list{
+  flex:1 1 auto; min-height:0; overflow-y:auto;
+  border-top:1px solid var(--line); margin-top:10px;
+}
+.sources-row{
+  display:flex; align-items:center; gap:10px;
+  padding:8px 0; border-bottom:1px solid var(--line);
+}
+.sources-idx{ width:26px; flex:none; font-size:11px; color:var(--t3); text-align:right; }
+.sources-thumb{
+  width:34px; height:48px; flex:none; background:var(--art);
+  border:1px solid var(--line); border-radius:2px; overflow:hidden;
+}
+.sources-thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
+.sources-names{ flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+.sources-names .path{
+  font-size:11px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.sources-names .path.warn{ color:var(--warn); }
+.sources-none{ font-size:11px; color:var(--t3); }
+
+.settings-section{ margin-bottom:22px; }
+.settings-title{ font-size:10.5px; letter-spacing:.22em; color:var(--t3); margin-bottom:12px; }
+/* Says what it is on the section heading rather than in the hint underneath,
+   because the heading is the part someone scanning Settings actually reads. */
+.settings-title .beta-badge{
+  margin-left:8px; padding:2px 7px; border-radius:999px;
+  border:1px solid var(--warn); color:var(--warn);
+  font-size:9.5px; letter-spacing:.08em; text-transform:none; vertical-align:1px;
+}
+.settings-section .seg{ flex:none; }
+/* The one place Settings overrides the shared segment: word labels rather than
+   the icon glyphs the Inspector's strips carry, so they need room either side
+   of the hairline or "System · dark" and its neighbours read as one run of
+   text - and a shorter, smaller row, because a settings row is not a control
+   being aimed at repeatedly. Scoped to Settings so the Inspector keeps its
+   tight icon grid. There used to be a second, earlier copy of this selector up
+   beside `.seg` itself at the same specificity: same fix arrived twice, from
+   two directions, and the earlier one silently did nothing. One rule. */
+.settings-section .seg button{ height:26px; padding:0 14px; font-size:11.5px; }
+
+/* Boot placeholder: the frame before the library root is known. */
+.boot{ height:100vh; background:var(--bg); }
+
+/* ---------- floating panels ---------- */
+/* `fp-expand`/`fp-collapse` are shared by `.fpanel` and `.stub-ink` (the stub's
+   inner skin - see `.panel-stub` below for why the button itself never moves):
+   the base rule on each plays `fp-expand` (grows and fades in from the corner
+   they share) every time one mounts; an `.fp-exit` on the panel or on the stub
+   button switches it to `fp-collapse`, the same motion inverted, shrinking
+   toward that corner instead. Two
+   keyframes rather than one played in reverse - merely flipping
+   `animation-direction` on a class that has already settled into its `both`
+   fill does not reliably restart a finished animation, since nothing about
+   that changes `animation-name`; a genuinely new name is what forces the
+   browser to replay it. See FloatingPanel.svelte's `exitingPanel`/`exitingStub`
+   state for what keeps the outgoing element mounted long enough to play
+   `fp-collapse` - the two overlap, so the panel gathers into the icon while the
+   icon grows out of the same corner, rather than the user waiting out one
+   before the other begins.
+   `.fp-exit` also takes pointer events off whatever is leaving. That is not
+   decoration: for the 420ms of the collapse the outgoing panel was still
+   full-size and still live, so a click meant for the canvas landed on it, and
+   grabbing its header re-clamped a full-size panel against a record already
+   marked hidden - leaving it mostly off screen. What is leaving is a picture,
+   not a control. */
+@keyframes fp-expand{ from{ transform:scale(.08); opacity:0 } to{ transform:scale(1); opacity:1 } }
+@keyframes fp-collapse{ from{ transform:scale(1); opacity:1 } to{ transform:scale(.08); opacity:0 } }
+.fpanel{
+  position:fixed; display:flex; flex-direction:column; min-height:0;
+  background:var(--panel); border:1px solid var(--line2); border-radius:var(--radius);
+  box-shadow:var(--edge); overflow:hidden;
+  transform-origin:top left; animation:fp-expand .42s cubic-bezier(0,0,.2,1) both;
+}
+.fpanel.fp-exit{ animation:fp-collapse .42s cubic-bezier(.4,0,1,1) both; pointer-events:none; }
+/* touch-action:none on both drag surfaces - the header here and .fpanel-grip
+   below - exactly as .bulk-head already does: without it the browser may claim
+   the pointer for a pan and cancel the gesture mid-drag. */
+.fpanel-head{
+  flex:0 0 auto; height:32px; display:flex; align-items:center; gap:8px; padding:0 6px 0 12px;
+  border-bottom:1px solid var(--line); cursor:grab; touch-action:none; user-select:none;
+  font-size:11px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--t2);
+}
+.fpanel-head:active{ cursor:grabbing; }
+/* The title takes the slack, so everything after it sits right without any
+   margin:auto juggling - reordering the header cannot silently break it. */
+.fpanel-title{ flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fpanel-count{
+  flex:0 0 auto; font-size:11px; font-weight:500; letter-spacing:0; text-transform:none;
+  color:var(--t2); background:var(--surface); border:1px solid var(--line); padding:1px 7px; border-radius:10px;
+}
+.fpanel-hide{
+  width:24px; height:24px; border:none; background:transparent; color:var(--t2);
+  border-radius:5px; cursor:pointer; display:grid; place-items:center; flex:0 0 auto;
+}
+.fpanel-hide:hover{ background:var(--panel2); color:var(--text); }
+.fpanel-hide svg{ width:15px; height:15px; }
+.fpanel-body{ flex:1 1 auto; min-height:0; overflow:auto; }
+.fpanel-grip{ position:absolute; right:0; bottom:0; width:16px; height:16px; cursor:nwse-resize; touch-action:none; }
+.fpanel-grip::after{
+  content:""; position:absolute; right:3px; bottom:3px; width:8px; height:8px;
+  border-right:1.5px solid var(--t3); border-bottom:1.5px solid var(--t3);
+}
+/* An icon now, not a text pill (see FloatingPanel.svelte) - square rather
+   than the pill's rounded-full shape so the drag affordance reads as a
+   button, not a chip, at this size.
+   The button is a bare 34px hit target and nothing else: every visible part of
+   it, and the animation, live on `.stub-ink` inside. Hit-testing follows the
+   transformed box, so an animation on the button itself meant the control
+   started life 2.7px wide and only reached 34px when the gather finished -
+   untappable for most of the window in which the user is most likely to want
+   it. Mirrored by KEEP_STUB in src/lib/editor/panels.svelte.js, which clamps
+   the stub against this footprint rather than the panel's; the two numbers have
+   to agree or a stub parked in a corner is either yanked inward or left with
+   nothing to grab. */
+.panel-stub{
+  position:fixed; display:grid; place-items:center; width:34px; height:34px; padding:0;
+  border:none; background:transparent; cursor:pointer;
+}
+.stub-ink{
+  width:100%; height:100%; display:grid; place-items:center;
+  background:var(--panel); border:1px solid var(--line2); border-radius:9px; box-shadow:var(--edge);
+  color:var(--t2);
+  transform-origin:top left; animation:fp-expand .42s cubic-bezier(0,0,.2,1) both;
+}
+.panel-stub.fp-exit{ pointer-events:none; }
+.panel-stub.fp-exit .stub-ink{ animation:fp-collapse .42s cubic-bezier(.4,0,1,1) both; }
+.panel-stub:hover .stub-ink{ color:var(--text); border-color:var(--t3); }
+.panel-stub svg{ width:18px; height:18px; }
+/* Every selector that sets an animation above has to be named here, at its own
+   specificity or higher. A media query adds none of its own, so the previous
+   `.panel-stub, .fpanel` - (0,1,0) - lost to `.fpanel.fp-exit` and
+   `.panel-stub.fp-exit` at (0,2,0), and the collapse played in full for a user
+   who had asked for no motion. The JS half (GATHER_MS → 0) cut it to about one
+   frame, which is why this went unnoticed; it was never the guard. */
+@media (prefers-reduced-motion: reduce){
+  .fpanel, .fpanel.fp-exit, .stub-ink, .panel-stub.fp-exit .stub-ink{ animation:none }
+}
+
+/* ---------- editor: reference sidebar + tool rail ---------- */
+/* Two layers of the editor root, both above the canvas and below the bulk
+   panel (40) and the floating panels (50+). Neither is laid out by a parent:
+   the sidebar pins itself to the left edge at the width the rail last dragged
+   it to, and the rail pins itself to the sidebar's right edge - or to the
+   window's, once the sidebar is hidden.
+   The sidebar starts at the chrome band, not the window's top edge: the pill
+   row is fixed at top:12px and up to 520px wide, so a sidebar running to 0
+   would put the Home and project pills on top of the raw page. The rail keeps
+   top:0 - it has nothing to cover, and its tool strip is already offset by the
+   same amount. */
+.ed-side{
+  position:absolute; left:0; top:var(--chrome-top); bottom:0; z-index:20;
+  display:flex; flex-direction:column; background:var(--panel);
+}
+/* The bottom padding clears the zoom pill floating at bottom:16px, so the last
+   inch of a long page is not stuck underneath it. */
+.ed-side-scroll{
+  flex:1 1 auto; overflow:auto; padding:14px 14px 64px; background:var(--art);
+  display:flex; justify-content:flex-start;
+}
+/* flex:0 0 auto so a reference zoomed past 100% overflows into the scroll
+   rather than being shrunk back to the column's width; `margin:auto` rather
+   than `justify-content:center` / `align-items:center` to place it, because
+   auto margins resolve to zero once the free space goes negative - a centred
+   overflow would push half the page out past the top-left corner, where
+   scrollTop and scrollLeft cannot follow it.
+   `auto` on all four sides, not just the sides: a page shorter than the column
+   - a wide spread, or anything at a low zoom - used to hang off the top edge
+   with all the empty space below it. Centred, it sits where the eye already is.
+   The bottom padding above is inside that centring, so the page settles in the
+   band above the zoom pill rather than behind it. No `align-self`: auto cross
+   margins take precedence over it, and they are the ones that fail safe. */
+.ed-side-scroll img{ flex:0 0 auto; margin:auto; height:auto; box-shadow:var(--edge); }
+.ed-side-scroll.empty{ align-items:center; }
+/* The reference in a longstrip chapter: the chapter's raws as one column, no
+   gap, slaved to the canvas's scroll (see strip-sync.svelte.js).
+   `margin-inline:auto` rather than `margin:auto` on the items, overriding the
+   rule above: auto margins on a flex column's cross axis centre the item, and on
+   its MAIN axis they eat the free space - which between stacked slices is a
+   white band through the art. The horizontal half is kept because it is what
+   centres a reference zoomed below the column's width, and it still collapses to
+   zero rather than overflowing one zoomed past it. */
+.ed-side-strip{ flex:0 0 auto; width:100%; display:flex; flex-direction:column; align-items:flex-start; gap:0; }
+/* Two classes deep on purpose: it has to outrank `.ed-side-scroll img` above,
+   whose `margin:auto` is the vertical gap this is removing. */
+.ed-side-scroll .ed-side-strip > *{ flex:0 0 auto; display:block; height:auto; margin:0 auto; box-shadow:none; }
+/* A page whose picture the resident window does not hold. It reserves exactly
+   the space the picture will take (`aspect-ratio` on the element), so minting
+   one cannot move the pages below it. */
+.ed-side-slot{ background:var(--panel2); }
+.ed-side-empty{ margin:auto; text-align:center; color:var(--t3); font-size:12px; line-height:1.6; }
+/* Floats over the reference, same pill chrome as the canvas dock and the pager
+   so every zoom control in the editor reads as one family. */
+.ed-side-zoom{
+  position:absolute; left:50%; bottom:16px; transform:translateX(-50%);
+  display:flex; align-items:center; gap:2px; background:color-mix(in srgb, var(--panel) 92%, transparent);
+  border:1px solid var(--line); border-radius:9px; padding:4px;
+  box-shadow:var(--edge); backdrop-filter:blur(6px);
+}
+.ed-side-zoom button{ height:28px; min-width:28px; padding:0 8px; border:none; background:transparent; color:var(--text); border-radius:6px; cursor:pointer; font-size:12.5px; display:grid; place-items:center; }
+.ed-side-zoom button:hover{ background:var(--panel2); }
+.ed-side-zoom .zval{ min-width:44px; text-align:center; color:var(--t2); font-size:11.5px; }
+
+/* The whole strip carries the drag, but only its left band says so: the cursor
+   and the seam highlight belong to the edge that actually moves, and claiming
+   all 44px would misreport where that edge is. touch-action:none on the strip -
+   without it the browser may claim the pointer for a pan and cancel the drag
+   halfway. */
+.ed-rail{ position:absolute; top:0; bottom:0; width:var(--rail-w); z-index:21; touch-action:none; }
+.ed-rail-edge{ position:absolute; left:0; top:0; bottom:0; width:9px; cursor:col-resize; }
+.ed-rail-edge:focus{ outline:none; }
+.ed-rail.hidden .ed-rail-edge{ cursor:default; }
+/* The seam between sidebar and canvas. It draws the sidebar's own right edge,
+   so it starts where the sidebar does - the band above it is the chrome row,
+   with art on both sides and no edge to mark. The drag band itself stays
+   full-height: the grab is bigger than the line it advertises. With the sidebar
+   hidden there is no seam to draw and nothing to drag, so it goes away with it. */
+.ed-rail-edge::before{
+  content:""; position:absolute; left:0; top:var(--chrome-top); bottom:0; width:1px;
+  background:var(--line2); transition:background .12s;
+}
+.ed-rail.hidden .ed-rail-edge::before{ display:none; }
+.ed-rail-edge:hover::before{ background:var(--accent); }
+/* Keyboard focus lands on the band itself, so the seam is where it shows - the
+   same highlight the hover gives, thickened so it reads without a pointer. */
+.ed-rail-edge:focus-visible::before{ background:var(--accent); width:2px; }
+/* top clears the Home/project pill band - the same --chrome-top the sidebar
+   starts at, which is what that token measures. With the sidebar hidden the
+   rail sits at left:0, directly under that row, and the pill row outranks the
+   rail (z-index 30 vs 21) - so without this offset the caret, the only way back
+   to a hidden sidebar, would be covered and unclickable rather than merely
+   hidden behind it. Kept the same in the visible state too, on purpose: one
+   offset for both states is one fewer thing to keep in sync as either geometry
+   moves. */
+.ed-rail-tools{
+  position:absolute; left:2px; top:var(--chrome-top); display:flex; flex-direction:column; gap:3px;
+  background:color-mix(in srgb, var(--panel) 92%, transparent); border:1px solid var(--line);
+  border-radius:9px; padding:4px; box-shadow:var(--edge); backdrop-filter:blur(6px);
+  cursor:default;
+}
+/* A vertical strip has no room for a tooltip centred underneath it - the rail
+   sits at the window's left edge with the sidebar hidden, and a centred tip
+   runs straight off it. These read to the side instead. */
+.ed-rail-tools [data-tip]:hover::after{
+  left:calc(100% + 7px); top:50%; transform:translateY(-50%);
+}
+.ed-rail-tools button{
+  width:30px; height:30px; border:none; background:transparent; color:var(--text);
+  border-radius:6px; cursor:pointer; display:grid; place-items:center;
+}
+.ed-rail-tools button:hover:not(.on){ background:var(--panel2); }
+.ed-rail-tools button.on{ background:var(--accent); color:var(--accent-fg); }
+.ed-rail-tools button svg{ width:17px; height:17px; }
+.ed-rail-tools .caret{ color:var(--t2); }
+.ed-rail-tools .caret:hover{ color:var(--text); }
+.ed-rail-tools .sep{ height:1px; background:var(--line); margin:1px 3px; }
+
+/* ---------- floating chrome ---------- */
+/* Two rows of pills over the full-bleed canvas, where a top bar used to be.
+   None of them is laid out by a parent: each pins itself to the window, so the
+   canvas is never inset by chrome it does not know about. Above the reference
+   sidebar and the rail (20/21) and below the bulk panel (40) and the floating
+   panels (50+) - the chrome is always reachable, but a panel the user dragged
+   somewhere is never cut in half by it. */
+.pill-row{
+  position:fixed; top:12px; z-index:30;
+  display:flex; align-items:center; gap:8px;
+}
+/* Capped, because a long project · chapter name would otherwise run under the
+   cluster opposite it. */
+.pill-row.left{ left:16px; max-width:min(46vw,520px); }
+/* Everything that is not identity lives here now. Detect, Bulk style and Export
+   used to sit mid-band, pinned to the left of a fixed right-hand panel column -
+   a column the panels stopped living in when they became draggable windows,
+   which is how they ended up floating over the page as four unrelated buttons.
+   The token that held that column's width is gone with it. */
+.pill-row.far-right{ right:16px; }
+/* Groups within the one row: chapter verbs, then app drawers. Same hairline as
+   the zoom dock's, so both clusters divide themselves the same way. */
+.pill-row .pill-sep{ width:1px; height:18px; background:var(--line2); margin:0 2px; flex:none; }
+
+.pill{
+  height:32px; flex:0 1 auto; min-width:0;
+  display:flex; align-items:center; gap:7px; padding:0 12px;
+  background:var(--panel); border:1px solid var(--line2); border-radius:16px;
+  box-shadow:var(--edge); color:var(--text); font-size:12px;
+  cursor:pointer; white-space:nowrap;
+}
+.pill:hover{ border-color:var(--t3); }
+.pill:disabled{ color:var(--t3); border-color:var(--line2); cursor:default; }
+.pill svg{ width:16px; height:16px; flex:none; }
+.pill-icon{ width:32px; flex:none; padding:0; justify-content:center; }
+/* Only while a detect is in flight: the glyph cannot say that it is running,
+   nor how far through a whole-chapter run it is, so the pill grows a note for
+   exactly as long as that matters. */
+.pill-icon.busy{ width:auto; padding:0 11px; }
+.pill-icon.on{ background:var(--panel2); border-color:var(--t3); }
+.pill-count{ font-size:11px; color:var(--t2); }
+.pill-accent{ background:var(--accent); border-color:var(--accent); color:var(--accent-fg); font-weight:600; }
+.pill-accent:hover{ border-color:var(--accent); }
+.pill-accent:disabled{ color:var(--accent-fg); opacity:.55; }
+
+/* The project pill is a label, not a control: clicking it would do nothing the
+   Home pill beside it does not already do. */
+.pill-proj{ cursor:default; font-weight:600; letter-spacing:.2px; overflow:hidden; }
+.pill-proj:hover{ border-color:var(--line2); }
+.pill-proj .pill-label{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* The save indicator. There is no manual save in this app, so a rejected
+   autosave is the user's only signal that their work is not reaching the disk -
+   which is why the failed state is the one and only --warn in the editor, and
+   why it stands until a write lands instead of fading with its toast. */
+.save-dot{ width:7px; height:7px; flex:none; border-radius:50%; background:var(--t3); }
+.save-dot.saved{ background:var(--text); }
+/* Failed outranks saved on specificity, not on source order: the two classes
+   can be on the dot at the same moment, and which colour wins must not depend
+   on which rule happens to be written second. */
+.save-dot.failed, .save-dot.saved.failed{ background:var(--warn); }
+
+/* The detect popover. Same panel chrome as the pills but squarer, so it reads
+   as something a pill opened rather than as another pill. */
+.pill-anchor{ position:relative; display:flex; }
+.chrome-menu{
+  position:absolute; top:calc(100% + 6px); right:0; z-index:31;
+  min-width:196px; display:flex; flex-direction:column; padding:4px;
+  background:var(--panel); border:1px solid var(--line2); border-radius:9px;
+  box-shadow:var(--edge);
+}
+.chrome-menu button{
+  height:30px; padding:0 10px; border:none; background:transparent; color:var(--text);
+  border-radius:6px; cursor:pointer; text-align:left; font-size:12.5px; white-space:nowrap;
+}
+.chrome-menu button:hover:not(:disabled){ background:var(--panel2); }
+.chrome-menu button:disabled{ color:var(--t3); cursor:default; }
+.chrome-menu-sep{ height:1px; background:var(--line); margin:4px 6px; }

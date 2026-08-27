@@ -1,0 +1,2 @@
+/latest.json https://update-typesetter.komiq.cc/latest.json 301
+/releases/* https://update-typesetter.komiq.cc/releases/:splat 301

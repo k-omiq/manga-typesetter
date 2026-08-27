@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manga Typesetter</title>
+  <meta name="description" content="Lettering for scanlation, without Photoshop. A free desktop typesetting app for manga and webtoons.">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <style>
+    :root {
+      --bg: #0b0e13;
+      --panel: #10141c;
+      --line: #1d2430;
+      --text: #e6e9ef;
+      --dim: #8b94a7;
+      --accent: #e8a33d;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      -webkit-font-smoothing: antialiased;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 9vh 1.25rem 4rem;
+    }
+    pre.logo {
+      font-size: clamp(5.5px, 1.55vw, 13px);
+      line-height: 1.25;
+      color: var(--text);
+      text-align: center;
+      user-select: none;
+    }
+    .tagline {
+      margin-top: 1.1rem;
+      color: var(--dim);
+      font-size: .95rem;
+      text-align: center;
+      letter-spacing: .04em;
+    }
+    .buttons {
+      margin-top: 2.4rem;
+      display: flex;
+      gap: .8rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    a.btn {
+      display: inline-block;
+      padding: .7rem 1.3rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      text-decoration: none;
+      font-size: .85rem;
+      transition: border-color .15s, transform .15s;
+    }
+    a.btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+    a.btn.primary { border-color: var(--accent); color: var(--accent); }
+    .meta {
+      margin-top: .9rem;
+      color: var(--dim);
+      font-size: .75rem;
+      text-align: center;
+    }
+    .shot {
+      margin-top: 3.2rem;
+      max-width: 920px;
+      width: 100%;
+    }
+    .shot img {
+      width: 100%;
+      display: block;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    ul.features {
+      margin-top: 3rem;
+      list-style: none;
+      max-width: 560px;
+      width: 100%;
+      color: var(--dim);
+      font-size: .85rem;
+      line-height: 2.1;
+    }
+    ul.features li::before { content: "+ "; color: var(--accent); }
+    footer {
+      margin-top: 4rem;
+      color: var(--dim);
+      font-size: .75rem;
+      display: flex;
+      gap: 1.4rem;
+    }
+    footer a { color: var(--dim); }
+    footer a:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+
+<pre class="logo">
+█▀▄▀█ ▄▀█ █▄ █ █▀▀ ▄▀█   ▀█▀ █▄█ █▀█ █▀▀ █▀ █▀▀ ▀█▀ ▀█▀ █▀▀ █▀█
+█ ▀ █ █▀█ █ ▀█ █▄█ █▀█    █   █  █▀▀ ██▄ ▄█ ██▄  █   █  ██▄ █▀▄
+</pre>
+
+<p class="tagline">lettering for scanlation, without Photoshop</p>
+
+<div class="buttons">
+  <a class="btn primary" id="dl-mac" href="https://update-typesetter.komiq.cc/releases/v0.1.1/MangaTypesetter_0.1.1_darwin-aarch64.dmg">Download for macOS (Apple Silicon)</a>
+  <a class="btn" id="dl-win" href="https://update-typesetter.komiq.cc/releases/v0.1.1/MangaTypesetter_0.1.1_windows-x86_64-setup.exe">Download for Windows</a>
+</div>
+<p class="meta" id="version">v0.1.1 · free · MIT</p>
+
+<div class="shot"><img src="/editor.jpg" alt="The Manga Typesetter editor" loading="lazy"></div>
+
+<ul class="features">
+  <li>click a bubble, the text box fits its shape</li>
+  <li>shaped line breaking tuned for balloons</li>
+  <li>bubble and text detection, optional OCR</li>
+  <li>gradients, patterns, strokes, shadows, roughen</li>
+  <li>bulk restyle by tag across a chapter</li>
+  <li>autosave, undo that survives a relaunch</li>
+  <li>export PNG, JPG, WebP, JSON or PSD with editable type layers</li>
+  <li>paged manga and longstrip webtoons</li>
+  <li>under a gigabyte of memory over hundreds of pages</li>
+</ul>
+
+<footer>
+  <a href="https://github.com/k-omiq/manga-typesetter">github</a>
+  <a href="https://github.com/k-omiq/manga-typesetter/blob/main/HOWTO.md">user guide</a>
+  <a href="https://discord.gg/vhuYWbZNX5">discord</a>
+  <a href="https://ko-fi.com/komiq">ko-fi</a>
+  <a href="https://github.com/k-omiq/manga-typesetter/blob/main/LICENSE.md">mit license</a>
+</footer>
+
+<script>
+  // Point the buttons at the newest release. latest.json lives on the same
+  // domain as the installers; if the fetch fails the hardcoded links stand.
+  fetch('https://update-typesetter.komiq.cc/latest.json')
+    .then(r => r.json())
+    .then(d => {
+      const v = d.version;
+      const base = 'https://update-typesetter.komiq.cc/releases/v' + v + '/MangaTypesetter_' + v;
+      document.getElementById('dl-mac').href = base + '_darwin-aarch64.dmg';
+      document.getElementById('dl-win').href = base + '_windows-x86_64-setup.exe';
+      document.getElementById('version').textContent = 'v' + v + ' · free · MIT';
+    })
+    .catch(() => {});
+</script>
+
+</body>
+</html>
