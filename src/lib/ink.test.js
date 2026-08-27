@@ -192,8 +192,15 @@ function canvasOf(w, h) {
     globalAlpha: 1,
     fillStyle: null,
     dab: null,
+    imageSmoothingEnabled: true,
+    imageSmoothingQuality: 'low',
     save() {
-      this.stack.push({ m: { ...this.m }, globalAlpha: this.globalAlpha, fillStyle: this.fillStyle });
+      this.stack.push({
+        m: { ...this.m },
+        globalAlpha: this.globalAlpha,
+        fillStyle: this.fillStyle,
+        imageSmoothingEnabled: this.imageSmoothingEnabled,
+      });
     },
     restore() {
       const s = this.stack.pop();
@@ -258,12 +265,40 @@ function canvasOf(w, h) {
         }
       }
     },
-    drawImage(src, dx = 0, dy = 0) {
-      // Only ever the finished layer, over the target at the identity.
-      for (let y = 0; y < src.height; y++) {
-        for (let x = 0; x < src.width; x++) {
-          const j = (y * src.width + x) * 4;
-          over(((y + dy) * w + (x + dx)) * 4, src.data[j], src.data[j + 1], src.data[j + 2],
+    // Two callers: the finished layer over the target at the identity, and a
+    // tip stamped through translate/rotate/scale into a rectangle of its own.
+    // One implementation for both - the destination rect through the current
+    // transform, sampled back through its inverse - so the layer composite is
+    // the same copy it always was (an identity transform at the tip's own size
+    // maps pixel centres 1:1) and a stamp is whatever the transform says.
+    // Nearest neighbour, which keeps the picture a deterministic function of
+    // the transform; `imageSmoothingEnabled` changes no pixel here, so a test
+    // that wants to see the hard edge has to read alpha rather than trust it.
+    drawImage(src, dx = 0, dy = 0, dw = src.width, dh = src.height) {
+      const back = inv(this.m);
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const [lx, ly] of [[dx, dy], [dx + dw, dy], [dx, dy + dh], [dx + dw, dy + dh]]) {
+        const px = this.m.a * lx + this.m.c * ly + this.m.e;
+        const py = this.m.b * lx + this.m.d * ly + this.m.f;
+        x0 = Math.min(x0, px);
+        x1 = Math.max(x1, px);
+        y0 = Math.min(y0, py);
+        y1 = Math.max(y1, py);
+      }
+      for (let py = Math.max(0, Math.floor(y0)); py <= Math.min(h - 1, Math.ceil(y1)); py++) {
+        for (let px = Math.max(0, Math.floor(x0)); px <= Math.min(w - 1, Math.ceil(x1)); px++) {
+          const cx = px + 0.5;
+          const cy = py + 0.5;
+          const lx = back.a * cx + back.c * cy + back.e;
+          const ly = back.b * cx + back.d * cy + back.f;
+          const u = Math.floor(((lx - dx) / dw) * src.width);
+          const v = Math.floor(((ly - dy) / dh) * src.height);
+          if (u < 0 || v < 0 || u >= src.width || v >= src.height) continue;
+          const j = (v * src.width + u) * 4;
+          over((py * w + px) * 4, src.data[j], src.data[j + 1], src.data[j + 2],
             (src.data[j + 3] / 255) * this.globalAlpha);
         }
       }
@@ -654,5 +689,395 @@ describe('the watercolour edge on a stroke that predates it', () => {
     expect(k.waterEdgeWidth).toBe(20);
     expect(k.waterEdgePower).toBe(1);
     expect(normalizeInkStroke({ waterEdgeWidth: 0, pts: [[1, 2, 1]] }).waterEdgeWidth).toBe(1);
+  });
+});
+
+// ===========================================================================
+// Imported tips
+// ===========================================================================
+// A stroke whose brush resolves to an imported tip stamps that tip's pixels
+// instead of the round dab: scaled so its longest side is the stamp's size,
+// turned by the stroke's angle, squashed by its flatness, and tinted to the
+// stroke's colour with the tip's own grey as the coverage. `drawInk` is
+// synchronous and decoding a tip is not, so the tips arrive as a map the caller
+// prefetched - and a stroke whose tip is not in that map draws round for that
+// frame without losing the brush it was drawn with.
+
+import { pickTipLevel, TINT_MAX } from './text-paint.js';
+
+// A greyscale tip, ink at 255, exactly as the library hands one over: the
+// wrapper's `image` is whatever the platform decoded, and here that is the
+// smallest thing the canvas stub can sample.
+const tipImage = (w, h, value) => {
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const v = value(x, y);
+      data[i] = v;
+      data[i + 1] = v;
+      data[i + 2] = v;
+      data[i + 3] = 255;
+    }
+  }
+  return { width: w, height: h, data };
+};
+
+const tipOf = (id, image) => ({
+  id,
+  width: image.width,
+  height: image.height,
+  source: 'pixels',
+  image,
+  bytes: null,
+});
+
+// 2:1 and solid: the aspect is readable straight off the footprint.
+const WIDE = tipOf('wide', tipImage(32, 16, () => 255));
+// The same shape the other way up.
+const TALL = tipOf('tall', tipImage(16, 32, () => 255));
+// Ink in the left half only, so the picture says which way round the tip went
+// down rather than only how big it was.
+const HALF = tipOf('half', tipImage(32, 16, (x) => (x < 16 ? 255 : 0)));
+// Grey ramping left to right: the tint's alpha has to follow it.
+const RAMP = tipOf('ramp', tipImage(32, 16, (x) => Math.round((255 * x) / 31)));
+// Big enough to have a mip chain: 128x64 halves once and then stops, because
+// halving again would take the short side under the floor.
+const BIG = tipOf('big', tipImage(128, 64, () => 255));
+
+const tipMap = (...tips) => new Map(tips.map((t) => [t.id, t]));
+
+const TW = 160;
+const TH = 120;
+const TX = 80;
+const TY = 60;
+
+// One stamp, dead centre, with everything that could move it turned off.
+const dab = (extra) => ({
+  brush: 'wide',
+  size: 40,
+  color: '#000000',
+  opacity: 1,
+  spacing: 100,
+  hardness: 100,
+  angle: 0,
+  angleJitter: 0,
+  flatness: 1,
+  antialias: true,
+  taperIn: { on: false, len: 0, ratio: 0 },
+  taperOut: { on: false, len: 0, ratio: 0 },
+  seed: 1,
+  pts: [[TX, TY, 1]],
+  ...extra,
+});
+
+function renderTip(stroke, tips, scale = 1) {
+  const cnv = canvasOf(TW * scale, TH * scale);
+  const ctx = cnv.getContext('2d');
+  ctx.scale(scale, scale);
+  drawInk(
+    ctx,
+    { on: true, strokes: [normalizeInkStroke(stroke)] },
+    (cw, ch) => canvasOf(cw, ch),
+    tips,
+  );
+  return cnv;
+}
+
+// The rectangle the ink actually covers, in the canvas's own px.
+function footprint(cnv) {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (let y = 0; y < cnv.height; y++) {
+    for (let x = 0; x < cnv.width; x++) {
+      if (cnv.data[(y * cnv.width + x) * 4 + 3] === 0) continue;
+      x0 = Math.min(x0, x);
+      x1 = Math.max(x1, x);
+      y0 = Math.min(y0, y);
+      y1 = Math.max(y1, y);
+    }
+  }
+  return x1 < 0 ? null : { x0, y0, x1, y1, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+describe('stamping an imported tip', () => {
+  it('stamps the tip rather than the round dab', () => {
+    const f = footprint(renderTip(dab({}), tipMap(WIDE)));
+    // 40 px on the longest side, half that on the other: a rectangle, and the
+    // round dab of the same size would be a 40 x 40 disc.
+    expect([f.w, f.h]).toEqual([40, 20]);
+    // The corners of that rectangle are inked, which is the part a disc could
+    // not fake however it was scaled.
+    expect(at(renderTip(dab({}), tipMap(WIDE)), 61, 51)[3]).toBe(255);
+  });
+
+  it('scales the tip so its LONGEST side is the stamp size', () => {
+    // The same tip turned on its side: the size means the same thing, so the
+    // long axis is 40 either way and the short one follows the aspect.
+    const f = footprint(renderTip(dab({ brush: 'tall' }), tipMap(TALL)));
+    expect([f.w, f.h]).toEqual([20, 40]);
+    // And a smaller stamp is the same rectangle, smaller.
+    const small = footprint(renderTip(dab({ size: 20 }), tipMap(WIDE)));
+    expect([small.w, small.h]).toEqual([20, 10]);
+  });
+
+  it('puts the tip down the way round it was drawn', () => {
+    // Ink in the tip's left half only. Unturned it lands left of centre; turned
+    // half a circle it lands right of it. An aspect check alone would pass on a
+    // tip stamped mirrored or upside down.
+    const straight = footprint(renderTip(dab({ brush: 'half' }), tipMap(HALF)));
+    expect(straight.x1).toBeLessThanOrEqual(TX);
+    expect(straight.x0).toBeCloseTo(TX - 20, -1);
+    const turned = footprint(renderTip(dab({ brush: 'half', angle: 180 }), tipMap(HALF)));
+    expect(turned.x0).toBeGreaterThanOrEqual(TX - 1);
+  });
+
+  it('turns the tip by the stroke angle', () => {
+    const f = footprint(renderTip(dab({ angle: 90 }), tipMap(WIDE)));
+    expect([f.w, f.h]).toEqual([20, 40]);
+  });
+
+  it('squashes the tip by the flatness, on the same axis as the round dab', () => {
+    const f = footprint(renderTip(dab({ flatness: 0.5 }), tipMap(WIDE)));
+    expect([f.w, f.h]).toEqual([40, 10]);
+    // Under a quarter turn the squash goes with the tip, not with the canvas.
+    const turned = footprint(renderTip(dab({ angle: 90, flatness: 0.5 }), tipMap(WIDE)));
+    expect([turned.w, turned.h]).toEqual([10, 40]);
+  });
+
+  it('tints the tip to the stroke colour and takes its alpha from the grey', () => {
+    const cnv = renderTip(dab({ brush: 'ramp', color: '#ff0000' }), tipMap(RAMP));
+    // Two columns of the ramp, a quarter and seven eighths of the way across
+    // the 40 px stamp that starts at x = 60.
+    const [r1, g1, b1, a1] = at(cnv, 70, 60);
+    const [r2, g2, b2, a2] = at(cnv, 95, 60);
+    expect([r1, g1, b1]).toEqual([255, 0, 0]);
+    expect([r2, g2, b2]).toEqual([255, 0, 0]);
+    // Alpha follows the tip's own grey, which is what makes the PNG a mask
+    // rather than a picture: a quarter in is about a quarter dense.
+    expect(a1).toBeGreaterThan(40);
+    expect(a1).toBeLessThan(100);
+    expect(a2).toBeGreaterThan(200);
+    // And the tip's black end paints nothing at all.
+    expect(at(cnv, 61, 60)[3]).toBeLessThan(20);
+  });
+
+  it('ignores hardness, which belongs to the round tip', () => {
+    const soft = renderTip(dab({ hardness: 0 }), tipMap(WIDE)).data;
+    const hard = renderTip(dab({ hardness: 100 }), tipMap(WIDE)).data;
+    expect(Array.from(soft)).toEqual(Array.from(hard));
+  });
+
+  it('draws the same pixels twice', () => {
+    const a = renderTip(dab({ brush: 'ramp', color: '#204080' }), tipMap(RAMP)).data;
+    const b = renderTip(dab({ brush: 'ramp', color: '#204080' }), tipMap(RAMP)).data;
+    expect(Array.from(a)).toEqual(Array.from(b));
+  });
+
+  it('keeps the taper, which resolves the size before the tip is scaled', () => {
+    const line = dab({
+      pts: [[20, 60, 1], [140, 60, 1]],
+      spacing: 10,
+      taperIn: { on: true, len: 40, ratio: 60 },
+      taperOut: { on: true, len: 40, ratio: 60 },
+    });
+    // The ends taper to a hair, so the stroke is thinner where it starts than
+    // where it is widest - the stamps carry the size, and the tip follows it.
+    const height = (cnv, x) => {
+      let n = 0;
+      for (let y = 0; y < TH; y++) if (cnv.data[(y * TW + x) * 4 + 3] > 0) n++;
+      return n;
+    };
+    const cnv = renderTip(line, tipMap(WIDE));
+    expect(height(cnv, 80)).toBe(20);
+    expect(height(cnv, 24)).toBeLessThan(10);
+  });
+});
+
+describe('an imported tip with anti-aliasing off', () => {
+  it('leaves every pixel either in the stroke or out of it', () => {
+    const cnv = renderTip(dab({ brush: 'ramp', antialias: false }), tipMap(RAMP));
+    let partial = 0;
+    let solid = 0;
+    for (let i = 3; i < cnv.data.length; i += 4) {
+      if (cnv.data[i] === 0) continue;
+      if (cnv.data[i] === 255) solid++;
+      else partial++;
+    }
+    expect(partial).toBe(0);
+    // Half the ramp is over the halfway mark, so half the stamp survives.
+    expect(solid).toBeGreaterThan(300);
+  });
+});
+
+describe('an imported tip that is not there', () => {
+  it('draws the round dab when nothing was prefetched', () => {
+    const f = footprint(renderTip(dab({}), undefined));
+    expect([f.w, f.h]).toEqual([40, 40]); // a disc, not the 2:1 tip
+    // A disc leaves the corners of its own bounding box clear.
+    expect(at(renderTip(dab({}), undefined), 61, 41)[3]).toBe(0);
+  });
+
+  it('draws the round dab for a brush this install does not have', () => {
+    const f = footprint(renderTip(dab({ brush: 'gone' }), tipMap(WIDE)));
+    expect([f.w, f.h]).toEqual([40, 40]);
+  });
+
+  it('draws the round dab for a tip that has not decoded yet', () => {
+    // The wrapper without an image: what a platform with no decoder hands back,
+    // and what a tip mid-read looks like.
+    const undecoded = { ...WIDE, image: null, bytes: new Uint8Array([1, 2, 3]) };
+    const f = footprint(renderTip(dab({}), tipMap(undecoded)));
+    expect([f.w, f.h]).toEqual([40, 40]);
+  });
+
+  it('keeps the brush id on the stroke it fell back for', () => {
+    // The fallback is a reading, never a rewrite: importing the missing .sut
+    // later has to bring the real tip back to this stroke.
+    const k = normalizeInkStroke(dab({ brush: 'gone' }));
+    drawInk(
+      canvasOf(TW, TH).getContext('2d'),
+      { on: true, strokes: [k] },
+      (w, h) => canvasOf(w, h),
+      new Map(),
+    );
+    expect(k.brush).toBe('gone');
+  });
+});
+
+describe('the tinted mip chain', () => {
+  it('is built once per tip and colour and then reused', () => {
+    const tip = tipOf('big', BIG.image);
+    const made = [];
+    const alloc = (w, h) => {
+      const c = canvasOf(w, h);
+      made.push([w, h]);
+      return c;
+    };
+    const paint = (color) => {
+      const cnv = canvasOf(TW, TH);
+      drawInk(
+        cnv.getContext('2d'),
+        { on: true, strokes: [normalizeInkStroke(dab({ brush: 'big', color }))] },
+        alloc,
+        tipMap(tip),
+      );
+    };
+    paint('#000000');
+    // The tinted tip and one halving of it: 128x64 halves to 64x32, and
+    // halving that would take the short side under the floor.
+    expect(made).toEqual([[128, 64], [64, 32]]);
+    paint('#000000');
+    expect(made).toHaveLength(2); // the second stroke allocates nothing
+    paint('#ff0000');
+    expect(made).toHaveLength(4); // a second colour is a second chain
+    // The chain lives on the wrapper, so the library's cache owns its lifetime:
+    // dropping the tip drops the canvases with it.
+    expect(tip.tinted.size).toBe(2);
+  });
+
+  it('stamps a whole stroke from one chain, not one per dab', () => {
+    const tip = tipOf('big', BIG.image);
+    const made = [];
+    const alloc = (w, h) => {
+      made.push([w, h]);
+      return canvasOf(w, h);
+    };
+    const k = normalizeInkStroke(dab({ brush: 'big', pts: [[20, 60, 1], [140, 60, 1]], spacing: 10 }));
+    expect(strokeStamps(k).length).toBeGreaterThan(20);
+    drawInk(canvasOf(TW, TH).getContext('2d'), { on: true, strokes: [k] }, alloc, tipMap(tip));
+    expect(made).toHaveLength(2);
+  });
+
+  it('caps a huge tip rather than holding a second copy of it', () => {
+    // The corpus has tips over 11000 px on a side. A tinted copy of one is
+    // hundreds of megabytes held for as long as the library keeps the tip, and
+    // nothing stamps a brush 2048 device px across.
+    const tip = tipOf('huge', tipImage(TINT_MAX * 2, 64, () => 255));
+    const made = [];
+    const alloc = (w, h) => {
+      made.push([w, h]);
+      return canvasOf(w, h);
+    };
+    drawInk(
+      canvasOf(TW, TH).getContext('2d'),
+      { on: true, strokes: [normalizeInkStroke(dab({ brush: 'huge' }))] },
+      alloc,
+      tipMap(tip),
+    );
+    // The full-resolution read, then the capped chain it is shrunk into. The
+    // first is handed back on the spot, which is what the zeroed size says.
+    expect(made).toEqual([[TINT_MAX * 2, 64], [TINT_MAX, 32]]);
+    // The chain keeps the tip's aspect - the cap changes the resolution it is
+    // built at, never the shape a stamp is drawn as, which comes off the tip's
+    // own dimensions rather than off any level.
+    expect(tip.tinted.get('#000000').map((c) => [c.width, c.height])).toEqual([[TINT_MAX, 32]]);
+  });
+
+  it('keeps at most two colours of one tip', () => {
+    const tip = tipOf('big', BIG.image);
+    for (const color of ['#000000', '#ff0000', '#00ff00']) {
+      drawInk(
+        canvasOf(TW, TH).getContext('2d'),
+        { on: true, strokes: [normalizeInkStroke(dab({ brush: 'big', color }))] },
+        (w, h) => canvasOf(w, h),
+        tipMap(tip),
+      );
+    }
+    expect(tip.tinted.size).toBe(2);
+    expect([...tip.tinted.keys()]).toEqual(['#ff0000', '#00ff00']);
+  });
+});
+
+describe('pickTipLevel', () => {
+  const levels = [{ width: 128, height: 64 }, { width: 64, height: 32 }, { width: 32, height: 16 }];
+
+  it('takes the smallest level still at least as big as the stamp', () => {
+    expect(pickTipLevel(levels, 64)).toBe(levels[1]);
+    expect(pickTipLevel(levels, 65)).toBe(levels[0]);
+    expect(pickTipLevel(levels, 32)).toBe(levels[2]);
+  });
+
+  it('takes the full-resolution level for a stamp bigger than the tip', () => {
+    expect(pickTipLevel(levels, 1000)).toBe(levels[0]);
+  });
+
+  it('takes the smallest level for a stamp smaller than all of them', () => {
+    expect(pickTipLevel(levels, 3)).toBe(levels[2]);
+  });
+});
+
+describe('an imported tip at two scales', () => {
+  // The parity rule: the editor draws at the zoom and the exporter at its
+  // supersample, and the two have to be the same picture. A tip is the one
+  // thing in the ink path measured in its OWN pixels, so it is the one that
+  // could quietly stop scaling with the transform.
+  const mean = (cnv, scale, x0, y0, x1, y1) => {
+    let sum = 0;
+    let n = 0;
+    for (let y = Math.round(y0 * scale); y < Math.round(y1 * scale); y++) {
+      for (let x = Math.round(x0 * scale); x < Math.round(x1 * scale); x++) {
+        sum += cnv.data[(y * cnv.width + x) * 4 + 3];
+        n++;
+      }
+    }
+    return sum / n;
+  };
+
+  it('covers the same page px at 1x and 2x', () => {
+    const one = renderTip(dab({ brush: 'ramp' }), tipMap(RAMP), 1);
+    const two = renderTip(dab({ brush: 'ramp' }), tipMap(RAMP), 2);
+    // Over the whole stamp, and over one band of the ramp inside it.
+    expect(mean(two, 2, 55, 45, 105, 75)).toBeCloseTo(mean(one, 1, 55, 45, 105, 75), -1);
+    expect(mean(two, 2, 85, 55, 95, 65)).toBeCloseTo(mean(one, 1, 85, 55, 95, 65), -1);
+  });
+
+  it('lands on the same page px at 1x and 2x', () => {
+    const f1 = footprint(renderTip(dab({}), tipMap(WIDE), 1));
+    const f2 = footprint(renderTip(dab({}), tipMap(WIDE), 2));
+    expect([f2.x0 / 2, f2.y0 / 2]).toEqual([f1.x0, f1.y0]);
+    expect([f2.w / 2, f2.h / 2]).toEqual([f1.w, f1.h]);
   });
 });

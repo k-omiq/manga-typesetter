@@ -12,6 +12,7 @@ import { writePsd, readPsd } from 'ag-psd';
 import { app, PAGE_W, PAGE_H } from './store.svelte.js';
 import { isTauri, pickFilesTauri } from './importer.js';
 import { renderBoxLayer, pageSpace, settleNoise } from './exporter.js';
+import { settleBoxTips } from './brush-tips.js';
 import { fontCssFor, fontNameFor } from './store.svelte.js';
 import { resolveFace, postScriptNameFor } from './fonts.js';
 import { applyCase, canMeasure, layoutLines, BOX_PAD, blockYFor, balloonWidthsFor } from './measure.js';
@@ -785,6 +786,10 @@ export async function buildPagePsd(p) {
   // running browser, and measuring it is a rasterisation - so it is settled
   // before any box is rendered, exactly as the raster export settles it.
   await settleNoise(p?.boxes);
+  // An inked box ships as a flat raster layer rendered by `renderBoxLayer`, so
+  // the PSD needs the same decoded tips the raster export does, prefetched the
+  // same way and for the same reason: the painter is synchronous.
+  const tips = await settleBoxTips(p?.boxes);
 
   // Text layers - one editable type layer per box, each backed by the box's
   // exact pixels, trimmed by renderBoxLayer to the glyphs it actually painted
@@ -793,7 +798,7 @@ export async function buildPagePsd(p) {
   // and are filtered out so ag-psd does not receive an image layer missing image data.
   const scratch = document.createElement('canvas');
   const textLayers = (p.boxes ?? [])
-    .map((b) => textLayerFor(p, b, renderBoxLayer(b, W, H, scratch, p)))
+    .map((b) => textLayerFor(p, b, renderBoxLayer(b, W, H, scratch, p, 1, tips)))
     .filter(Boolean);
 
   // Base layers - Cleaned over Raw (bottom), both forced to the document's (=
@@ -1262,8 +1267,9 @@ export async function psdSelfTest(p) {
       // filter is repeated here rather than guessed at, so the two lists are the
       // one list by construction.
       const scratch = document.createElement('canvas');
+      const selfTips = await settleBoxTips(src.boxes);
       const layerBoxes = (src.boxes ?? [])
-        .map((box) => ({ box, rendered: renderBoxLayer(box, W, H, scratch, src) }))
+        .map((box) => ({ box, rendered: renderBoxLayer(box, W, H, scratch, src, 1, selfTips) }))
         .filter(({ box, rendered }) => !(isRasterOnly(box.style) && !rendered?.imageData));
       layerBoxes.forEach(({ rendered }, i) => {
         // A box that paints nothing (empty text) gets a layer with no pixels at

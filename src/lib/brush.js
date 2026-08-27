@@ -96,9 +96,18 @@ export function strokeStamps(stroke) {
 export function strokeBounds(stroke, laid) {
   const stamps = laid ?? strokeStamps(stroke);
   if (!stamps.length) return null;
+  // How far one stamp reaches from its centre, as a fraction of its size. The
+  // round dab reaches half of it in every direction. An imported tip is an
+  // IMAGE, and an image is a rectangle whose LONGEST side is the stamp's size -
+  // so a square one turned 45 degrees reaches sqrt(2)/2 of it at the corners.
+  // This file never sees a bitmap and cannot know the aspect, so a stroke drawn
+  // with anything but the round tip takes the worst case for any tip at any
+  // angle. The bound is only ever used to pad a canvas and to bound a pixel
+  // pass, where being generous costs a few px of margin and nothing else.
+  const reach = stroke?.brush && stroke.brush !== 'round' ? Math.SQRT1_2 : 0.5;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const s of stamps) {
-    const r = s.size / 2;
+    const r = s.size * reach;
     if (s.x - r < minX) minX = s.x - r;
     if (s.y - r < minY) minY = s.y - r;
     if (s.x + r > maxX) maxX = s.x + r;

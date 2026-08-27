@@ -909,6 +909,11 @@ export function inkExtent(ink) {
 // One stamp of a round tip. `hardness` 100 is a flat disc; below that the edge
 // falls off, which is the only way a synthesised tip can look like anything
 // other than a marker pen.
+//
+// `hardness` belongs to this tip and to no other: an imported tip carries its
+// edge in its own pixels, and CSP ignores the setting for a pattern tip in the
+// same way. The stroke still stores it, for the moment the letterer switches
+// the same settings back to round.
 function stampRound(ctx, s, color, hardness, flatness) {
   const r = s.size / 2;
   ctx.save();
@@ -930,6 +935,210 @@ function stampRound(ctx, s, color, hardness, flatness) {
   ctx.arc(0, 0, r, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Imported tips.
+//
+// A `.sut` tip arrives as an 8-bit greyscale image with the ink at 255 - a
+// coverage mask, not a picture - so stamping it is two problems: it has to be
+// tinted to the stroke's colour, and it has to be drawn at a fraction of its
+// own size without the shimmer a per-stamp downscale of a 2000 px tip gives.
+//
+// Both are answered once per (tip, colour) and then reused by every stamp:
+//
+//   * The tint is a canvas whose RGB is the ink's colour and whose ALPHA is the
+//     tip's grey. Per stamp it would be a full-resolution pixel pass each time,
+//     which is the difference between a brush that draws and one that hangs.
+//   * The mip chain halves that canvas until the short side would drop under
+//     `MIP_MIN`, and a stamp draws from the smallest level still at least as
+//     big as it needs. Downscaling by less than 2x is what a canvas resamples
+//     well; downscaling a 2352 px tip to 24 px in one step is what makes a
+//     stroke crawl and sparkle as the size dynamics move.
+//
+// The chain hangs off the tip wrapper the library handed us, so the library's
+// cache owns its lifetime: when a tip is evicted or forgotten, the wrapper goes
+// and its canvases go with it. See THE TIP LIFETIME CONTRACT in
+// `brush-library.svelte.js` - a painter holds a tip for one frame and re-asks.
+
+// The short side a mip level may not go under. Below this the levels stop
+// being useful (a stamp that small is a smudge either way) and the chain is
+// mostly bookkeeping.
+const MIP_MIN = 32;
+
+// How many colours of one tip are kept. A stroke is one colour and the panel's
+// preview is often another; a third is a colour nobody is drawing with any more.
+const TINT_SLOTS = 2;
+
+// The longest side a tinted chain is built at. The corpus has tips up to
+// 2352 x 11394, and a tinted copy of one is 107 MB of canvas held for as long
+// as the library keeps the tip - on top of the decoded tip the library's own
+// budget already accounts for. Nothing stamps a brush 2048 device px across, so
+// the cap costs no picture anyone will see and keeps the tint a fraction of the
+// tip rather than a second copy of it. The full-resolution read still happens -
+// there is no other way to get at the grey - but it is handed back at once.
+export const TINT_MAX = 2048;
+
+// Hand a canvas's pixels back rather than waiting for a collection - the same
+// thing `drawInk` does with its layers, and for the same reason.
+function releaseCanvas(c) {
+  if (!c) return;
+  c.width = 0;
+  c.height = 0;
+}
+
+// The tip's own pixel size. The decoded image is the authority where it has
+// one; the index's dimensions are what a platform without a decoder knows.
+function tipSize(tip) {
+  const w = Number(tip?.image?.width) || Number(tip?.width) || 0;
+  const h = Number(tip?.image?.height) || Number(tip?.height) || 0;
+  return w > 0 && h > 0 ? [w, h] : null;
+}
+
+// The tinted tip and its mip chain, biggest first. Null when the tip cannot be
+// read - no decoded image, or a canvas that will not give its pixels back
+// (a tainted one), both of which fall the stroke back to the round dab.
+function buildTinted(tip, color, alloc) {
+  const size = tipSize(tip);
+  if (!size || !tip.image) return null;
+  const [w, h] = size;
+  const base = alloc(w, h);
+  const bctx = base?.getContext?.('2d');
+  if (!bctx) return null;
+  let px;
+  try {
+    bctx.drawImage(tip.image, 0, 0, w, h);
+    px = bctx.getImageData(0, 0, w, h);
+  } catch {
+    releaseCanvas(base);
+    return null;
+  }
+  const [r, g, b] = channels(color);
+  const d = px.data;
+  // The tip is greyscale, so one channel is the grey; its own alpha is opaque
+  // across the whole image, and multiplying by it costs nothing and keeps a
+  // hand-made RGBA tip honest.
+  for (let i = 0; i < d.length; i += 4) {
+    const cov = (d[i] * d[i + 3]) / 255;
+    d[i] = r;
+    d[i + 1] = g;
+    d[i + 2] = b;
+    d[i + 3] = cov;
+  }
+  bctx.putImageData(px, 0, 0);
+  const levels = [capTint(base, alloc)];
+  let cur = levels[0];
+  // Halve while the halved level still has a usable short side. Halving rather
+  // than jumping straight to the size a stamp wants is what keeps the average
+  // right: each level is the box filter of the one above it.
+  while (Math.min(cur.width, cur.height) >= MIP_MIN * 2) {
+    const nw = Math.max(1, Math.round(cur.width / 2));
+    const nh = Math.max(1, Math.round(cur.height / 2));
+    if (nw === cur.width && nh === cur.height) break;
+    const next = alloc(nw, nh);
+    const nctx = next?.getContext?.('2d');
+    if (!nctx) break;
+    nctx.imageSmoothingEnabled = true;
+    nctx.imageSmoothingQuality = 'high';
+    nctx.drawImage(cur, 0, 0, nw, nh);
+    levels.push(next);
+    cur = next;
+  }
+  return levels;
+}
+
+// The tinted tip at no more than `TINT_MAX` on its longest side, handing the
+// full-resolution one back when it had to shrink.
+function capTint(full, alloc) {
+  const long = Math.max(full.width, full.height);
+  if (long <= TINT_MAX) return full;
+  const k = TINT_MAX / long;
+  const cw = Math.max(1, Math.round(full.width * k));
+  const ch = Math.max(1, Math.round(full.height * k));
+  const small = alloc(cw, ch);
+  const sctx = small?.getContext?.('2d');
+  if (!sctx) return full;
+  sctx.imageSmoothingEnabled = true;
+  sctx.imageSmoothingQuality = 'high';
+  sctx.drawImage(full, 0, 0, cw, ch);
+  releaseCanvas(full);
+  return small;
+}
+
+// The chain for this tip in this colour, built on first use and then reused.
+function tipLevels(tip, color, alloc) {
+  if (!tip) return null;
+  let byColour = tip.tinted;
+  if (!(byColour instanceof Map)) {
+    byColour = new Map();
+    tip.tinted = byColour;
+  }
+  const key = String(color ?? '#000000').toLowerCase();
+  const had = byColour.get(key);
+  if (had) {
+    // Touch: insertion order is least recently used first.
+    byColour.delete(key);
+    byColour.set(key, had);
+    return had;
+  }
+  const levels = buildTinted(tip, color, alloc);
+  if (!levels) return null;
+  byColour.set(key, levels);
+  while (byColour.size > TINT_SLOTS) {
+    const oldest = byColour.keys().next().value;
+    for (const c of byColour.get(oldest)) releaseCanvas(c);
+    byColour.delete(oldest);
+  }
+  return levels;
+}
+
+// The level to stamp from: the smallest one still at least as wide as the
+// stamp will be drawn on the device. Anything smaller would be upscaled, which
+// is blur; anything bigger is a downscale the chain has already paid for.
+export function pickTipLevel(levels, devicePx) {
+  let out = levels[0];
+  for (let i = 1; i < levels.length; i++) {
+    if (Math.max(levels[i].width, levels[i].height) < devicePx) break;
+    out = levels[i];
+  }
+  return out;
+}
+
+// One stamp of an imported tip. The tip's LONGEST side is the stamp's size, so
+// a tall tip stays tall and a stroke's size means the same thing whichever
+// brush is loaded; `flatness` then squashes the tip's own y axis, exactly as it
+// squashes the round dab's, so the two tips read the same at the same setting.
+function stampTip(ctx, s, levels, natural, flatness, smooth, scale) {
+  const [nw, nh] = natural;
+  const f = s.size / Math.max(nw, nh);
+  const dw = nw * f;
+  const dh = nh * f;
+  if (!(dw > 0) || !(dh > 0)) return;
+  ctx.save();
+  ctx.translate(s.x, s.y);
+  if (s.angle) ctx.rotate((s.angle * Math.PI) / 180);
+  if (flatness !== 1) ctx.scale(1, flatness);
+  ctx.globalAlpha = s.alpha;
+  // The pixel look CSP gives with anti-aliasing off starts here: a tip drawn
+  // through a smoothing resample would arrive with a soft edge for the snap to
+  // find, and half of it would land on the wrong side.
+  ctx.imageSmoothingEnabled = smooth;
+  if (smooth) ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(pickTipLevel(levels, Math.max(dw, dh) * scale), -dw / 2, -dh / 2, dw, dh);
+  ctx.restore();
+}
+
+// The tip a stroke stamps with, or null for the round dab. Null covers every
+// way an imported brush can fail to be there - the stroke was drawn with the
+// round tip, the caller prefetched nothing, the tip has not finished decoding,
+// the brush is missing from this install - and in all of them the stroke draws
+// round FOR THIS FRAME while keeping the brush id it was drawn with. See
+// `resolveBrush`: the fallback is a reading, never a rewrite.
+function tipFor(k, tips) {
+  const id = k?.brush;
+  if (!tips || !id || id === 'round') return null;
+  const tip = typeof tips.get === 'function' ? tips.get(id) : tips[id];
+  return tip?.image && tipSize(tip) ? tip : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1061,7 +1270,14 @@ function inkRect(k, stamps, t, w, h, pad) {
 // into its own layer and composited once: stamping straight onto the target at
 // a stroke opacity below 1 would darken every overlap and turn a smooth line
 // into a string of beads.
-export function drawInk(ctx, ink, makeCanvas) {
+//
+// `tips` is the decoded tips this frame has in hand, id -> the library's tip
+// wrapper. The painter is synchronous and reading a tip off disk is not, so the
+// caller prefetches - `settleInkTips` / `settleBoxTips` in `brush-tips.js` - and
+// hands the result down. A stroke whose tip is not in there stamps the round
+// dab for this frame and keeps its brush id, which is what makes the first
+// frame of a chapter draw immediately instead of waiting on a decode.
+export function drawInk(ctx, ink, makeCanvas, tips) {
   if (!inkActive(ink)) return;
   const alloc = makeCanvas ?? ((w, h) => {
     const c = document.createElement('canvas');
@@ -1072,6 +1288,17 @@ export function drawInk(ctx, ink, makeCanvas) {
   for (const k of ink.strokes) {
     const stamps = strokeStamps(k);
     if (!stamps.length) continue;
+    // The caller's transform, read once. The layer below copies it, and the
+    // mip chain is asked for the level a stamp lands at through it - so how
+    // many device px a page px is worth is one answer serving both paths.
+    const t = ctx.getTransform();
+    const scale = transformScale(t);
+    const tip = tipFor(k, tips);
+    const levels = tip ? tipLevels(tip, k.color, alloc) : null;
+    const natural = levels ? tipSize(tip) : null;
+    const stamp = levels
+      ? (c, s) => stampTip(c, s, levels, natural, k.flatness, k.antialias !== false, scale)
+      : (c, s) => stampRound(c, s, k.color, k.hardness, k.flatness);
     const solid = k.opacity >= 0.999;
     const water = wantsWaterEdge(k);
     // Three reasons to detour through a layer: a translucent stroke must not
@@ -1080,19 +1307,16 @@ export function drawInk(ctx, ink, makeCanvas) {
     // watercolour edge is a pass over that finished shape too.
     const layered = !solid || k.antialias === false || water;
     if (!layered) {
-      for (const s of stamps) stampRound(ctx, s, k.color, k.hardness, k.flatness);
+      for (const s of stamps) stamp(ctx, s);
       continue;
     }
     // The layer is only as big as the target; the caller's transform already
     // places the box, so the layer copies that transform rather than guessing
     // its own bounds.
-    const t = ctx.getTransform();
     const layer = alloc(ctx.canvas.width, ctx.canvas.height);
     const lctx = layer.getContext('2d');
     lctx.setTransform(t);
-    for (const s of stamps) {
-      stampRound(lctx, { ...s, alpha: 1 }, k.color, k.hardness, k.flatness);
-    }
+    for (const s of stamps) stamp(lctx, { ...s, alpha: 1 });
     if (water) {
       // Once per stroke, over its own layer, and before the anti-aliasing snap
       // below: the edge is drawn on the soft alpha the stamps left, and the
@@ -1102,7 +1326,7 @@ export function drawInk(ctx, ink, makeCanvas) {
       // is what keeps the screen and the file the same picture. The stamps are
       // handed on rather than laid out again: this runs per stroke per frame
       // while the pointer is down.
-      const r = Math.max(1, Math.round(k.waterEdgeWidth * transformScale(t)));
+      const r = Math.max(1, Math.round(k.waterEdgeWidth * scale));
       const rect = inkRect(k, stamps, t, layer.width, layer.height, r + 2);
       if (rect) {
         const px = lctx.getImageData(rect.x, rect.y, rect.w, rect.h);

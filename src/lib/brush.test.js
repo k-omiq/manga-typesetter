@@ -104,6 +104,20 @@ describe('strokeBounds', () => {
   it('returns null when nothing would be drawn', () => {
     expect(strokeBounds(normalizeInkStroke({ size: 20, pts: [[0, 0, 0]] }))).toBeNull();
   });
+
+  it('reaches to the corner for an imported tip, which is a rectangle', () => {
+    // The round dab reaches half its size in every direction; an image tip's
+    // longest side IS its size, so turned 45 degrees it reaches the half
+    // diagonal. The bound never sees the bitmap, so it takes the worst case.
+    const b = strokeBounds(normalizeInkStroke({ brush: 'abc123', size: 20, pts: [[0, 0, 1]] }));
+    const r = 20 * Math.SQRT1_2;
+    expect(b).toEqual({ minX: -r, minY: -r, maxX: r, maxY: r });
+  });
+
+  it('leaves the round tip bound exactly where it was', () => {
+    const round = strokeBounds(normalizeInkStroke({ brush: 'round', size: 20, pts: [[0, 0, 1]] }));
+    expect(round).toEqual({ minX: -10, minY: -10, maxX: 10, maxY: 10 });
+  });
 });
 
 import { stabilisePath, smoothPath } from './brush.js';

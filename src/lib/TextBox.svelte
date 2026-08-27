@@ -49,6 +49,7 @@
   import { maskTool } from './mask-tool.svelte.js';
   import { brushTool, brushArmed } from './brush-tool.svelte.js';
   import { buildStroke, strokeHit } from './brush.js';
+  import { inkTipIds, settleTips } from './brush-tips.js';
   import { normalizeInkStroke } from './data.js';
 
   // pg defaults to current page; longstrip passes explicit page.
@@ -235,6 +236,46 @@
   );
   let inkDrawn = '';
   let inkLive = null; // non-reactive twin of inkEl: what the pixel release acts on
+  // The decoded tips the last paint had in hand, and the sequence number that
+  // says which paint is the current one. Neither is reactive: they are read by
+  // the paint, not by the effect that schedules it, and making them state would
+  // turn "the tips arrived" into a dependency of the effect that asked for them.
+  let inkTips = null;
+  let inkTipSeq = 0;
+
+  // Whether two settles answered with the same tips. A repaint is only worth
+  // its cost when they did not - the usual case on a live stroke is that the
+  // library handed back the identical wrapper it did last frame.
+  function sameTips(a, b) {
+    if (a === b) return true;
+    if (!a || !b || a.size !== b.size) return false;
+    for (const [id, tip] of a) if (b.get(id) !== tip) return false;
+    return true;
+  }
+
+  // The ink canvas, drawn from scratch: the committed strokes and, while the
+  // pointer is down, the stroke under it. `tips` is what the imported brushes
+  // stamp with; without it - the first frame, or a brush this install does not
+  // have - those strokes draw with the round tip and keep their brush id.
+  function paintInk(el, tips) {
+    const w = Math.max(1, Math.round((box.w + inkPad * 2) * z));
+    const h = Math.max(1, Math.round((box.h + inkPad * 2) * z));
+    if (el.width !== w) el.width = w;
+    if (el.height !== h) el.height = h;
+    const ctx = el.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.scale(z, z);
+    ctx.translate(inkPad, inkPad);
+    drawInk(ctx, s.ink, undefined, tips);
+    // The stroke under the pointer, drawn with the same painter so what the
+    // user is watching is what they will get when they lift.
+    if (inkDraft?.length) {
+      const preview = buildStroke($state.snapshot(inkDraft), $state.snapshot(brushTool.settings));
+      if (preview) drawInk(ctx, { on: true, strokes: [preview] }, undefined, tips);
+    }
+  }
+
   $effect(() => {
     const key = inkKey;
     const el = inkEl;
@@ -249,28 +290,42 @@
         inkLive = null;
       }
       inkDrawn = '';
+      // Let go of the tips with the canvas. Holding a decoded bitmap for a box
+      // that is not drawing is exactly what the library's lifetime contract is
+      // written against.
+      inkTips = null;
+      inkTipSeq++;
       return;
     }
     inkLive = el;
     if (key === inkDrawn) return;
     inkDrawn = key;
-    const w = Math.max(1, Math.round((box.w + inkPad * 2) * z));
-    const h = Math.max(1, Math.round((box.h + inkPad * 2) * z));
-    if (el.width !== w) el.width = w;
-    if (el.height !== h) el.height = h;
-    const ctx = el.getContext('2d');
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    if (!key) return;
-    ctx.scale(z, z);
-    ctx.translate(inkPad, inkPad);
-    drawInk(ctx, s.ink);
-    // The stroke under the pointer, drawn with the same painter so what the
-    // user is watching is what they will get when they lift.
-    if (inkDraft?.length) {
-      const preview = buildStroke($state.snapshot(inkDraft), $state.snapshot(brushTool.settings));
-      if (preview) drawInk(ctx, { on: true, strokes: [preview] });
+    // Paint NOW with whatever is already decoded - the tips the last frame
+    // settled, usually the same ones - and then re-ask the library, because a
+    // tip it dropped between frames has to be read again (see the tip lifetime
+    // contract). The second paint happens only when the answer changed, which
+    // on a live stroke is the first frame after the brush is picked and no
+    // frame after that.
+    paintInk(el, inkTips);
+    const ids = inkTipIds(s.ink);
+    if (inkDraft?.length) inkTipIds({ strokes: [brushTool.settings] }, ids);
+    if (!ids.size) {
+      inkTips = null;
+      inkTipSeq++;
+      return;
     }
+    const seq = ++inkTipSeq;
+    settleTips(ids).then(
+      (map) => {
+        // A newer paint, a torn-down canvas, or a canvas the effect has since
+        // handed its pixels back: in all three this paint is stale.
+        if (seq !== inkTipSeq || inkLive !== el || !el.width) return;
+        const before = inkTips;
+        inkTips = map;
+        if (!sameTips(before, map)) paintInk(el, map);
+      },
+      () => {},
+    );
   });
   // A box scrolled off the page keeps its canvas alive otherwise, and a chapter
   // of inked boxes is exactly the shape that put 2 GB in the webview before.
@@ -283,6 +338,11 @@
       inkLive.height = 0;
       inkLive = null;
     }
+    // The tips go with it: a destroyed box must not be the last thing holding a
+    // decoded bitmap alive, and a settle still in flight must not paint into a
+    // canvas that is gone.
+    inkTips = null;
+    inkTipSeq++;
   });
 
   const boxStyle = $derived(

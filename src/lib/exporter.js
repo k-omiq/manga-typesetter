@@ -21,6 +21,7 @@ import {
   drawInk,
   TILE_SS,
 } from './text-paint.js';
+import { settleBoxTips } from './brush-tips.js';
 import { withPageImages } from './page-images.js';
 import { stripOffsets, maxPageWidth } from './editor/strip.js';
 import { planStripCuts, boxSpanY, SLICE_H_DEFAULT } from './editor/strip-cuts.js';
@@ -523,7 +524,7 @@ function paintShadows(ctx, box, L, SS) {
 // device pixels and gives the same crisp downscaled edge every other box gets -
 // and the same edge the editor shows, which applies its filter at device
 // resolution as well.
-function renderBox(box, p) {
+function renderBox(box, p, tips) {
   const L = layoutBox(box, p);
   const s = L.s;
   const SS = 2;
@@ -542,7 +543,7 @@ function renderBox(box, p) {
   if (inkActive(s.ink)) {
     ctx.save();
     ctx.translate(L.ox, L.oy);
-    drawInk(ctx, s.ink);
+    drawInk(ctx, s.ink, undefined, tips);
     ctx.restore();
   }
   // Blur first, then roughen - the order the editor's filter list states, and a
@@ -636,6 +637,10 @@ export async function renderPageCanvas(p, scale = 1) {
   // a broken file with a success toast over it. See `pageSpace`.
   const { w: W, h: H } = await pageSpace(p);
   await settleNoise(p?.boxes);
+  // The tips this page's ink stamps with, decoded before a single box is
+  // painted: the painter cannot await, so the awaiting happens here. See
+  // brush-tips.js. Null when no box draws with an imported brush.
+  const tips = await settleBoxTips(p?.boxes);
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(W * scale);
   canvas.height = Math.round(H * scale);
@@ -660,7 +665,7 @@ export async function renderPageCanvas(p, scale = 1) {
   for (const box of p.boxes ?? []) {
     ctx.save();
     ctx.globalAlpha = box.style.opacity ?? 1;
-    paintBoxOnPage(ctx, box, p);
+    paintBoxOnPage(ctx, box, p, tips);
     ctx.restore();
   }
   return canvas;
@@ -671,7 +676,7 @@ export async function renderPageCanvas(p, scale = 1) {
 // fallback for roughened/translucent. Opacity is applied by the caller (via
 // ctx.globalAlpha or a layer opacity), NOT here, so the same pixels can back a
 // translucent PSD layer.
-function paintBoxOnPage(ctx, box, p) {
+function paintBoxOnPage(ctx, box, p, tips) {
   const s = box.style;
   const rot = s.rotation || 0;
   const opaque = (s.opacity ?? 1) >= 0.999;
@@ -706,7 +711,7 @@ function paintBoxOnPage(ctx, box, p) {
     paintBox(ctx, box, L);
     ctx.restore();
   } else {
-    const { canvas: bc, pad, leftExtra, topExtra, cw, ch } = renderBox(box, p);
+    const { canvas: bc, pad, leftExtra, topExtra, cw, ch } = renderBox(box, p, tips);
     if (rot === 0) {
       // Integer-snap the bitmap origin so a sub-pixel box position doesn't
       // force a bilinear resample of the whole text block (the primary blur).
@@ -745,7 +750,7 @@ function paintBoxOnPage(ctx, box, p) {
 // allocations. `p` is the box's page (so line-backed text resolves correctly).
 // `scale` supersamples to match a scaled document; returned bounds are in the
 // scaled (device) pixel space.
-export function renderBoxLayer(box, W, H, scratch, p, scale = 1) {
+export function renderBoxLayer(box, W, H, scratch, p, scale = 1, tips) {
   const SW = Math.round(W * scale);
   const SH = Math.round(H * scale);
   const cnv = scratch || document.createElement('canvas');
@@ -756,7 +761,7 @@ export function renderBoxLayer(box, W, H, scratch, p, scale = 1) {
   ctx.clearRect(0, 0, SW, SH);
   if (scale !== 1) ctx.scale(scale, scale);
   ctx.imageSmoothingQuality = 'high';
-  paintBoxOnPage(ctx, box, p); // full opacity; layer opacity applied by consumer
+  paintBoxOnPage(ctx, box, p, tips); // full opacity; layer opacity applied by consumer
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   const full = ctx.getImageData(0, 0, SW, SH);
   const d = full.data;
@@ -874,6 +879,9 @@ async function withPagesImages(list, fn) {
 // browser would hand out anyway.
 export async function renderStripSliceCanvas(pages, tops, y0, y1, scale = 1) {
   await settleNoise((pages ?? []).flatMap((p) => p?.boxes ?? []));
+  // One prefetch for the whole slice: the same brush usually runs through every
+  // page of a chapter, and the library's cache would answer the rest anyway.
+  const tips = await settleBoxTips((pages ?? []).flatMap((p) => p?.boxes ?? []));
   const W = maxPageWidth(pages) || PAGE_W;
   const H = Math.max(1, Math.round(y1 - y0));
   const canvas = document.createElement('canvas');
@@ -920,7 +928,7 @@ export async function renderStripSliceCanvas(pages, tops, y0, y1, scale = 1) {
           ctx.save();
           ctx.translate(x, y);
           ctx.globalAlpha = box.style.opacity ?? 1;
-          paintBoxOnPage(ctx, box, p);
+          paintBoxOnPage(ctx, box, p, tips);
           ctx.restore();
         }
       }
