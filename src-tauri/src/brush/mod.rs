@@ -2,13 +2,17 @@
 //!
 //! [`sut`] is the parser for Clip Studio Paint `.sut` files; [`score`] grades
 //! what it read against the preview image CSP ships inside the same file;
-//! [`variant`] normalises the brush settings out of the outer database. This
-//! module is the [`brush_import`] command and the fallback ladder over them.
+//! [`variant`] normalises the brush settings out of the outer database.
+//! [`abr`] is the parser for Photoshop brush sets, which ship no preview and so
+//! are validated structurally instead. This module is the [`brush_import`]
+//! command, the extension dispatch, and the fallback ladder over them.
 //!
 //! Nothing here may fail the whole import because one file was bad. A path that
-//! is not a `.sut`, or is a `.sut` this build cannot read, comes back as an
-//! entry in [`ImportResult::errors`] beside the brushes that did import.
+//! is neither a `.sut` nor an `.abr`, or is one this build cannot read, comes
+//! back as an entry in [`ImportResult::errors`] beside the brushes that did
+//! import.
 
+pub mod abr;
 pub mod score;
 pub mod sut;
 pub mod variant;
@@ -215,12 +219,12 @@ fn encode_png(img: &GrayImage) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// Reads a `.sut` at `path`, or says why it could not.
+/// Reads a brush file at `path`, or says why it could not.
 ///
-/// The ladder, per material: the pixels if they matched CSP's own preview, else
-/// that preview, else - for a brush with no pattern image at all - a round tip
-/// drawn from `BrushHardness`. The first two rungs are [`score::Scorer`]'s; the
-/// third is here, because it is the only one that invents anything.
+/// The extension picks the parser, because the two formats share nothing but
+/// their purpose: a `.sut` is a SQLite database and an `.abr` is a big-endian
+/// record stream. Anything else is reported rather than sniffed - a file the
+/// letterer did not mean to import is a line in the toast, not a parse attempt.
 pub fn import_file(path: &Path) -> Result<Vec<ImportedBrush>, String> {
     let stem = path
         .file_stem()
@@ -230,6 +234,24 @@ pub fn import_file(path: &Path) -> Result<Vec<ImportedBrush>, String> {
 
     let hash = hash_file(path).map_err(|e| format!("the file could not be read: {e}"))?;
 
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "sut" => import_sut(path, stem, hash),
+        "abr" => import_abr(path, stem, hash),
+        _ => Err("not a Clip Studio or Photoshop brush: a .sut or .abr file was expected".into()),
+    }
+}
+
+/// Reads a `.sut`, or says why it could not.
+///
+/// The ladder, per material: the pixels if they matched CSP's own preview, else
+/// that preview, else - for a brush with no pattern image at all - a round tip
+/// drawn from `BrushHardness`. The first two rungs are [`score::Scorer`]'s; the
+/// third is here, because it is the only one that invents anything.
+fn import_sut(path: &Path, stem: String, hash: u128) -> Result<Vec<ImportedBrush>, String> {
     let con = sut::open_read_only(path).map_err(|e| format!("not a Clip Studio brush: {e}"))?;
     // SQLite opens lazily, so a JPEG opens fine and only fails on the first
     // read. This is that read, and it is also the check that the tables a `.sut`
@@ -281,6 +303,45 @@ pub fn import_file(path: &Path) -> Result<Vec<ImportedBrush>, String> {
             }),
             None => out.push(round_brush(id, name, &meta.settings)?),
         }
+    }
+    Ok(out)
+}
+
+/// Reads an `.abr`, or says why it could not.
+///
+/// Photoshop ships no preview inside the file, so there is nothing to grade a
+/// reading against and nothing to fall back to: a tip that passes [`abr`]'s
+/// structural checks is pixel source with no `diff`, and one that does not is
+/// simply not there. A file whose brushes all failed comes back as this file's
+/// one error, the way an unreadable `.sut` does.
+fn import_abr(path: &Path, stem: String, hash: u128) -> Result<Vec<ImportedBrush>, String> {
+    let found = abr::brushes(path)?;
+    // As with a `.sut` holding several materials: one file, one name, told
+    // apart by number - except where Photoshop named the brush itself.
+    let numbered = found.len() > 1;
+    let mut out = Vec::with_capacity(found.len());
+    for (index, brush) in found.into_iter().enumerate() {
+        let name = brush
+            .name
+            .map(|n| n.trim().to_owned())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| {
+                if numbered {
+                    format!("{stem} {}", index + 1)
+                } else {
+                    stem.clone()
+                }
+            });
+        out.push(ImportedBrush {
+            id: brush_id(hash, index),
+            name,
+            width: brush.image.width(),
+            height: brush.image.height(),
+            tip_png: encode_png(&brush.image)?,
+            source: BrushSource::Pixels,
+            diff: None,
+            settings: brush.settings.over(BrushSettings::default()),
+        });
     }
     Ok(out)
 }
@@ -471,10 +532,109 @@ mod tests {
     #[test]
     fn a_file_that_is_not_a_sut_is_reported_rather_than_thrown() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        for bad in ["Cargo.toml", "no-such-file.sut"] {
+        for bad in ["Cargo.toml", "no-such-file.sut", "no-such-file.abr"] {
             let err = import_file(&manifest.join(bad)).unwrap_err();
             assert!(!err.is_empty(), "{bad} came back with an empty reason");
         }
+        // The dispatch names both formats, because either is now a file the
+        // letterer could reasonably have picked.
+        let err = import_file(&manifest.join("Cargo.toml")).unwrap_err();
+        assert!(err.contains(".sut") && err.contains(".abr"), "the reason was {err}");
+    }
+
+    /// A two-brush `.abr` in a temp file: one RLE tip with settings in the
+    /// descriptor, one raw tip with none.
+    fn temp_abr(dir: &Path) -> PathBuf {
+        use abr::fixture::{self, DescBrush, Tip};
+        let mut inked = Tip::ink("", "tip-rle", 12, 9);
+        inked.rle = true;
+        let plain = Tip::ink("", "tip-raw", 5, 5);
+        let mut named = DescBrush::new(Some("tip-rle"));
+        named.name = Some("Sumi Round".into());
+        named.diameter = Some(88.0);
+        named.spacing = Some(15.0);
+        named.angle = Some(45.0);
+        named.roundness = Some(60.0);
+        named.hardness = Some(70.0);
+        let bytes = fixture::v6(6, 2, &[inked, plain], Some(&[named]));
+        let path = dir.join("Inky Set.abr");
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn an_abr_file_arrives_through_the_same_command_the_sut_files_do() {
+        let dir = std::env::temp_dir().join(format!("mt-abr-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = temp_abr(&dir);
+
+        let result = tauri::async_runtime::block_on(brush_import(vec![
+            path.to_string_lossy().into_owned(),
+            dir.join("not-a-brush.abr").to_string_lossy().into_owned(),
+        ]))
+        .unwrap();
+
+        assert_eq!(result.errors.len(), 1, "only the missing path failed");
+        assert_eq!(result.brushes.len(), 2);
+        let ids: std::collections::HashSet<&String> = result.brushes.iter().map(|b| &b.id).collect();
+        assert_eq!(ids.len(), 2, "two brushes, two ids");
+        for b in &result.brushes {
+            assert_eq!(b.source, BrushSource::Pixels, "an .abr tip is never a fallback");
+            assert_eq!(b.diff, None, "there is no preview in the file to grade against");
+            assert_eq!(b.id.len(), 32);
+            assert_eq!(ihdr(&b.tip_png), Some((b.width, b.height, 8, 0)));
+            assert!(image::load_from_memory(&b.tip_png).is_ok(), "the PNG decodes");
+        }
+
+        // The first tip is the one the descriptor named, in its own units; the
+        // second was unnamed and falls back to the file's stem plus its number.
+        let named = &result.brushes[0];
+        assert_eq!(named.name, "Sumi Round");
+        assert_eq!((named.width, named.height), (12, 9));
+        assert_eq!(named.settings.size, 88.0);
+        assert_eq!(named.settings.spacing, 15.0);
+        assert_eq!(named.settings.angle, 45.0);
+        assert_eq!(named.settings.flatness, 0.6);
+        assert_eq!(named.settings.hardness, 70.0);
+        // Nothing an .abr cannot speak for moved off the engine's own default.
+        let d = BrushSettings::default();
+        assert_eq!(named.settings.taper_in, d.taper_in);
+        assert_eq!(named.settings.taper_out, d.taper_out);
+        assert_eq!(named.settings.water_edge, d.water_edge);
+        assert_eq!(named.settings.stabilise, d.stabilise);
+        assert_eq!(named.settings.opacity, d.opacity);
+
+        assert_eq!(result.brushes[1].name, "Inky Set 2");
+        assert_eq!(result.brushes[1].settings, d, "no descriptor entry, no settings");
+
+        // The id follows the bytes, so the same file under another name keeps
+        // the brushes the library already installed.
+        let moved = dir.join("renamed.abr");
+        std::fs::copy(&path, &moved).unwrap();
+        let again = import_file(&moved).unwrap();
+        assert_eq!(again[0].id, result.brushes[0].id);
+        assert_eq!(again[0].name, "Sumi Round", "a named brush ignores the stem");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_abr_holding_nothing_readable_is_one_error_beside_the_good_files() {
+        let dir = std::env::temp_dir().join(format!("mt-abr-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("junk.abr");
+        std::fs::write(&bad, b"this is a JPEG, honest").unwrap();
+        let good = temp_abr(&dir);
+
+        let result = tauri::async_runtime::block_on(brush_import(vec![
+            bad.to_string_lossy().into_owned(),
+            good.to_string_lossy().into_owned(),
+        ]))
+        .unwrap();
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].path, bad.to_string_lossy());
+        assert!(!result.errors[0].error.is_empty());
+        assert_eq!(result.brushes.len(), 2, "the readable set still imported");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
