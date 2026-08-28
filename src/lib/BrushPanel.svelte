@@ -725,6 +725,9 @@
     min-width: 0;
   }
   .tip-name .nm {
+    /* min-width beats flexbox's min-width:auto, or a long nowrap name
+       refuses to shrink and shoves the size label out of the panel */
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
