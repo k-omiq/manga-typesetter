@@ -66,7 +66,7 @@ const INDEX_NAME = 'library.json';
 const SOURCES = ['pixels', 'thumbnail', 'round'];
 
 const NO_HOST =
-  'Brush import needs the desktop app; the browser preview cannot read .sut files.';
+  'Brush import needs the desktop app; the browser preview cannot read brush files.';
 
 const FROM_FUTURE =
   'The brush library was written by a newer version of this app. No brushes are ' +

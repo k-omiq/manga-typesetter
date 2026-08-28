@@ -110,7 +110,7 @@
       const { open: pickFiles } = await import('@tauri-apps/plugin-dialog');
       const picked = await pickFiles({
         multiple: true,
-        filters: [{ name: 'Clip Studio brush', extensions: ['sut'] }],
+        filters: [{ name: 'Brushes', extensions: ['sut', 'abr'] }],
       });
       const paths = picked == null ? [] : Array.isArray(picked) ? picked : [picked];
       if (!paths.length) return;
@@ -307,7 +307,7 @@
       type="button"
       class="icobtn"
       aria-label="Import brushes"
-      title={brushLibrary.readOnly ? brushLibrary.error : 'Import .sut brushes'}
+      title={brushLibrary.readOnly ? brushLibrary.error : 'Import .sut or .abr brushes'}
       disabled={importing || brushLibrary.readOnly}
       onclick={onImport}
     >
