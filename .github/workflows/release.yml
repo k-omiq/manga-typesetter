@@ -102,6 +102,10 @@ jobs:
     name: Publish to R2
     needs: build
     runs-on: ubuntu-latest
+    # contents: write lets the last step create the GitHub release and attach
+    # the installers to it.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -182,3 +186,20 @@ jobs:
           done
           wrangler r2 object put "$BUCKET/latest.json" --file latest.json --remote
           echo "== published: $BASE_URL/latest.json =="
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ steps.notes.outputs.notes }}
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          TAG="v$VERSION"
+          # The installers people download by hand; the updater artifacts stay
+          # on R2 only. --clobber makes a re-run of this job idempotent.
+          FILES=$(ls artifacts/*/*.dmg artifacts/*/*-setup.exe)
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes "$RELEASE_NOTES"
+          fi
+          gh release upload "$TAG" $FILES --repo "$GITHUB_REPOSITORY" --clobber
+          echo "== github release $TAG published =="
