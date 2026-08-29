@@ -878,7 +878,6 @@ svg.rough-def{ position:absolute; width:0; height:0; pointer-events:none; }
    box has been clicked. Without one here the tag edit had no mouse route at all
    - it depended on the `<select>` still holding focus for its Enter. Sits in the
    grid's control column, so it lines up under the selector it applies. */
-.bulk-tag .tag-go{ height:30px; justify-self:start; padding:0 12px; }
 .bulk-note{ font-size:11px; line-height:1.45; color:var(--t2); }
 
 /* One property, one row: the tick that says whether it takes part, its name,

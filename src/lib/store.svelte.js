@@ -354,7 +354,10 @@ export const app = $state({
   // boxes clicked on the canvas (`targetSet` its membership index - see
   // `isBulkTarget`), `mask` which of the template's properties this edit is
   // actually about - see BULK_PROPS.
-  bulk: { active: false, targets: [], targetSet: new Set(), style: null, mask: {} },
+  // `tag`/`scope` are the other way of naming the same targets: picking a tag
+  // fills `targets` with every box carrying it inside `scope`, so there is one
+  // selection and one Apply no matter which way the user named the boxes.
+  bulk: { active: false, targets: [], targetSet: new Set(), style: null, mask: {}, tag: '', scope: 'chapter' },
   exportOpen: false, // export scope/destination dialog
   exportDir: '', // last chosen output directory (native only), persisted
   exportName: 'page', // base filename, persisted
@@ -2636,11 +2639,62 @@ export function openBulk() {
     // - to drop a property they fiddled with and thought better of, or to push a
     // value they never touched because the seeded template already holds it.
     mask: {},
+    // No tag chosen: the panel opens in click-to-select. Scope is remembered
+    // across opens no more than the mask is - an edit that quietly inherited
+    // "this page" from an hour ago would silently miss the rest of a chapter.
+    tag: '',
+    scope: 'chapter',
   };
   app.editingId = null;
 }
 export function closeBulk() {
-  app.bulk = { active: false, targets: [], targetSet: new Set(), style: null, mask: {} };
+  app.bulk = { active: false, targets: [], targetSet: new Set(), style: null, mask: {}, tag: '', scope: 'chapter' };
+}
+
+// The pages a tag-scoped selection or apply reaches. One reading of
+// `app.bulk.scope`, shared by the selection sync below and by the Apply the
+// panel fires, so the boxes highlighted are exactly the boxes restyled.
+export function bulkScopePages() {
+  if (app.bulk.scope === 'page') {
+    const p = page();
+    return p ? [p] : [];
+  }
+  return app.pages;
+}
+
+// A tag IS a selection: choosing one names its boxes, so the user never clicks
+// them. This is the single place that turns a tag into `targets`, which is what
+// makes the canvas highlight, the footer count and the Apply agree - before,
+// the tag lived only in the panel and the footer Apply stayed disabled at
+// "0 selected" while the user was staring at a tag they had just picked.
+export function syncBulkTagTargets() {
+  if (!app.bulk.active) return 0;
+  if (!app.bulk.tag) return 0;
+  const next = boxesWithTag(app.bulk.tag, bulkScopePages()).map((h) => h.box.id);
+  app.bulk.targets = next;
+  app.bulk.targetSet = new Set(next);
+  return next.length;
+}
+
+export function setBulkTag(name) {
+  if (!app.bulk.active) return;
+  app.bulk.tag = name || '';
+  // Clearing the tag clears what the tag put there. Leaving the boxes ticked
+  // would hand the user a selection with nothing on screen explaining it.
+  if (!app.bulk.tag) {
+    app.bulk.targets = [];
+    app.bulk.targetSet = new Set();
+    return;
+  }
+  syncBulkTagTargets();
+}
+
+export function setBulkScope(scope) {
+  if (!app.bulk.active) return;
+  app.bulk.scope = scope === 'page' ? 'page' : 'chapter';
+  // Only a tag selection follows the scope. A hand-picked set is the user's
+  // own list of boxes and narrowing the scope must not silently drop half of it.
+  if (app.bulk.tag) syncBulkTagTargets();
 }
 // A Set read rather than `targets.includes`: this runs once per box per frame
 // while the panel is open (the canvas highlights every target), and a linear
@@ -2648,6 +2702,10 @@ export function closeBulk() {
 export const isBulkTarget = (id) => app.bulk.active && app.bulk.targetSet.has(id);
 export function toggleBulkTarget(id) {
   if (!app.bulk.active) return;
+  // A click takes the selection over. The tag's boxes stay ticked - they are a
+  // fine starting point to refine - but the tag itself is dropped, or the next
+  // scope change would re-derive the set and throw the refinement away.
+  app.bulk.tag = '';
   const i = app.bulk.targets.indexOf(id);
   const next = i === -1 ? [...app.bulk.targets, id] : app.bulk.targets.filter((x) => x !== id);
   app.bulk.targets = next;
@@ -2743,6 +2801,14 @@ function recordBulkByPage(items, lastStyleBefore = null, lastStyleAfter = null) 
 
 export function applyBulk() {
   if (!app.bulk.active || !app.bulk.style) return;
+  // A tag selection is re-resolved at apply time rather than trusting the ids
+  // `syncBulkTagTargets` left behind: tagging or untagging a line while the
+  // panel is open changes which boxes the tag names, and the apply must land on
+  // what the tag means now, not on what it meant when it was picked.
+  if (app.bulk.tag) {
+    applyBulkToTag(app.bulk.tag, bulkScopePages());
+    return;
+  }
   // An apply with nothing ticked would write each box's own style back over
   // itself and record an undo step that rewinds nothing. Refused with a reason
   // rather than silently doing nothing, because from the user's side an Apply

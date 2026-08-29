@@ -53,6 +53,9 @@ import {
   closeBulk,
   applyBulk,
   applyBulkToTag,
+  setBulkTag,
+  setBulkScope,
+  bulkScopePages,
   toggleBulkTarget,
   isBulkTarget,
   hasPageSpace,
@@ -92,7 +95,7 @@ import {
 } from './store.svelte.js';
 import { defaultStyle, normalizeStyle, GRADIENT_MAX_STOPS } from './data.js';
 import { setPref } from './prefs.svelte.js';
-import { loadTags, lineTags } from './tags.svelte.js';
+import { loadTags, lineTags, setLineTags } from './tags.svelte.js';
 import { initHistory, resetHistory, undo, redo } from './editor/history.svelte.js';
 
 const pageWith = (boxes) => ({
@@ -1592,6 +1595,67 @@ describe('a tag-scoped bulk edit', () => {
         readPath(defaultStyle(), key),
       );
     }
+  });
+
+  // A tag IS a selection. Picking one has to fill `targets`, or the panel's one
+  // Apply button stays disabled at "0 selected" while a tag sits chosen right
+  // above it - which is what made a tagged apply look broken.
+  it('selects the boxes it names the moment the tag is picked', () => {
+    setBulkTag('sfx');
+    expect(app.bulk.targets).toEqual(['b1', 'b4']);
+    expect(isBulkTarget('b1')).toBe(true);
+    expect(isBulkTarget('b2')).toBe(false);
+  });
+
+  it('narrows and widens that selection with the scope', () => {
+    setBulkTag('sfx');
+    setBulkScope('page');
+    expect(bulkScopePages()).toEqual([page()]);
+    expect(app.bulk.targets).toEqual(['b1']);
+    setBulkScope('chapter');
+    expect(app.bulk.targets).toEqual(['b1', 'b4']);
+  });
+
+  it('clears the selection when the tag is cleared', () => {
+    setBulkTag('sfx');
+    setBulkTag('');
+    expect(app.bulk.targets).toEqual([]);
+  });
+
+  // The scope must not silently eat a hand-picked list.
+  it('leaves a hand-picked selection alone when the scope changes', () => {
+    toggleBulkTarget('b4');
+    setBulkScope('page');
+    expect(app.bulk.targets).toEqual(['b4']);
+  });
+
+  // A click takes over: the tag's boxes stay as a starting point, but the tag
+  // is dropped so a later scope change cannot re-derive the set and throw the
+  // refinement away.
+  it('hands the selection to the user the moment they click a box', () => {
+    setBulkTag('sfx');
+    toggleBulkTarget('b1');
+    expect(app.bulk.tag).toBe('');
+    expect(app.bulk.targets).toEqual(['b4']);
+  });
+
+  // One Apply for both ways of naming boxes.
+  it('applies to the tag through the same Apply the clicked targets use', () => {
+    setBulkTag('sfx');
+    green();
+    applyBulk();
+    expect(boxOf('b1').style.color).toBe('#00ff00');
+    expect(boxOf('b4').style.color).toBe('#00ff00');
+    expect(boxOf('b2').style.color).not.toBe('#00ff00');
+  });
+
+  // Re-resolved at apply time: the tag means what it means now.
+  it('applies to boxes tagged after the tag was picked', () => {
+    setBulkTag('sfx');
+    green();
+    setLineTags(page().lines.find((l) => l.n === 2), ['sfx']);
+    applyBulk();
+    expect(boxOf('b2').style.color).toBe('#00ff00');
   });
 
   it('takes its scope from that array and nothing else', () => {

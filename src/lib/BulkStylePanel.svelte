@@ -2,11 +2,14 @@
 import {
   app,
   applyBulk,
-  applyBulkToTag,
+  bulkScopePages,
   closeBulk,
   GROUPS,
   page,
   setBulkProp,
+  setBulkScope,
+  setBulkTag,
+  syncBulkTagTargets,
   tickBulkProp,
   bulkTicked,
 } from './store.svelte.js';
@@ -292,10 +295,12 @@ import {
   const nOn = (g) => GROUPS[g].filter((k) => app.bulk.mask[k]).length;
   const setGroup = (g, on) => GROUPS[g].forEach((k) => setBulkProp(k, on));
 
-  // Tag scope: chapter or current page.
-  let scope = $state('chapter');
-  let tag = $state('');
-  const scopePages = $derived(scope === 'page' ? [page()] : app.pages);
+  // Tag and scope live on `app.bulk`, not here: picking a tag has to fill the
+  // real selection so the canvas highlights it and the one Apply in the footer
+  // lights up. A copy in the panel is how the two used to disagree.
+  const scope = $derived(app.bulk.scope);
+  const tag = $derived(app.bulk.tag);
+  const scopePages = $derived(app.bulk.active ? bulkScopePages() : []);
   const scopeWord = $derived(scope === 'page' ? 'this page' : 'the chapter');
   const tagList = $derived(app.bulk.active ? tagsInUse(scopePages) : []);
   const tagHits = $derived(tag ? boxesWithTag(tag, scopePages).length : 0);
@@ -310,24 +315,19 @@ import {
     scopePages.reduce((n, p) => n + (p?.boxes ?? []).filter((b) => b.lineN == null).length, 0),
   );
 
-  // Clear tag if not available in current scope.
+  // Drop a tag that the current scope no longer offers - narrowing to a page
+  // that carries none of it would otherwise leave a live selection of zero
+  // boxes with a tag name still showing.
   $effect(() => {
-    if (tag && !tagList.includes(tag)) tag = '';
+    if (app.bulk.active && tag && !tagList.includes(tag)) setBulkTag('');
   });
-  // Reset selected tag on open.
+  // A page-scoped tag selection follows the page. `page()` moves under the panel
+  // in a longstrip chapter as the user scrolls, and the highlighted boxes have
+  // to be the ones the Apply will land on.
   $effect(() => {
-    if (app.bulk.active) tag = '';
+    const here = page()?.id;
+    if (app.bulk.active && app.bulk.tag && app.bulk.scope === 'page' && here) syncBulkTagTargets();
   });
-
-  const canApplyTag = $derived(!!tag && ticked > 0 && tagHits > 0);
-
-  // Move focus to Apply button on Enter.
-  let applyTagBtn = $state(null);
-  function onTagKey(e) {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    applyTagBtn?.focus();
-  }
 
   const alignIcons = {
     left: ['M3 6h18', 'M3 12h12', 'M3 18h15'],
@@ -388,36 +388,29 @@ import {
         <div class="trow">
           <span class="lbl">Scope</span>
           <div class="seg">
-            <button class:on={scope === 'chapter'} onclick={() => (scope = 'chapter')}>Chapter</button>
-            <button class:on={scope === 'page'} onclick={() => (scope = 'page')}>This page</button>
+            <button class:on={scope === 'chapter'} onclick={() => setBulkScope('chapter')}>Chapter</button>
+            <button class:on={scope === 'page'} onclick={() => setBulkScope('page')}>This page</button>
           </div>
         </div>
 
         <div class="trow">
           <span class="lbl">By tag</span>
-          <select bind:value={tag} onkeydown={onTagKey} disabled={!tagList.length}>
+          <select
+            value={tag}
+            onchange={(e) => setBulkTag(e.target.value)}
+            disabled={!tagList.length}
+          >
             <option value="">{tagList.length ? 'Choose a tag…' : 'No tags in use'}</option>
             {#each tagList as t (t)}<option value={t}>{t}</option>{/each}
           </select>
-        </div>
-        <div class="trow">
-          <span class="lbl"></span>
-          <button
-            class="btn btn-accent tag-go"
-            bind:this={applyTagBtn}
-            disabled={!canApplyTag}
-            onclick={() => applyBulkToTag(tag, scopePages)}
-          >
-            {tag ? `Apply to “${tag}”` : 'Apply to tag'}
-          </button>
         </div>
         <div class="bulk-note">
           {#if !tagList.length}
             No line in {scopeWord} carries a tag yet - tag them in the Text Queue first.
           {:else if !tag}
-            Choose a tag to restyle every box carrying it in {scopeWord}.
+            Choose a tag to select every box carrying it in {scopeWord}, or click boxes on the page.
           {:else}
-            Applies to {tagHits} box{tagHits === 1 ? '' : 'es'} tagged “{tag}” in {scopeWord}.
+            Selected {tagHits} box{tagHits === 1 ? '' : 'es'} tagged “{tag}” in {scopeWord} - press Apply below.
             {#if !ticked}
               <br />Tick a property below first - nothing is set to change.
             {/if}
@@ -432,7 +425,7 @@ import {
         </div>
       </div>
 
-      <div class="bulk-hint">Or tick the properties to change, then click the boxes to apply them to.</div>
+      <div class="bulk-hint">Tick the properties to change, then press Apply. Clicking boxes on the page picks them by hand instead of by tag.</div>
 
       <div class="bulk-body">
         <div class="insp-sub" class:closed={!open.font}>
@@ -825,7 +818,7 @@ import {
     </div>
 
     <div class="bulk-foot">
-      <span class="cnt">{ticked} ticked · {count} selected</span>
+      <span class="cnt">{ticked} ticked · {count} selected{tag ? ` · “${tag}”` : ''}</span>
       <button class="btn" onclick={closeBulk}>Cancel</button>
       <button class="btn btn-accent" disabled={count === 0 || ticked === 0} onclick={applyBulk}>Apply</button>
     </div>
