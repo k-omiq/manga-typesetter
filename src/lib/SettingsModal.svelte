@@ -19,6 +19,9 @@
     formatCombo,
   } from './shortcuts.svelte.js';
   import { createRebindCapture } from './rebind-capture.js';
+  import { getVersion } from '@tauri-apps/api/app';
+  import { checkForUpdate } from './updater.js';
+  import UpdateDialog from './home/UpdateDialog.svelte';
 
   let { open = $bindable() } = $props();
 
@@ -150,6 +153,42 @@
 
   function isTauri() {
     return typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
+  }
+
+  // ---------- updates ----------
+  // The home screen checks once on launch and shows a badge if something is
+  // there. That leaves no way to ask, which is the one thing a user wants after
+  // reading that a release exists - so the ask lives here, and it reuses the
+  // same check and the same dialog rather than growing a second update path.
+  let appVersion = $state('');
+  let checking = $state(false);
+  // null = never asked this session; the Update object, or false for "nothing".
+  let upd = $state(null);
+  let updDialogOpen = $state(false);
+  let updError = $state('');
+
+  $effect(() => {
+    if (!open || appVersion || !isTauri()) return;
+    getVersion()
+      .then((v) => (appVersion = v))
+      .catch(() => {});
+  });
+
+  async function onCheckUpdate() {
+    if (checking) return;
+    checking = true;
+    updError = '';
+    try {
+      upd = (await checkForUpdate()) ?? false;
+      // Found one: straight into the same dialog the home badge opens, because
+      // the next thing the user wants is the notes and the Download button.
+      if (upd) updDialogOpen = true;
+    } catch (e) {
+      upd = false;
+      updError = e?.message ?? String(e);
+    } finally {
+      checking = false;
+    }
   }
 
   function fmtBytes(n) {
@@ -537,6 +576,49 @@
 
       {#if tab === 'system'}
       <div class="set-pane" role="tabpanel" id="set-pane-system" aria-labelledby="set-tab-system">
+      <div class="group-label">Updates</div>
+
+      <div class="model-card">
+        <div class="mc-top">
+          <div class="mc-title">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12" /><path d="M8 11l4 4 4-4" /><path d="M4 19h16" /></svg>
+            <div>
+              <div class="mc-name">Manga Typesetter</div>
+              <div class="mc-sub">
+                {#if appVersion}Version {appVersion}
+                {:else if isTauri()}Reading version…
+                {:else}Desktop app only - a browser tab cannot update itself.{/if}
+              </div>
+            </div>
+          </div>
+          {#if upd}<span class="tag">v{upd.version}</span>{/if}
+        </div>
+
+        <p class="mc-desc">
+          Checks the release channel for a newer build. Found updates download
+          and install in place, then the app restarts.
+        </p>
+
+        <div class="mc-actions">
+          <button class="btn" disabled={checking || !isTauri()} onclick={onCheckUpdate}>
+            {checking ? 'Checking…' : 'Check for updates'}
+          </button>
+          {#if upd}
+            <button class="btn btn-accent" onclick={() => (updDialogOpen = true)}>
+              Update to v{upd.version}
+            </button>
+          {/if}
+        </div>
+
+        {#if updError}
+          <div class="qhint">Check failed: {updError}</div>
+        {:else if upd === false}
+          <div class="qhint">You are on the newest version.</div>
+        {/if}
+      </div>
+
+      <div class="group-label">Engine</div>
+
       <div class="srow">
         <span class="slabel">Detection engine</span>
         <span class="dot {sidecarOk ? 'ok' : app.sidecar?.status === 'error' ? 'err' : 'off'}"></span>
@@ -708,6 +790,10 @@
     </div>
   </div>
 </div>
+
+<!-- The same dialog the home badge opens, mounted here too so a check made
+     from Settings lands somewhere. -->
+<UpdateDialog bind:open={updDialogOpen} update={upd || null} />
 
 <style>
   /* The tab strip, same grammar as the Inspector's: icon over label, the open
