@@ -148,6 +148,7 @@ export function applyBoxDefaults(style) {
   style.path = { on: false, pts: [] };
   style.clip = { on: false, mode: 'exclude', brushSize: style.clip?.brushSize ?? 20, shapes: [] };
   style.warp = { on: false, cols: 1, rows: 1, pts: [] };
+  style.ink = { on: false, strokes: [] };
   return style;
 }
 

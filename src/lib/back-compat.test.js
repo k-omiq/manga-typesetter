@@ -813,3 +813,22 @@ describe('a project saved before the warp mesh existed', () => {
     expect(s.warp).toEqual({ on: true, cols: 4, rows: 4, pts: [] });
   });
 });
+
+// A newborn box takes the last box's style as its starting point, but never the
+// last box's own geometry: strokes drawn in one box must not appear in the next
+// box the letterer places.
+describe('a newborn box and the previous box\'s geometry', () => {
+  it('starts with no ink, path, mask shapes or warp of its own', async () => {
+    const { applyBoxDefaults } = await import('./data.js');
+    const prev = normalizeStyle({
+      ink: { on: true, strokes: [{ pts: [[1, 2, 0.5], [3, 4, 0.5]] }] },
+      path: { on: true, pts: [[0, 0], [9, 9]] },
+      warp: { on: true, cols: 1, rows: 1, pts: [[0, 0], [1, 0], [0, 1], [1, 1]] },
+    });
+    const s = applyBoxDefaults(structuredClone(prev));
+    expect(s.ink).toEqual({ on: false, strokes: [] });
+    expect(s.path).toEqual({ on: false, pts: [] });
+    expect(s.warp).toEqual({ on: false, cols: 1, rows: 1, pts: [] });
+    expect(s.clip.shapes).toEqual([]);
+  });
+});
