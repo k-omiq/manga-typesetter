@@ -152,6 +152,20 @@ describe('isRasterOnly', () => {
     expect(isRasterOnly({ path: { on: false, pts } })).toBe(false);
   });
 
+  // The mesh warp, for the same reason the mirror is here: a type layer's
+  // transform has no room to state a quad, so Photoshop would lay the glyphs out
+  // in the box rect over pixels that were carried somewhere else.
+  it('is true for a box with a mesh warp on it', () => {
+    const pts = [[0, 0], [100, 0], [0, 100], [120, 140]];
+    expect(isRasterOnly({ warp: { on: true, cols: 1, rows: 1, pts } })).toBe(true);
+    // Switched off, or never dragged: an ordinary live type layer.
+    expect(isRasterOnly({ warp: { on: false, cols: 1, rows: 1, pts } })).toBe(false);
+    expect(isRasterOnly({ warp: { on: true, cols: 1, rows: 1, pts: [] } })).toBe(false);
+    // And a mesh the sanitiser would have thrown away is not a mesh: nine points
+    // are wanted for a 2x2 grid.
+    expect(isRasterOnly({ warp: { on: true, cols: 2, rows: 2, pts } })).toBe(false);
+  });
+
   it('is true for text closed into a circle', () => {
     expect(isRasterOnly({ circle: { on: true, angle: 0, inside: false } })).toBe(true);
     expect(isRasterOnly({ circle: { on: false } })).toBe(false);

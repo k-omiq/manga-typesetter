@@ -21,6 +21,8 @@ import {
   drawInk,
   TILE_SS,
 } from './text-paint.js';
+import { warpActive } from './warp.js';
+import { warpBoxCanvas } from './warp-paint.js';
 import { settleBoxTips } from './brush-tips.js';
 import { withPageImages } from './page-images.js';
 import { stripOffsets, maxPageWidth } from './editor/strip.js';
@@ -524,7 +526,11 @@ function paintShadows(ctx, box, L, SS) {
 // device pixels and gives the same crisp downscaled edge every other box gets -
 // and the same edge the editor shows, which applies its filter at device
 // resolution as well.
-function renderBox(box, p, tips) {
+// Returns `{ canvas, ox, oy, cw, ch }`: the bitmap, where the box's top-left
+// sits inside it, and how many page px it spans. Exported because the editor
+// draws a warped box from exactly this - see `paintWarpedBox` - rather than
+// from a second painter that would have to be kept in step with it.
+export function renderBox(box, p, tips) {
   const L = layoutBox(box, p);
   const s = L.s;
   const SS = 2;
@@ -609,7 +615,67 @@ function renderBox(box, p, tips) {
     octx.drawImage(m, 0, 0);
     octx.restore();
   }
-  return { canvas: out, pad: L.pad, leftExtra: L.leftExtra, topExtra: L.topExtra, cw: L.cw, ch: L.ch };
+  // The mesh warp, over everything: the box is a finished picture by now - type
+  // and ink and every filter - and the warp carries that one texture, which is
+  // the whole point of doing it here. Ink cannot be warped separately because
+  // there is no separate ink: it went into this canvas above, under the same
+  // blur and behind the same mask.
+  //
+  // The deformed mesh reaches outside the box rect, so the footprint the caller
+  // is told about is the warp's, not the layout's - `ox`/`oy` grow or shrink
+  // with it and the page composite places the bitmap from those, the same
+  // mechanism the ink overhang already grew `layoutBox`'s padding for.
+  let ox = L.ox;
+  let oy = L.oy;
+  let cw = L.cw;
+  let ch = L.ch;
+  if (warpActive(s, box.w, box.h)) {
+    const warped = warpBoxCanvas(out, { warp: s.warp, w: box.w, h: box.h, ox, oy, cw, ch, ss: SS });
+    // Null means the mesh does nothing (or cannot be drawn), and the texture
+    // already in hand is the answer - unwarped output stays byte for byte what
+    // it was before this pass existed.
+    if (warped) {
+      // The texture has been copied into the warped canvas and nothing else
+      // holds it. A box's footprint is megapixels; handing them back here is
+      // the same discipline the strip and page exporters keep.
+      out.width = 0;
+      out.height = 0;
+      out = warped.canvas;
+      ox = warped.ox;
+      oy = warped.oy;
+      cw = warped.cw;
+      ch = warped.ch;
+    }
+  }
+  return { canvas: out, ox, oy, cw, ch };
+}
+
+// The box drawn into an editor canvas, at the editor's zoom. This is the
+// substitution a warped box makes: the DOM cannot state a mesh, so the box
+// stops being a stack of text elements and becomes the exporter's own picture
+// of itself, scaled to the zoom.
+//
+// It is the SAME call the page composite makes, and that is the whole design:
+// parity is not two painters agreeing, it is one painter and two destinations.
+// At zoom 1 the drawImage below is the composite's drawImage, argument for
+// argument. Returns the footprint geometry so the caller can place the canvas -
+// `ox`/`oy` page px left of and above the box's own top-left.
+export function paintWarpedBox(el, box, p, z, tips) {
+  const r = renderBox(box, p, tips);
+  const w = Math.max(1, Math.round(r.cw * z));
+  const h = Math.max(1, Math.round(r.ch * z));
+  if (el.width !== w) el.width = w;
+  if (el.height !== h) el.height = h;
+  const ctx = el.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(r.canvas, 0, 0, w, h);
+  // The supersampled texture has served its purpose; a chapter of warped boxes
+  // each holding one is the shape that put gigabytes in the webview before.
+  r.canvas.width = 0;
+  r.canvas.height = 0;
+  return { ox: r.ox, oy: r.oy, cw: r.cw, ch: r.ch };
 }
 
 const MIME = {
@@ -691,6 +757,10 @@ function paintBoxOnPage(ctx, box, p, tips) {
   // direct draw has no composite to work on. Ink is here for the other reason:
   // the direct draw paints glyphs only, so an inked box would lose its strokes.
   const composited =
+    // A warped box IS its composite - the mesh carries a finished texture, and
+    // the direct-angle draw has no texture to carry - so it takes the raster
+    // path however plain its type is.
+    warpActive(s, box.w, box.h) ||
     (s.shadows ?? []).length > 0 ||
     (s.blur ?? 0) > 0 ||
     (s.motionBlur?.on && ((s.motionBlur.x ?? 0) !== 0 || (s.motionBlur.y ?? 0) !== 0)) ||
@@ -711,12 +781,15 @@ function paintBoxOnPage(ctx, box, p, tips) {
     paintBox(ctx, box, L);
     ctx.restore();
   } else {
-    const { canvas: bc, pad, leftExtra, topExtra, cw, ch } = renderBox(box, p, tips);
+    // `ox`/`oy` is where the box's own top-left sits inside the bitmap: the
+    // layout's padding and overflow for an ordinary box, and whatever the mesh
+    // made of them for a warped one.
+    const { canvas: bc, ox, oy, cw, ch } = renderBox(box, p, tips);
     if (rot === 0) {
       // Integer-snap the bitmap origin so a sub-pixel box position doesn't
       // force a bilinear resample of the whole text block (the primary blur).
-      const originX = Math.round(box.x - leftExtra - pad);
-      const originY = Math.round(box.y - topExtra - pad);
+      const originX = Math.round(box.x - ox);
+      const originY = Math.round(box.y - oy);
       if (flipped) {
         // Mirror the bitmap around the box center.
         ctx.save();
@@ -735,7 +808,7 @@ function paintBoxOnPage(ctx, box, p, tips) {
       ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
       ctx.rotate((rot * Math.PI) / 180);
       if (flipped) ctx.scale(fx, fy);
-      ctx.drawImage(bc, -(box.w / 2 + leftExtra + pad), -(box.h / 2 + topExtra + pad), cw, ch);
+      ctx.drawImage(bc, -(box.w / 2 + ox), -(box.h / 2 + oy), cw, ch);
       ctx.restore();
     }
   }

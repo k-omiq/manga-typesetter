@@ -18,6 +18,7 @@ import { resolveFace, postScriptNameFor } from './fonts.js';
 import { applyCase, canMeasure, layoutLines, BOX_PAD, blockYFor, balloonWidthsFor } from './measure.js';
 import { normalizeFit } from './data.js';
 import { strokeBands, clipActive, inkActive } from './text-paint.js';
+import { warpActive } from './warp.js';
 import { withPageImages } from './page-images.js';
 
 // Bumped when the embedded schema changes in a non-back-compatible way. Import
@@ -366,6 +367,12 @@ export function isRasterOnly(style) {
     s.circle?.on ||
     s.flipH ||
     s.flipV ||
+    // The mesh warp. A type layer's transform is a rotation and a translation;
+    // it has no room for a quad, let alone a grid of them, so Photoshop would
+    // re-render the glyphs straight over the deformed pixels - the same failure
+    // the curve and the mirror have, for the same reason. Asked without the box,
+    // so a mesh switched on and fully stated counts (see warpActive).
+    warpActive(s) ||
     // ink
     s.roughen?.on ||
     clipActive(s.clip) ||

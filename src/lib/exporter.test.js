@@ -79,6 +79,9 @@ let fills;
 // which of the two happens first is a parity fact and not an implementation
 // detail.
 let order;
+// Every composite draw's destination rectangle, for the tests that are about
+// the footprint rather than about where its corner landed.
+let rects;
 const stubContext = () => ({
   fillStyle: '',
   strokeStyle: '',
@@ -99,7 +102,15 @@ const stubContext = () => ({
   fill() {},
   rect() {},
   clip() {},
-  drawImage(_img, x, y) {
+  // The warp pass's triangles: a path per triangle, clipped, then the texture
+  // drawn through the affine that carries it. Nothing here has to rasterise -
+  // warp-paint.test.js brings a renderer that does - so what these record is
+  // that the pass ran, in `order`.
+  moveTo() {},
+  lineTo() {},
+  closePath() {},
+  transform() {},
+  drawImage(_img, x, y, dw, dh) {
     // A shadow layer is the one thing composited with the transform reset (see
     // paintShadows), which is what tells the two kinds of draw apart here.
     if (this.identity) {
@@ -108,6 +119,9 @@ const stubContext = () => ({
     } else {
       order.push(this.filter && this.filter !== 'none' ? 'blur' : 'composite');
       composited.push([x, y]);
+      // The same draws again, with the destination rect this time: how big the
+      // bitmap is on the page is the whole of what a warp does to the footprint.
+      if (dw != null) rects.push({ x, y, w: dw, h: dh });
     }
   },
   scale() {},
@@ -175,6 +189,7 @@ beforeEach(() => {
   patterns = [];
   fills = [];
   order = [];
+  rects = [];
   naturalSizes = {};
   // `setFill` only anchors a pattern where the platform has a DOMMatrix to
   // anchor it with, so node needs the six numbers of one for that branch to be
@@ -596,6 +611,100 @@ describe('strokes and shadows', () => {
     );
     expect(composited.at(-1)[0]).toBeLessThan(tight[0]);
     expect(composited.at(-1)[1]).toBeLessThan(tight[1]);
+  });
+});
+
+// The mesh warp's half of the exporter: when it happens, when it deliberately
+// does not, and what it does to where the bitmap lands on the page. The pixels
+// themselves are pinned down in warp-paint.test.js, which brings a rasteriser;
+// what this stub can see is the pass and the placement, which is what the rest
+// of the exporter reads.
+describe('the mesh warp', () => {
+  const boxWith = (warp) => ({
+    id: 'b1',
+    lineN: null,
+    text: 'ONE',
+    x: 40,
+    y: 40,
+    w: 360,
+    h: 200,
+    style: normalizeStyle({ size: 20, ...(warp ? { warp } : {}) }),
+  });
+  const render = (box) => renderPageCanvas({ id: 7, w: 800, h: 1200, lines: [], boxes: [box] });
+  // The four corners of that box, with the bottom-right one dragged out.
+  const DRAGGED = { on: true, cols: 1, rows: 1, pts: [[0, 0], [360, 0], [0, 200], [400, 260]] };
+
+  it('draws a box with no warp block at all exactly as it always did', async () => {
+    // Back-compat: a project saved before the feature existed has no `warp` key,
+    // and `normalizeStyle` gives it the default. Same passes, same places.
+    await render(boxWith(null));
+    const was = { order: [...order], composited: JSON.stringify(composited) };
+    order.length = 0;
+    composited.length = 0;
+    await render(boxWith({ on: false, cols: 1, rows: 1, pts: [] }));
+    expect(order).toEqual(was.order);
+    expect(JSON.stringify(composited)).toBe(was.composited);
+  });
+
+  it('skips the whole pass for a mesh that changes nothing', async () => {
+    // A gizmo hands the user the identity mesh the moment the switch goes on;
+    // until a handle moves, the box has to draw the bytes it drew before.
+    await render(boxWith(null));
+    const was = { order: [...order], composited: JSON.stringify(composited) };
+    order.length = 0;
+    composited.length = 0;
+    const identity = [[0, 0], [360, 0], [0, 200], [360, 200]];
+    await render(boxWith({ on: true, cols: 1, rows: 1, pts: identity }));
+    expect(order).toEqual(was.order);
+    expect(JSON.stringify(composited)).toBe(was.composited);
+    // And the same again for a switched-off mesh that HAS been dragged.
+    order.length = 0;
+    composited.length = 0;
+    await render(boxWith({ ...DRAGGED, on: false }));
+    expect(order).toEqual(was.order);
+    expect(JSON.stringify(composited)).toBe(was.composited);
+  });
+
+  it('draws the texture once per triangle, and the finished bitmap onto the page', async () => {
+    await render(boxWith(null));
+    const plain = order.length;
+    order.length = 0;
+    composited.length = 0;
+    await render(boxWith(DRAGGED));
+    // Two triangles per cell over the 8x8 the four-handle case subdivides into,
+    // plus the band of cells that carries the overflow: one draw each, and then
+    // the page composite.
+    expect(order.length).toBeGreaterThan(plain + 2 * 8 * 8);
+    expect(order.at(-1)).toBe('composite');
+  });
+
+  it('grows the footprint the mesh reaches past the box, so nothing is cropped', async () => {
+    await render(boxWith(null));
+    const tight = rects.at(-1);
+    rects.length = 0;
+    await render(boxWith(DRAGGED));
+    const warped = rects.at(-1);
+    // The drag takes the bottom-right corner 40px right and 60px down, and the
+    // bitmap has to hold all of it - the exporter's own padding mechanism, the
+    // one the ink overhang already grew, now reading from the mesh.
+    expect(warped.w - tight.w).toBeGreaterThanOrEqual(40);
+    expect(warped.h - tight.h).toBeGreaterThanOrEqual(60);
+    // The drag is down and to the right, and the origin does not follow it: a
+    // bitmap that started later than the unwarped one would be a bitmap with
+    // the top-left of the box cut off it.
+    expect(warped.x).toBeLessThanOrEqual(tight.x);
+    expect(warped.y).toBeLessThanOrEqual(tight.y);
+  });
+
+  it('sends a rotated warped box down the raster path rather than the direct draw', async () => {
+    // The direct-angle draw paints glyphs; a warped box is a texture, and there
+    // is no texture to carry in that path.
+    const box = boxWith(DRAGGED);
+    box.style.rotation = 30;
+    await render(box);
+    // A direct draw would have put glyph runs on the page and composited
+    // nothing; the raster path composites the box's own bitmap.
+    expect(composited.length).toBeGreaterThan(0);
   });
 });
 

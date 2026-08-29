@@ -7,6 +7,10 @@ import {
   warpPoint,
   resampleMesh,
   meshBounds,
+  solveHomography,
+  applyHomography,
+  isParallelogram,
+  warpActive,
 } from './warp.js';
 import { normalizeStyle, normalizeWarp, defaultStyle } from './data.js';
 
@@ -372,5 +376,161 @@ describe('the warp style block', () => {
   it('is what the engine calls identity when the mesh is untouched', () => {
     const w = normalizeWarp({ on: true, cols: 2, rows: 2 });
     expect(isIdentityMesh(w.pts, w.cols, w.rows, W, H)).toBe(true);
+  });
+});
+
+// ===========================================================================
+// The projective map
+// ===========================================================================
+// The four-handle case is not two triangles: they meet along the diagonal at an
+// angle and the box creases. These are the numbers the painter subdivides
+// through instead. The worked example is a homography chosen so every expected
+// value can be read straight off it - `g = 0.5` and nothing else - and the quad
+// it produces is then handed back to the solver to recover.
+
+// The unit square in polygon order, which is the order both solver arguments
+// are given in.
+const UNIT = [
+  [0, 0],
+  [1, 0],
+  [1, 1],
+  [0, 1],
+];
+// That square through h = [1,0,0, 0,1,0, 0.5,0,1]: x' = x / (1 + x/2),
+// y' = y / (1 + x/2). A trapezoid, right edge pulled in to 2/3.
+const TRAP = [
+  [0, 0],
+  [2 / 3, 0],
+  [2 / 3, 2 / 3],
+  [0, 1],
+];
+
+const near = (a, b, digits = 10) => {
+  expect(a).toHaveLength(b.length);
+  b.forEach((v, i) => expect(a[i]).toBeCloseTo(v, digits));
+};
+
+describe('solveHomography', () => {
+  it('recovers the map that made a hand-computed trapezoid', () => {
+    near(solveHomography(UNIT, TRAP), [1, 0, 0, 0, 1, 0, 0.5, 0, 1]);
+  });
+
+  it('carries each corner exactly where it was asked to', () => {
+    const h = solveHomography(UNIT, TRAP);
+    UNIT.forEach((p, i) => near(applyHomography(h, p[0], p[1]), TRAP[i]));
+  });
+
+  it('degenerates to the affine map when the quad is a parallelogram', () => {
+    // A pure shear: no perspective in it, so the two projective terms are zero
+    // and what is left is the affine map's six numbers.
+    const shear = [
+      [0, 0],
+      [2, 0],
+      [3, 1],
+      [1, 1],
+    ];
+    const h = solveHomography(UNIT, shear);
+    near(h, [2, 1, 0, 0, 1, 0, 0, 0, 1]);
+    // And it agrees with the affine solve on a point neither was fitted at.
+    const m = affineFromTriangle([UNIT[0], UNIT[1], UNIT[2]], [shear[0], shear[1], shear[2]]);
+    const [x, y] = applyHomography(h, 0.25, 0.75);
+    expect(x).toBeCloseTo(m[0] * 0.25 + m[2] * 0.75 + m[4], 10);
+    expect(y).toBeCloseTo(m[1] * 0.25 + m[3] * 0.75 + m[5], 10);
+  });
+
+  it('is not the affine answer in the middle of a perspective quad', () => {
+    // The whole reason this exists: at the centre of the unit square the
+    // projective map says (0.4, 0.4) - 1/2 over the denominator 1 + 1/4 - while
+    // reading the quad's corners linearly says (1/3, 5/12). That gap is the
+    // crease the painter would otherwise draw.
+    const h = solveHomography(UNIT, TRAP);
+    near(applyHomography(h, 0.5, 0.5), [0.4, 0.4]);
+    const bilinear = TRAP.reduce((a, p) => [a[0] + p[0] / 4, a[1] + p[1] / 4], [0, 0]);
+    expect(bilinear[0]).toBeCloseTo(1 / 3, 10);
+    expect(bilinear[1]).toBeCloseTo(5 / 12, 10);
+  });
+
+  it('is null for a quad that is not one: collinear, crossed, or collapsed', () => {
+    expect(solveHomography(UNIT, [[0, 0], [1, 0], [2, 0], [0, 1]])).toBeNull(); // three in a line
+    expect(solveHomography(UNIT, [[0, 0], [1, 0], [0, 1], [1, 1]])).toBeNull(); // bowtie
+    expect(solveHomography(UNIT, [[0, 0], [0, 0], [0, 0], [0, 0]])).toBeNull(); // no area
+    expect(solveHomography([[0, 0], [1, 0], [1, 0], [0, 1]], UNIT)).toBeNull(); // degenerate source
+    expect(solveHomography(UNIT, [[0, 0], [1, 0], [1, 1], [NaN, 1]])).toBeNull();
+    expect(solveHomography(UNIT, [[0, 0], [1, 0], [1, 1]])).toBeNull(); // not four points
+  });
+
+  it('works in page px, not only on the unit square', () => {
+    // The box the rest of this file uses, its bottom-right corner dragged out.
+    const src = [[0, 0], [W, 0], [W, H], [0, H]];
+    const dst = [[0, 0], [100, 0], [120, 140], [0, 100]];
+    const h = solveHomography(src, dst);
+    src.forEach((p, i) => near(applyHomography(h, p[0], p[1]), dst[i], 8));
+  });
+});
+
+describe('applyHomography', () => {
+  it('is the identity for a map it cannot read', () => {
+    expect(applyHomography(null, 3, 4)).toEqual([3, 4]);
+    expect(applyHomography([1, 2, 3], 3, 4)).toEqual([3, 4]);
+  });
+
+  it('says NaN on the horizon rather than a number that is not there', () => {
+    // The line 1 + 0.5x = 0 has no image at all: x = -2.
+    const h = solveHomography(UNIT, TRAP);
+    const [x, y] = applyHomography(h, -2, 0.5);
+    expect(Number.isNaN(x)).toBe(true);
+    expect(Number.isNaN(y)).toBe(true);
+  });
+});
+
+describe('isParallelogram', () => {
+  it('is true for the identity mesh and for anything affine done to it', () => {
+    // Polygon order, which is what this takes: the identity mesh is row-major,
+    // so its last two points swap places on the way in.
+    const id = identityMesh(1, 1, W, H);
+    expect(isParallelogram([id[0], id[1], id[3], id[2]])).toBe(true);
+    expect(isParallelogram([[0, 0], [2, 0], [3, 1], [1, 1]])).toBe(true);
+    expect(isParallelogram([[10, 10], [10, 30], [-10, 30], [-10, 10]])).toBe(true);
+  });
+
+  it('is false the moment one corner leaves the parallelogram', () => {
+    expect(isParallelogram([[0, 0], [100, 0], [120, 140], [0, 100]])).toBe(false);
+    // And the tolerance is relative: a tenth of a pixel on a 100px box counts.
+    expect(isParallelogram([[0, 0], [100, 0], [100.1, 100], [0, 100]])).toBe(false);
+  });
+
+  it('reads a mesh it cannot understand as one, so the caller skips the solve', () => {
+    expect(isParallelogram(null)).toBe(true);
+    expect(isParallelogram([[0, 0], [1, 0], [NaN, 1]])).toBe(true);
+  });
+});
+
+describe('warpActive', () => {
+  const style = (warp) => ({ warp });
+
+  it('is false when the block is off, however the mesh was dragged', () => {
+    expect(warpActive(style({ on: false, cols: 1, rows: 1, pts: BR }), W, H)).toBe(false);
+    expect(warpActive({}, W, H)).toBe(false);
+    expect(warpActive(null)).toBe(false);
+  });
+
+  it('is false for a mesh that changes nothing', () => {
+    const pts = identityMesh(2, 2, W, H);
+    expect(warpActive(style({ on: true, cols: 2, rows: 2, pts }), W, H)).toBe(false);
+    // No points at all is the stored default, and the same answer.
+    expect(warpActive(style({ on: true, cols: 1, rows: 1, pts: [] }), W, H)).toBe(false);
+  });
+
+  it('is true once a handle has moved', () => {
+    expect(warpActive(style({ on: true, cols: 1, rows: 1, pts: BR }), W, H)).toBe(true);
+  });
+
+  it('counts a stated mesh as active when it is asked without the box', () => {
+    // What psd.js does: it has the style and not the box, and would rather ship
+    // pixels than a type layer Photoshop re-renders unwarped.
+    expect(warpActive(style({ on: true, cols: 1, rows: 1, pts: identityMesh(1, 1, W, H) }))).toBe(true);
+    expect(warpActive(style({ on: true, cols: 1, rows: 1, pts: [] }))).toBe(false);
+    // A mesh the sanitiser would have thrown away is not a mesh.
+    expect(warpActive(style({ on: true, cols: 2, rows: 2, pts: BR }))).toBe(false);
   });
 });

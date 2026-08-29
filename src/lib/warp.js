@@ -244,6 +244,174 @@ export function resampleMesh(oldPts, oldCols, oldRows, newCols, newRows, w, h) {
   );
 }
 
+// ===== The projective corner, for the four-handle case =====
+//
+// Piecewise affine is the right mapping for a GRID: each cell is small, and
+// two triangles per cell is what CSP's mesh transform draws too. It is the
+// wrong mapping for ONE cell. Drag a single corner of a 1x1 mesh and the two
+// triangles no longer agree about the diagonal's interior: each is exact at
+// its own three corners and linear in between, so the pair meets at a crease
+// running corner to corner - the failure every naive quad-warp has, and the
+// one thing a four-handle Free Transform must not do, because a perspective
+// drag is exactly what it is for.
+//
+// The map that carries a rectangle onto an arbitrary quadrilateral without a
+// crease is the projective one, `solveHomography` below. The painter does not
+// draw through it directly (canvas 2D has no projective transform): it
+// evaluates it on a fine virtual grid and draws THAT with the same
+// affine-per-triangle technique, where the cells are small enough for the
+// piecewise error to fall under a pixel. So there is one drawing technique in
+// the app, and this is only where the corners of its cells come from.
+//
+// `warpPoint` deliberately stays piecewise affine, including for a 1x1 mesh:
+// it is the reviewed READ side (hit-tests, resampling) and its answers are
+// already stated in terms of the triangles. Inside one cell the two disagree
+// by at most the crease this exists to remove - sub-pixel for anything a
+// gizmo drag produces, and never at a control point, where both are exact.
+
+// Whether a quad is a parallelogram, which is the same question as "is the
+// affine map already exact here": TL + BR and TR + BL are the two diagonals'
+// midpoints doubled, and they coincide only for a parallelogram. Points in
+// polygon order (tl, tr, br, bl). The tolerance is relative to the quad's own
+// size, so it means the same thing on a 20px box and a 2000px one.
+export function isParallelogram(quad, eps = 1e-6) {
+  if (!Array.isArray(quad) || quad.length < 4) return true;
+  const [a, b, c, d] = quad.map(pt);
+  const dx = a[0] + c[0] - b[0] - d[0];
+  const dy = a[1] + c[1] - b[1] - d[1];
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) return true;
+  let span = 0;
+  for (const p of [a, b, c, d]) {
+    span = Math.max(span, Math.abs(p[0] - a[0]), Math.abs(p[1] - a[1]));
+  }
+  return Math.hypot(dx, dy) <= Math.abs(eps) * Math.max(1, span);
+}
+
+// A quad a projective map can be built onto: four points in polygon order,
+// turning the same way at every corner, with no three of them in a line. A
+// crossed ("bowtie") or dented quad - what a corner dragged past its own
+// diagonal makes - has no honest homography onto it, and the painter falls
+// back to the two triangles for that case rather than inventing one.
+function convexQuad(q, eps = 1e-9) {
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = q[i];
+    const b = q[(i + 1) % 4];
+    const c = q[(i + 2) % 4];
+    const ux = b[0] - a[0];
+    const uy = b[1] - a[1];
+    const vx = c[0] - b[0];
+    const vy = c[1] - b[1];
+    const cross = ux * vy - uy * vx;
+    // Relative to the two edges it is built from, so "in a line" means the
+    // same thing whatever the box is measured in.
+    const scale = Math.hypot(ux, uy) * Math.hypot(vx, vy);
+    if (!(scale > 0) || Math.abs(cross) <= eps * scale) return false;
+    const s = cross > 0 ? 1 : -1;
+    if (sign === 0) sign = s;
+    else if (s !== sign) return false;
+  }
+  return true;
+}
+
+// Gaussian elimination with partial pivoting over an n x (n+1) augmented
+// matrix, in place. Returns the solution vector, or null when the system is
+// singular - which for the system below means the two quads do not determine a
+// map.
+function solveLinear(rows, n) {
+  for (let col = 0; col < n; col++) {
+    let best = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(rows[r][col]) > Math.abs(rows[best][col])) best = r;
+    }
+    const piv = rows[best][col];
+    if (!Number.isFinite(piv) || Math.abs(piv) < 1e-12) return null;
+    const t = rows[col];
+    rows[col] = rows[best];
+    rows[best] = t;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = rows[r][col] / piv;
+      if (f === 0) continue;
+      for (let c = col; c <= n; c++) rows[r][c] -= f * rows[col][c];
+    }
+  }
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const v = rows[i][n] / rows[i][i];
+    if (!Number.isFinite(v)) return null;
+    out.push(v);
+  }
+  return out;
+}
+
+// The projective map taking `src`'s four corners onto `dst`'s, as the nine
+// coefficients of the 3x3 matrix in row-major order, normalised so the last is
+// 1:
+//
+//   x' = (h0*x + h1*y + h2) / (h6*x + h7*y + 1)
+//   y' = (h3*x + h4*y + h5) / (h6*x + h7*y + 1)
+//
+// Both quads are given in the SAME polygon order (the painter passes
+// tl, tr, br, bl). Four point pairs fix the eight unknowns exactly, so this is
+// a solve and not a fit.
+//
+// Returns null when either quad is degenerate or non-convex, or when the
+// system does not resolve. Null is not a failure to be worked around: it is
+// this module saying the piecewise-affine mapping is the one to draw.
+export function solveHomography(src, dst) {
+  if (!Array.isArray(src) || !Array.isArray(dst) || src.length < 4 || dst.length < 4) return null;
+  const s = src.slice(0, 4).map(pt);
+  const d = dst.slice(0, 4).map(pt);
+  for (const p of [...s, ...d]) {
+    if (!Number.isFinite(p[0]) || !Number.isFinite(p[1])) return null;
+  }
+  if (!convexQuad(s) || !convexQuad(d)) return null;
+  const rows = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = s[i];
+    const [u, v] = d[i];
+    rows.push([x, y, 1, 0, 0, 0, -u * x, -u * y, u]);
+    rows.push([0, 0, 0, x, y, 1, -v * x, -v * y, v]);
+  }
+  const h = solveLinear(rows, 8);
+  if (!h) return null;
+  return [...h, 1];
+}
+
+// A point through a homography. `[NaN, NaN]` on the map's horizon - the line
+// where the denominator vanishes and there is no image point at all - so a
+// caller that maps a grid can see the failure rather than draw through it.
+export function applyHomography(h, x, y) {
+  const X = +x;
+  const Y = +y;
+  if (!Array.isArray(h) || h.length < 9) return [X, Y];
+  const w = h[6] * X + h[7] * Y + h[8];
+  if (!Number.isFinite(w) || Math.abs(w) < 1e-12) return [NaN, NaN];
+  return [(h[0] * X + h[1] * Y + h[2]) / w, (h[3] * X + h[4] * Y + h[5]) / w];
+}
+
+// Whether a style's warp changes anything, which is the question every renderer
+// asks before it pays for a texture pass.
+//
+// The box's size is optional because the two callers know different things.
+// The painter has the box and passes it, so an identity mesh is skipped
+// exactly - the box draws the bytes it drew before the feature existed. The PSD
+// exporter's `isRasterOnly` is handed a style alone; without the box, a mesh
+// that is switched on and fully stated counts as active, which errs towards a
+// flat raster layer rather than towards a live type layer Photoshop would
+// re-render unwarped.
+export function warpActive(style, w, h) {
+  const wp = style?.warp;
+  if (!wp?.on) return false;
+  const c = gridN(wp.cols);
+  const r = gridN(wp.rows);
+  const pts = wp.pts;
+  if (!Array.isArray(pts) || pts.length !== (c + 1) * (r + 1)) return false;
+  if (!(Number(w) > 0) || !(Number(h) > 0)) return true;
+  return !isIdentityMesh(pts, c, r, w, h);
+}
+
 // The rectangle the deformed mesh actually covers, `{ minX, minY, maxX, maxY }`
 // or null when there is nothing to bound. A warp pulls content OUTSIDE the box
 // rect as readily as inside it, so a painter that sized its canvas to the box

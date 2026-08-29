@@ -43,9 +43,12 @@
     inkActive,
     inkExtent,
     drawInk,
+    ensureNoisePhase,
     OCTAVES,
     TILE_SS,
   } from './text-paint.js';
+  import { warpActive } from './warp.js';
+  import { paintWarpedBox } from './exporter.js';
   import { maskTool } from './mask-tool.svelte.js';
   import { brushTool, brushArmed } from './brush-tool.svelte.js';
   import { buildStroke, strokeHit } from './brush.js';
@@ -345,6 +348,88 @@
     inkTipSeq++;
   });
 
+  // ---- the mesh warp ----
+  //
+  // A warped box stops being DOM text. There is no CSS that states a mesh, so
+  // the box renders as the exporter's own picture of itself - `paintWarpedBox`
+  // is the same `renderBox` call the page composite makes, drawn at the zoom
+  // instead of at the export's supersample - and what is on screen is the file
+  // by construction rather than by two painters agreeing.
+  //
+  // This is the substitution the PSD export already makes for a box Photoshop
+  // cannot re-render, and it costs the same things: no caret, no selection, and
+  // no drawing tool. See `onDblClick`, `maskArmed` and `inkArmed` below.
+  const warped = $derived(warpActive(s, box.w, box.h));
+  let warpEl = $state(null);
+  let warpGeom = $state(null);
+  // Everything the picture is drawn from. The whole style, because a warped box
+  // is drawn by the exporter and the exporter reads all of it.
+  const warpKey = $derived(
+    warped ? JSON.stringify(s) + `|${text}|${box.w}|${box.h}|${z}|${app.fontsVersion}` : '',
+  );
+  let warpDrawn = '';
+  let warpLive = null; // non-reactive twin of warpEl: what the pixel release acts on
+  let warpTips = null;
+  let warpSeq = 0;
+  // The roughening filter's phase is measured against the running browser once
+  // per session (see text-paint.js), and the measurement is a rasterisation. The
+  // first paint of a roughened warped box happens before it lands; this is what
+  // says the second one is worth its cost and the third is not.
+  let noiseSettled = false;
+
+  function paintWarp(el, tips) {
+    warpGeom = paintWarpedBox(el, box, pg, z, tips);
+  }
+
+  $effect(() => {
+    const key = warpKey;
+    const el = warpEl;
+    if (!el) {
+      // Warp switched off, or the box is going away: hand the pixels back and
+      // forget what was drawn, so switching it on again paints the new canvas.
+      if (warpLive) {
+        warpLive.width = 0;
+        warpLive.height = 0;
+        warpLive = null;
+      }
+      warpDrawn = '';
+      warpGeom = null;
+      warpTips = null;
+      warpSeq++;
+      return;
+    }
+    warpLive = el;
+    if (key === warpDrawn) return;
+    warpDrawn = key;
+    paintWarp(el, warpTips);
+    const ids = inkTipIds(s.ink);
+    const wantNoise = s.roughen.on && !noiseSettled;
+    if (!ids.size && !wantNoise) {
+      warpTips = null;
+      return;
+    }
+    const seq = ++warpSeq;
+    Promise.all([ids.size ? settleTips(ids) : null, wantNoise ? ensureNoisePhase() : null]).then(
+      ([map]) => {
+        if (seq !== warpSeq || warpLive !== el || !el.width) return;
+        if (wantNoise) noiseSettled = true;
+        const before = warpTips;
+        warpTips = map ?? null;
+        if (wantNoise || !sameTips(before, warpTips)) paintWarp(el, warpTips);
+      },
+      () => {},
+    );
+  });
+  $effect(() => () => {
+    if (warpLive) {
+      warpLive.width = 0;
+      warpLive.height = 0;
+      warpLive = null;
+    }
+    warpTips = null;
+    warpSeq++;
+  });
+
   const boxStyle = $derived(
     `left:${box.x * z}px;top:${box.y * z}px;width:${box.w * z}px;height:${box.h * z}px;` +
       `padding:${2 * z}px;` +
@@ -606,6 +691,10 @@
   function onDblClick(e) {
     e.stopPropagation();
     focusPage(pg);
+    // A warped box has no text element to put a caret in - it is one canvas -
+    // so the edit is refused rather than opened onto something invisible. The
+    // Effects panel's Reset (or switching the warp off) gives the box back.
+    if (warped) return;
     beginEdit(box.id);
   }
 
@@ -826,12 +915,16 @@
   // is armed and this box is selected, a transparent overlay takes the
   // pointer and turns gestures into mask shapes, committed one per gesture
   // with one undo record each, like the path gizmo's drags.
-  const maskArmed = $derived(selected && !editing && !bulkOn && s.clip?.on && maskTool.id);
+  // ...and never on a warped box: a mask shape is stated in box-local px and is
+  // applied to the texture BEFORE the mesh carries it, so the shape would land
+  // where the pointer is not. The same is true of a brush stroke below. Both
+  // tools come back the moment the warp is switched off.
+  const maskArmed = $derived(selected && !editing && !warped && !bulkOn && s.clip?.on && maskTool.id);
 
   // The brush draws into the SELECTED box only, and never while its text is
   // being edited or while the bulk panel owns the selection. Same gate the mask
   // tool uses, for the same reason: two things must not own one pointer.
-  const inkArmed = $derived(selected && !editing && !bulkOn && brushArmed());
+  const inkArmed = $derived(selected && !editing && !warped && !bulkOn && brushArmed());
 
   // The gesture in progress: a shape being drawn, not yet in the style.
   const maskDraft = $state({ shape: null, poly: null });
@@ -1193,9 +1286,33 @@
        handles and the jp pill stay outside it, unmasked. -->
   <div
     class="clipwrap"
-    style="justify-content:{justify};align-items:{alignItems};padding:{2 * z}px;{maskCss}"
+    style="justify-content:{justify};align-items:{alignItems};padding:{2 * z}px;{warped ? '' : maskCss}"
   >
-  {#if editing}
+  {#if warped}
+    <!-- The whole box as one picture: type, ink and every filter, carried
+         through the mesh by the exporter's painter. Placed off the box's own
+         top-left by however far the deformed mesh reached past it, which is
+         what `paintWarpedBox` hands back.
+         The mask is NOT applied to it by the wrapper above: it is already
+         inside these pixels, because `renderBox` composites it before the mesh
+         carries the texture, and applying it a second time in box coordinates
+         would crop the warped picture against the unwarped shape.
+         The mirror IS applied here, for the opposite reason: the export flips
+         the finished bitmap around the box's centre rather than baking the flip
+         into it (see paintBoxOnPage), so the editor has to do the same, about
+         the same point - which sits `ox`/`oy` in from this canvas's corner. -->
+    <canvas
+      class="warpl"
+      bind:this={warpEl}
+      style={warpGeom
+        ? `left:${-warpGeom.ox * z}px;top:${-warpGeom.oy * z}px;width:${warpGeom.cw * z}px;height:${warpGeom.ch * z}px;` +
+          (mirror
+            ? `transform:${mirror};transform-origin:${(warpGeom.ox + box.w / 2) * z}px ${(warpGeom.oy + box.h / 2) * z}px;`
+            : '')
+        : 'left:0;top:0;width:0;height:0'}
+      aria-hidden="true"
+    ></canvas>
+  {:else if editing}
     <div
       class="txt editable"
       contenteditable="true"
@@ -1232,7 +1349,7 @@
       {/each}
     </div>
   {/if}
-    {#if inkActive(s.ink) || inkDraft?.length}
+    {#if !warped && (inkActive(s.ink) || inkDraft?.length)}
       <!-- Inside the clip wrapper so the visibility mask hides ink the same way
            it hides letters; positioned off the box's own top-left, offset by the
            overhang the canvas was grown by. -->
@@ -1347,6 +1464,15 @@
   .inkl {
     position: absolute;
     pointer-events: none;
+  }
+  /* The warped box. Same shape as the ink layer - absolute, never a pointer
+     target - and `user-select:none` because there is no text under the cursor
+     here to select, only pixels. */
+  .warpl {
+    position: absolute;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
   }
   /* The path gizmo. The svg itself lets clicks through to the box; only the
      anchors and handles take the pointer. Colours are TypeBubble's, which read
