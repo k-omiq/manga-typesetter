@@ -140,13 +140,14 @@ export function setBoxDefaults(next) {
 export function applyBoxDefaults(style) {
   if (!style || typeof style !== 'object') return style;
   Object.assign(style, boxDefaults);
-  // A newborn box never inherits the previous box's bezier path or mask
-  // shapes: both are that box's own geometry, and carried onto a box of
-  // another size they curve or hide text they were never drawn for. A
-  // DUPLICATE keeps them - duplicateBox copies the style whole and does not
+  // A newborn box never inherits the previous box's bezier path, mask shapes
+  // or warp mesh: all three are that box's own geometry, and carried onto a box
+  // of another size they curve, hide or deform text they were never drawn for.
+  // A DUPLICATE keeps them - duplicateBox copies the style whole and does not
   // come through here - which is the same line the comment above draws.
   style.path = { on: false, pts: [] };
   style.clip = { on: false, mode: 'exclude', brushSize: style.clip?.brushSize ?? 20, shapes: [] };
+  style.warp = { on: false, cols: 1, rows: 1, pts: [] };
   return style;
 }
 
@@ -246,6 +247,17 @@ export function defaultStyle() {
     // Taper is deliberately NOT baked in: it is cheap at render time and stays
     // adjustable afterwards.
     ink: { on: false, strokes: [] },
+    // The mesh the WHOLE box is drawn through - font text and ink together,
+    // through one texture. `cols`/`rows` are cells, so 1x1 is the four corner
+    // handles CSP calls Free Transform and anything larger is Mesh Transform.
+    // `pts` are the grid's control points in box-local page px (origin at the
+    // box's top-left, same space `clip.shapes` and `ink` use), row-major,
+    // (cols+1) * (rows+1) of them - and EMPTY means identity: a mesh that has
+    // never been dragged stores no points at all, and every renderer skips the
+    // pass. `warp.js` owns the geometry; this is only its storage.
+    // Not to be confused with the Effects panel's `warp` sub-tab, which is the
+    // arc/circle/path group - this is the `transform` sub-tab.
+    warp: { on: false, cols: 1, rows: 1, pts: [] },
     // Text closed into a full circle (see `circleLayout`): the ring's size
     // comes from the text's own advance, `angle` (degrees, clockwise) turns
     // it, `inside` flips the text onto the inner face - the bottom arc of a
@@ -386,6 +398,44 @@ export function normalizeInkStroke(src) {
     pts,
   };
 }
+// How coarse a warp mesh may get. One cell is the four corner handles (free
+// transform) and is the floor because a mesh with no cell is not a mesh; eight
+// is the ceiling because 9x9 = 81 handles is already more than the gizmo can
+// show without them touching. Stated here, beside the sanitiser that enforces
+// them, so the panel's steppers and a hand-edited file meet the same limits -
+// `warp.js` itself imposes none, being pure geometry.
+export const WARP_MIN_GRID = 1;
+export const WARP_MAX_GRID = 8;
+
+// The mesh, gated. `pts` is all-or-nothing, unlike a mask shape's points or an
+// ink stroke's: a mesh missing one control point is not a coarser mesh, it is a
+// torn one, and there is no honest way to guess where the missing handle was.
+// So a `pts` that is not exactly (cols+1) * (rows+1) finite pairs is reset to
+// the empty array - which every renderer reads as identity, the same as a warp
+// that was never dragged.
+//
+// `on` is taken as given either way. A box whose mesh was lost still knows the
+// user had the effect switched on, and switching it back off for them would
+// silently drop a state they set; with no points it simply draws unwarped,
+// which is what an untouched warp does too.
+export function normalizeWarp(src) {
+  const grid = (v) => Math.min(WARP_MAX_GRID, Math.max(WARP_MIN_GRID, Math.round(num(v, 1))));
+  const cols = grid(src?.cols);
+  const rows = grid(src?.rows);
+  const want = (cols + 1) * (rows + 1);
+  const pts = [];
+  if (Array.isArray(src?.pts) && src.pts.length === want) {
+    for (const p of src.pts) {
+      if (!Array.isArray(p)) break;
+      const x = +p[0];
+      const y = +p[1];
+      if (!Number.isFinite(x) || !Number.isFinite(y)) break;
+      pts.push([x, y]);
+    }
+  }
+  return { on: src?.on === true, cols, rows, pts: pts.length === want ? pts : [] };
+}
+
 // Every tile `drawPatternTile` knows how to draw, in the order the picker shows
 // them. A kind that is not on this list is normalized back to the default, so
 // adding one here and nowhere else would show a card that paints nothing - the
@@ -553,6 +603,7 @@ export function normalizeStyle(s) {
     path: pth,
     clip: cl,
     ink,
+    warp: normalizeWarp(src.warp),
     circle: circ,
     gradient: g,
     pattern: pat,

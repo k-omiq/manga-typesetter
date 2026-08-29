@@ -2533,7 +2533,11 @@ export const BULK_PROPS = [
   'roughen.detail',
   'roughen.seed',
   'clip',
-  // Path is deliberately absent: its anchors are box-local geometry a bulk edit would smear across boxes of different sizes.
+  // `path`, `ink` and `warp` are deliberately absent: anchors, hand-drawn
+  // strokes and mesh control points are all box-local geometry in THIS box's
+  // px, and a bulk edit would smear them across boxes of different sizes - a
+  // warp mesh especially, whose points stop meaning anything the moment the box
+  // they were dragged on is not the box they land on.
   // Typeset
   'shape',
   'minOrphan',

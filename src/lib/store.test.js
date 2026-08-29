@@ -1184,18 +1184,20 @@ describe('the bulk edit mask', () => {
   it('covers every leaf of the style, and nothing that is not one', () => {
     // `gradient`, `pattern`, `strokes`, `shadows`, `motionBlur`, `clip` and
     // `circle` are leaves in their own right - a bulk edit moves a whole
-    // gradient, smear or stroke list, never one field of one stroke. `path` and
-    // `ink` are box-local geometry - drawn against this box, by hand, in this
-    // box's own px - so they stay the Inspector's along with x/y/w/h. Every
-    // other group is still one row per field.
+    // gradient, smear or stroke list, never one field of one stroke. `path`,
+    // `ink` and `warp` are box-local geometry - drawn against this box, by
+    // hand, in this box's own px - so they stay the Inspector's along with
+    // x/y/w/h. Every other group is still one row per field.
     const WHOLE = new Set(BULK_WHOLE_LEAVES);
     const leaves = Object.entries(defaultStyle())
-      .filter(([k]) => k !== 'path' && k !== 'ink')
+      .filter(([k]) => k !== 'path' && k !== 'ink' && k !== 'warp')
       .flatMap(([k, v]) =>
         v && typeof v === 'object' && !WHOLE.has(k) ? Object.keys(v).map((f) => `${k}.${f}`) : [k],
       );
     expect([...BULK_PROPS].sort()).toEqual(leaves.sort());
-    for (const geom of ['x', 'y', 'w', 'h', 'path']) expect(BULK_PROPS).not.toContain(geom);
+    for (const geom of ['x', 'y', 'w', 'h', 'path', 'ink', 'warp']) {
+      expect(BULK_PROPS).not.toContain(geom);
+    }
   });
 
   // The panel's tick-all headers are laid out against GROUPS, which lives in

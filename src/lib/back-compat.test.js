@@ -784,3 +784,32 @@ describe('a project saved before ink existed', () => {
     expect(normalizeStyle(once)).toEqual(once);
   });
 });
+
+// The warp mesh is newer still, and the same gate applies twice over: every
+// call site reads `style.warp.pts` without guarding it, and a `pts` array that
+// does not match its own grid would have the painter reading past the end of
+// the mesh mid-triangle.
+describe('a project saved before the warp mesh existed', () => {
+  it('loads a project saved before warp existed and gives it the default block', () => {
+    const s = normalizeStyle({ size: 28, color: '#111111' });
+    expect(s.warp).toEqual({ on: false, cols: 1, rows: 1, pts: [] });
+  });
+
+  it('gives a style that pre-dates warp a mesh the engine reads as identity', () => {
+    const s = normalizeStyle(JSON.parse(ERA1_STYLE));
+    expect(s.warp).toEqual({ on: false, cols: 1, rows: 1, pts: [] });
+  });
+
+  it('round-trips a project with a warp mesh through normalizeStyle unchanged', () => {
+    const once = normalizeStyle({
+      warp: { on: true, cols: 1, rows: 1, pts: [[0, 0], [100, 0], [0, 100], [120, 140]] },
+    });
+    expect(once.warp.pts).toHaveLength(4);
+    expect(normalizeStyle(once)).toEqual(once);
+  });
+
+  it('resets a hand-edited mesh whose length does not match its grid', () => {
+    const s = normalizeStyle({ warp: { on: true, cols: 4, rows: 4, pts: [[0, 0], [1, 1]] } });
+    expect(s.warp).toEqual({ on: true, cols: 4, rows: 4, pts: [] });
+  });
+});
