@@ -32,7 +32,12 @@ export function cycleInspectorTab(step = 1) {
 
 // ===== Which Effects sub-tab is open =====
 // Session-only state, same reasoning as the main tabs.
-export const EFFECTS_SUBTABS = ['stroke', 'shadow', 'warp', 'blur', 'edges', 'mask'];
+// `warp` is the arc / circle / bezier-path group and has been since before the
+// mesh existed; `transform` is the mesh - free transform at a 1x1 grid, mesh
+// transform above it. Two different features with two adjacent names, so the
+// panel labels them "Warp" and "Transform" and the design says so in as many
+// words: they must not be confused.
+export const EFFECTS_SUBTABS = ['stroke', 'shadow', 'warp', 'transform', 'blur', 'edges', 'mask'];
 
 export const effectsSubTab = $state({ id: 'stroke' });
 

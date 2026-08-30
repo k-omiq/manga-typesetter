@@ -65,6 +65,14 @@ export const iconEffectWarp = wrap(
   '<path d="M3 13c3.5-6 6-6 8.5-3s5 3 5.5-3"/><circle cx="3" cy="13" r="1" fill="currentColor"/><circle cx="17" cy="7" r="1" fill="currentColor"/>',
 );
 
+// A quad pulled out of square with a dot on each corner: the free-transform
+// mesh and its handles. Deliberately unlike the S-curve above - `warp` is the
+// arc/circle/path group and `transform` is the mesh, and the two icons sit next
+// to each other in the strip.
+export const iconEffectTransform = wrap(
+  '<path d="M4 6.5 16 4l1 10.5L6 16.5Z"/><circle cx="4" cy="6.5" r="1.4" fill="currentColor"/><circle cx="16" cy="4" r="1.4" fill="currentColor"/><circle cx="17" cy="14.5" r="1.4" fill="currentColor"/><circle cx="6" cy="16.5" r="1.4" fill="currentColor"/>',
+);
+
 // Three horizontal speed lines of varying lengths: motion smear / blur.
 export const iconEffectBlur = wrap('<path d="M3 7h9"/><path d="M5 10.5h11"/><path d="M3 14h7"/>');
 
@@ -78,6 +86,7 @@ export const effectsSubTabIcons = {
   stroke: iconEffectStroke,
   shadow: iconEffectShadow,
   warp: iconEffectWarp,
+  transform: iconEffectTransform,
   blur: iconEffectBlur,
   edges: iconEffectEdges,
   mask: iconEffectMask,

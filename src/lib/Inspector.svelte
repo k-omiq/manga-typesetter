@@ -25,10 +25,13 @@
     PATTERN_KINDS,
     GRADIENT_MAX_STOPS,
     defaultPathPts,
+    WARP_MIN_GRID,
+    WARP_MAX_GRID,
   } from './data.js';
   import { gradientCss, patternTileCanvas, sampleStops } from './text-paint.js';
   import { insertPathAnchor } from './measure.js';
   import { maskTool, setMaskTool } from './mask-tool.svelte.js';
+  import { regridWarp } from './warp-gizmo.js';
   import BrushPanel from './BrushPanel.svelte';
   import { brushArmed } from './brush-tool.svelte.js';
   import { prefs } from './prefs.svelte.js';
@@ -94,6 +97,10 @@
     ['stroke', 'Stroke'],
     ['shadow', 'Shadow'],
     ['warp', 'Warp'],
+    // Not the same thing as the one above it, and the two labels are the only
+    // place that says so to the user: `warp` bends the BASELINE (arc, circle,
+    // bezier path), `transform` deforms the whole finished box through a mesh.
+    ['transform', 'Transform'],
     ['blur', 'Blur'],
     ['edges', 'Edges'],
     ['mask', 'Mask'],
@@ -249,6 +256,24 @@
     el.value = String(obj[key]);
     touch();
   }
+  // A mesh grid stepper, which cannot be `commitNum`: writing `cols` on its own
+  // would leave `pts` the wrong length for the grid it now names, and the
+  // sanitiser's answer to that is to throw the whole mesh away (it has to be -
+  // a mesh missing a control point is torn, not coarse). So the block is
+  // replaced whole, with the deformation carried onto the new grid by
+  // `regridWarp`. One history step per change, through the panel's own settle.
+  function setGrid(st, key, e) {
+    const el = e.target;
+    const now = st.warp[key];
+    let n = Math.round(+el.value);
+    if (!Number.isFinite(n)) n = now;
+    n = clamp(n, WARP_MIN_GRID, WARP_MAX_GRID);
+    el.value = String(n);
+    if (!box || n === now) return;
+    st.warp = regridWarp(st.warp, key === 'cols' ? n : st.warp.cols, key === 'rows' ? n : st.warp.rows, box.w, box.h);
+    touch();
+  }
+
   // The same commit-on-change for the placement fields, which write the box's
   // own geometry rather than its style.
   function commitGeom(key, e, lo, hi, fallback) {
@@ -1275,6 +1300,79 @@
             {@render addBtn('Add anchor', () => { s.path.pts = insertPathAnchor(s.path.pts); touch(); })}
             {@render addBtn('Reset path', () => { s.path.pts = defaultPathPts(box.w, box.h); touch(); })}
           {/if}
+        {/if}
+
+        {#if effectsSubTab.id === 'transform'}
+          <!-- The mesh. One control at two grid sizes, exactly as CSP has it:
+               1x1 is Free Transform's four corner handles, anything larger is
+               Mesh Transform. The handles are ON THE BOX, not in here - this
+               panel only arms the gizmo, sizes its grid and resets it. -->
+          <div class="switch-row">
+            <button
+              type="button"
+              class="switch"
+              class:on={s.warp.on}
+              role="switch"
+              aria-checked={s.warp.on}
+              aria-label="Free transform"
+              onclick={() => { s.warp.on = !s.warp.on; touch(); }}
+            ><span class="knob"></span></button>
+            <span class="lbl2">Free transform</span>
+          </div>
+          <div class="insp-sub-body" class:disabled={!s.warp.on} style="padding:0;border:none;gap:11px">
+            <div class="row2">
+              <div class="field">
+                <label class="lbl" for="insp-warp-cols">Columns</label>
+                <input
+                  id="insp-warp-cols"
+                  type="number"
+                  min={WARP_MIN_GRID}
+                  max={WARP_MAX_GRID}
+                  step="1"
+                  value={s.warp.cols}
+                  disabled={!s.warp.on}
+                  title="Grid cells across. 1 is the four-corner free transform."
+                  onchange={(e) => setGrid(s, 'cols', e)}
+                />
+              </div>
+              <div class="field">
+                <label class="lbl" for="insp-warp-rows">Rows</label>
+                <input
+                  id="insp-warp-rows"
+                  type="number"
+                  min={WARP_MIN_GRID}
+                  max={WARP_MAX_GRID}
+                  step="1"
+                  value={s.warp.rows}
+                  disabled={!s.warp.on}
+                  title="Grid cells down. 1 is the four-corner free transform."
+                  onchange={(e) => setGrid(s, 'rows', e)}
+                />
+              </div>
+            </div>
+            <!-- Says what the gizmo is for, and warns about the one thing a
+                 grid change cannot promise: the deformation is carried onto the
+                 new grid, but a finer mesh rebuilt onto a coarser one keeps only
+                 what the coarser one can say. -->
+            <div class="insp-none">
+              Drag the dots on the box. The dashed outline is where the box
+              started; Esc during a drag puts it back. Changing the grid carries
+              the deformation over, and a smaller grid keeps only its corners.
+            </div>
+            <div class="mask-row">
+              <span class="mask-count">{s.warp.pts.length ? `${s.warp.cols} x ${s.warp.rows} mesh` : 'Not deformed'}</span>
+              <button
+                type="button"
+                class="rbtn"
+                disabled={!s.warp.pts.length}
+                onclick={() => {
+                  if (!s.warp.pts.length) return;
+                  s.warp.pts = [];
+                  touch();
+                }}
+              >Reset mesh</button>
+            </div>
+          </div>
         {/if}
 
         {#if effectsSubTab.id === 'blur'}

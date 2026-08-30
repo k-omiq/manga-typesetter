@@ -48,8 +48,10 @@
     TILE_SS,
   } from './text-paint.js';
   import { warpActive } from './warp.js';
-  import { paintWarpedBox } from './exporter.js';
+  import { paintWarpedBox, renderBoxTexture, paintWarpedTexture } from './exporter.js';
   import { maskTool } from './mask-tool.svelte.js';
+  import { inspectorTab, effectsSubTab } from './inspector-tabs.svelte.js';
+  import WarpGizmo from './editor/WarpGizmo.svelte';
   import { brushTool, brushArmed } from './brush-tool.svelte.js';
   import { buildStroke, strokeHit } from './brush.js';
   import { inkTipIds, settleTips } from './brush-tips.js';
@@ -391,9 +393,52 @@
     warpGeom = paintWarpedBox(el, box, pg, z, tips);
   }
 
+  // ---- the gizmo's live drag ----
+  //
+  // A handle drag changes the MESH forty times a second and changes nothing
+  // else: the same type, the same ink, the same blur, smear and mask. Rendering
+  // the box per frame would pay for all of that per frame, so the texture is
+  // rendered once when the pointer goes down and every move after it re-runs
+  // only `warpBoxCanvas` over the cache (see the exporter's `renderBoxTexture` /
+  // `paintWarpedTexture`, split out for exactly this).
+  //
+  // `warpDragging` is what keeps the reactive path out of the way meanwhile:
+  // every move writes `warp.pts`, which changes `warpKey`, which would
+  // otherwise re-render the whole box a second time per frame.
+  let warpDragging = $state(false);
+  let warpTex = null;
+  const releaseWarpTex = () => {
+    if (!warpTex) return;
+    warpTex.canvas.width = 0;
+    warpTex.canvas.height = 0;
+    warpTex = null;
+  };
+  const warpPainter = {
+    begin() {
+      releaseWarpTex();
+      warpTex = renderBoxTexture(box, pg, warpTips);
+      warpDragging = true;
+    },
+    frame() {
+      // No canvas yet on the first move of a mesh that was still identity when
+      // the pointer went down: the box only becomes a picture once the mesh
+      // deforms, and the effect below paints that first frame as it mounts.
+      if (!warpTex || !warpLive) return;
+      warpGeom = paintWarpedTexture(warpLive, warpTex, box, z);
+    },
+    end() {
+      releaseWarpTex();
+      // Forget what was drawn, so the effect repaints from the committed (or
+      // cancelled) style rather than trusting the last frame of the drag.
+      warpDrawn = '';
+      warpDragging = false;
+    },
+  };
+
   $effect(() => {
     const key = warpKey;
     const el = warpEl;
+    const dragging = warpDragging;
     if (!el) {
       // Warp switched off, or the box is going away: hand the pixels back and
       // forget what was drawn, so switching it on again paints the new canvas.
@@ -409,6 +454,16 @@
       return;
     }
     warpLive = el;
+    // The gizmo owns this canvas while a handle is down - it is painting the
+    // cached texture through the new mesh already. The key is banked so the
+    // release at pointer-up is what triggers the one authoritative repaint.
+    // Only once something HAS been drawn: the first frame of a drag that
+    // started from an identity mesh mounts this canvas mid-gesture, and that
+    // frame has to be painted here.
+    if (dragging && warpDrawn) {
+      warpDrawn = key;
+      return;
+    }
     if (key === warpDrawn) return;
     warpDrawn = key;
     paintWarp(el, warpTips);
@@ -436,9 +491,35 @@
       warpLive.height = 0;
       warpLive = null;
     }
+    // A gesture's cached texture is a supersampled footprint; a box destroyed
+    // mid-drag must not be the last thing holding one.
+    releaseWarpTex();
     warpTips = null;
     warpSeq++;
   });
+
+  // ---- the transform gizmo ----
+  //
+  // Shown while the Effects panel's `transform` sub-tab is the one on screen and
+  // this box's warp is switched on - the same shape the mask tools' gate has
+  // (selected, not being edited, not under the bulk panel), plus the sub-tab,
+  // because handles at every grid point are not something to leave on a box
+  // whose controls are not in front of the user.
+  //
+  // Deliberately NOT gated on `warped`: an untouched mesh IS identity, so the
+  // box is not warped yet and the gizmo is the only thing that can make it so.
+  // And gated on the brush being down, because an armed brush replaces the
+  // whole panel - the sub-tab is not on screen then, whatever it remembers.
+  const warpGizmoOn = $derived(
+    selected &&
+      !editing &&
+      !bulkOn &&
+      !brushArmed() &&
+      !!pageFrameEl &&
+      s.warp?.on === true &&
+      inspectorTab.id === 'effects' &&
+      effectsSubTab.id === 'transform',
+  );
 
   const boxStyle = $derived(
     `left:${box.x * z}px;top:${box.y * z}px;width:${box.w * z}px;height:${box.h * z}px;` +
@@ -1441,7 +1522,21 @@
     ></div>
   {/if}
 
-  {#if selected && !editing && !bulkOn}
+  {#if warpGizmoOn}
+    <!-- The mesh's handles. `maskPoint` is the box's own client -> box-local
+         conversion, rotation undone, and the gizmo takes it rather than working
+         the same thing out a second time. -->
+    <WarpGizmo {box} pageId={pg.id} {z} toLocal={maskPoint} painter={warpPainter} />
+  {/if}
+
+  <!-- The box's own resize and rotate handles stand down while the gizmo is up.
+       They have to: a 1x1 mesh puts a control point on each corner of the box,
+       exactly where the corner resize handles sit, and two controls in one place
+       is a coin toss over which one a drag gets. The gizmo's handles are the
+       ones the sub-tab was opened for, so they win by being the only ones there
+       - and the box still MOVES by its body, because a warp handle stops its own
+       pointerdown from reaching it. -->
+  {#if selected && !editing && !bulkOn && !warpGizmoOn}
     <div class="rotate-stem"></div>
     {#each corners as [kind, dir] (dir)}
       <div class="handle {kind} {dir}" onpointerdown={(e) => startTransform(e, dir)}></div>

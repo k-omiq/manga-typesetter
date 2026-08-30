@@ -1,0 +1,252 @@
+// ===== What the transform gizmo draws, and what a drag does to the mesh =====
+//
+// The gizmo itself is `editor/WarpGizmo.svelte`: an SVG over the selected box.
+// Everything it draws and everything a gesture changes is worked out here
+// instead, for the reason `warp.js` exists at all - the geometry is testable in
+// node and the component is then only pointers and markup.
+//
+// Two halves, and the rule between them is the file's own boundary:
+//
+//   - Above the rule: pure. Positions, segments, index maths, the new mesh a
+//     drag or a grid change produces. Nothing here reads or writes a document.
+//   - Below it: the three gestures the gizmo commits - a handle drag, its
+//     cancel, and Reset - which DO write the box and record history, one step
+//     per gesture, exactly as the mask tool's shapes do. They live here rather
+//     than in the component so that "one history entry per drag" is a claim a
+//     node test can make.
+//
+// Every coordinate above the rule is box-local page px, the same space
+// `warp.pts`, `clip.shapes` and `ink` are stored in. The zoom and the box's
+// rotation are the component's business: it is a child of the box element, so
+// the rotation is already applied to it, and the zoom is one multiply at the
+// point of drawing.
+
+import { identityMesh, isIdentityMesh, resampleMesh } from './warp.js';
+import { WARP_MIN_GRID, WARP_MAX_GRID } from './data.js';
+import { cloneStyle, markUnsaved } from './store.svelte.js';
+import { record } from './editor/history.svelte.js';
+
+// The handle's radius on SCREEN, px, and it is screen px on purpose: a handle
+// is a target for a pointer, so it is the same size at every zoom. The mesh
+// hairline is the same idea - one device pixel, whatever the page is scaled to.
+export const HANDLE_R = 5;
+
+const gridN = (n) => {
+  const v = Math.floor(Number(n));
+  if (!Number.isFinite(v)) return WARP_MIN_GRID;
+  return Math.min(WARP_MAX_GRID, Math.max(WARP_MIN_GRID, v));
+};
+
+const num = (v, d = 0) => (Number.isFinite(+v) ? +v : d);
+
+// The mesh the gizmo shows. A warp that has never been dragged stores no points
+// at all (see data.js), and a gizmo cannot put handles on nothing - so the
+// identity grid is materialised for the DRAWING without being written to the
+// document. It reaches the document only when a drag actually moves one.
+export function gizmoPts(warp, w, h) {
+  const cols = gridN(warp?.cols);
+  const rows = gridN(warp?.rows);
+  const want = (cols + 1) * (rows + 1);
+  const pts = warp?.pts;
+  if (Array.isArray(pts) && pts.length === want) {
+    // Copied, never aliased: this is handed to the drag as its starting point,
+    // and a drag that mutated the live array in place would leave nothing to
+    // cancel back to.
+    const out = [];
+    for (const p of pts) {
+      const x = +p?.[0];
+      const y = +p?.[1];
+      // One unreadable point makes the whole mesh undrawable - the same
+      // all-or-nothing rule the sanitiser keeps - so the gizmo falls back to
+      // the grid rather than showing a handle at NaN.
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return identityMesh(cols, rows, w, h);
+      out.push([x, y]);
+    }
+    return out;
+  }
+  return identityMesh(cols, rows, w, h);
+}
+
+// One entry per control point: which index in `pts` it writes, where it sits,
+// and which corner/edge of the grid it is (`col`/`row`), because a corner
+// handle of a 1x1 mesh sits exactly where the box's own resize handle would and
+// the component wants to say so in its markup.
+export function handlePoints(warp, w, h) {
+  const cols = gridN(warp?.cols);
+  const rows = gridN(warp?.rows);
+  const pts = gizmoPts(warp, w, h);
+  const out = [];
+  for (let j = 0; j <= rows; j++) {
+    for (let i = 0; i <= cols; i++) {
+      const k = j * (cols + 1) + i;
+      out.push({ i: k, col: i, row: j, x: pts[k][0], y: pts[k][1] });
+    }
+  }
+  return out;
+}
+
+// The hairline mesh, as `[x1, y1, x2, y2]` segments: every grid row left to
+// right and every grid column top to bottom. Only the segments BETWEEN
+// neighbouring control points - the deformed cell edges are straight lines
+// between handles, which is what the piecewise-affine painter actually draws,
+// so the wireframe is not an approximation of the warp, it is the warp's own
+// cell boundaries.
+export function meshSegments(warp, w, h) {
+  const cols = gridN(warp?.cols);
+  const rows = gridN(warp?.rows);
+  const pts = gizmoPts(warp, w, h);
+  const at = (i, j) => pts[j * (cols + 1) + i];
+  const out = [];
+  for (let j = 0; j <= rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const a = at(i, j);
+      const b = at(i + 1, j);
+      out.push([a[0], a[1], b[0], b[1]]);
+    }
+  }
+  for (let i = 0; i <= cols; i++) {
+    for (let j = 0; j < rows; j++) {
+      const a = at(i, j);
+      const b = at(i, j + 1);
+      out.push([a[0], a[1], b[0], b[1]]);
+    }
+  }
+  return out;
+}
+
+// The dashed ghost: where the box's outline was before the mesh moved it, as a
+// closed polygon (tl, tr, br, bl). It is the box rect itself, because that is
+// what the identity mesh is - the one reference a user needs to read how far
+// they have pulled something.
+export function ghostOutline(w, h) {
+  const W = Math.max(0, num(w));
+  const H = Math.max(0, num(h));
+  return [
+    [0, 0],
+    [W, 0],
+    [W, H],
+    [0, H],
+  ];
+}
+
+// A drag: the mesh with control point `i` put at (x, y). A fresh array of fresh
+// points, so the caller can hold the pre-drag mesh as its cancel state and the
+// document's own array is replaced rather than edited under the renderer.
+//
+// An index outside the mesh, or a destination that is not a number, changes
+// nothing: a pointer event that arrived after a grid change (the one way the
+// two can disagree) must not tear the mesh.
+export function movedPts(pts, i, x, y) {
+  if (!Array.isArray(pts)) return [];
+  const k = Math.floor(Number(i));
+  const px = +x;
+  const py = +y;
+  const out = pts.map((p) => [+p?.[0], +p?.[1]]);
+  if (!(k >= 0 && k < out.length)) return out;
+  if (!Number.isFinite(px) || !Number.isFinite(py)) return out;
+  out[k] = [px, py];
+  return out;
+}
+
+// The warp block after a grid stepper moves. The DEFORMATION SURVIVES: the new
+// grid's identity points are pushed through the old mesh (`resampleMesh`), so
+// 1x1 dragged into a perspective and then stepped to 3x3 keeps that
+// perspective and gains interior handles inside it. See `resampleMesh` for why
+// it is not reversible - a 3x3 stepped back to 1x1 keeps only the corners,
+// which is what a 1x1 mesh can say.
+//
+// A mesh that has not been dragged stays empty rather than being materialised
+// at the new size: empty IS identity everywhere in this codebase, and writing
+// eighty-one identity points into the file for a warp nobody has touched would
+// only make the document bigger.
+export function regridWarp(warp, cols, rows, w, h) {
+  const oldCols = gridN(warp?.cols);
+  const oldRows = gridN(warp?.rows);
+  const c = gridN(cols);
+  const r = gridN(rows);
+  const on = warp?.on === true;
+  const pts = warp?.pts;
+  const same = (c + 1) * (r + 1);
+  const had = Array.isArray(pts) && pts.length === (oldCols + 1) * (oldRows + 1);
+  if (!had || isIdentityMesh(pts, oldCols, oldRows, w, h)) {
+    return { on, cols: c, rows: r, pts: [] };
+  }
+  if (c === oldCols && r === oldRows) {
+    return { on, cols: c, rows: r, pts: pts.map((p) => [+p[0], +p[1]]) };
+  }
+  const next = resampleMesh(pts, oldCols, oldRows, c, r, w, h);
+  return { on, cols: c, rows: r, pts: next.length === same ? next : [] };
+}
+
+// A mesh that has come back to identity is stored as no mesh at all, so that a
+// drag out and back leaves the document exactly as it found it - and so that
+// `warpActive` skips the whole texture pass rather than drawing a box through a
+// mesh that does nothing.
+function normalisePts(warp, w, h) {
+  if (!Array.isArray(warp?.pts) || !warp.pts.length) return;
+  if (isIdentityMesh(warp.pts, warp.cols, warp.rows, w, h)) warp.pts = [];
+}
+
+// ===========================================================================
+// The gestures. Below this line a document is being written.
+// ===========================================================================
+
+// Pointer-down on a handle. Takes the before-snapshot FIRST - the repo's own
+// rule, learned the hard way in the Inspector, where a snapshot taken after the
+// mutation diffed as before === after and recorded nothing - and only then
+// materialises the identity mesh the gizmo has been drawing, so that the drag
+// has an array to write into.
+//
+// Hands back the snapshot the other two gestures need. Nothing is recorded
+// here: a gesture is one history step and this is only its beginning.
+export function beginWarpDrag(box) {
+  const before = cloneStyle(box.style);
+  box.style.warp.pts = gizmoPts(box.style.warp, box.w, box.h);
+  return before;
+}
+
+// Pointer-move. Writes the live style, because the box is drawn from it - the
+// canvas the gizmo repaints reads `warp.pts` through the painter, and a draft
+// held to one side would mean two meshes to keep in step. Deliberately silent:
+// no `markUnsaved`, no record, nothing that settles - a drag in progress is not
+// an edit until the pointer comes up.
+export function dragWarpTo(box, i, x, y) {
+  box.style.warp.pts = movedPts(box.style.warp.pts, i, x, y);
+}
+
+// Escape, or a cancelled pointer. The style goes back whole rather than the
+// mesh alone: `before` is a clone of the entire style, which is the same thing
+// the `style` history kind restores, so cancel and undo can never mean two
+// different things.
+export function cancelWarpDrag(box, before) {
+  box.style = cloneStyle(before);
+}
+
+// Pointer-up: ONE history step for the whole drag, or none at all.
+//
+// None at all is the common case worth naming: a click on a handle that moves
+// nothing materialised the identity mesh in `beginWarpDrag`, and committing
+// that would put an entry on the stack for a gesture that changed no pixel. So
+// an identity mesh is normalised back to the empty array first and the styles
+// are compared after - a press-and-release leaves the document byte for byte
+// what it was, and the undo stack untouched.
+export function commitWarpDrag(box, pageId, before) {
+  normalisePts(box.style.warp, box.w, box.h);
+  const after = cloneStyle(box.style);
+  if (JSON.stringify(before) === JSON.stringify(after)) return false;
+  markUnsaved();
+  record({ t: 'style', pageId, boxId: box.id, before, after });
+  return true;
+}
+
+// Reset: the mesh back to identity, one history step, and nothing at all when
+// there is nothing to reset.
+export function resetWarp(box, pageId) {
+  const w = box.style.warp;
+  if (!Array.isArray(w.pts) || !w.pts.length) return false;
+  const before = cloneStyle(box.style);
+  w.pts = [];
+  markUnsaved();
+  record({ t: 'style', pageId, boxId: box.id, before, after: cloneStyle(box.style) });
+  return true;
+}

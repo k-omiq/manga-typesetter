@@ -531,6 +531,21 @@ function paintShadows(ctx, box, L, SS) {
 // draws a warped box from exactly this - see `paintWarpedBox` - rather than
 // from a second painter that would have to be kept in step with it.
 export function renderBox(box, p, tips) {
+  return warpTexture(renderBoxTexture(box, p, tips), box);
+}
+
+// Everything `renderBox` does EXCEPT the mesh - the finished, unwarped picture
+// of the box, plus where it sits and what it was supersampled at.
+//
+// Split out for the gizmo's drag, and only for it. A handle drag changes the
+// mesh forty times a second and changes nothing else: the type, the ink, the
+// blur, the smear and the mask are all the same picture they were when the
+// pointer went down, and re-rendering them per frame is the whole cost of the
+// gesture (see WarpGizmo.svelte, which renders this once on pointerdown and
+// runs only `warpTexture` after). The pass order and the pixels are exactly
+// what they were when this was one function - `renderBox` is the same two
+// steps in the same order, and every other caller sees no change at all.
+export function renderBoxTexture(box, p, tips) {
   const L = layoutBox(box, p);
   const s = L.s;
   const SS = 2;
@@ -615,39 +630,50 @@ export function renderBox(box, p, tips) {
     octx.drawImage(m, 0, 0);
     octx.restore();
   }
-  // The mesh warp, over everything: the box is a finished picture by now - type
-  // and ink and every filter - and the warp carries that one texture, which is
-  // the whole point of doing it here. Ink cannot be warped separately because
-  // there is no separate ink: it went into this canvas above, under the same
-  // blur and behind the same mask.
-  //
-  // The deformed mesh reaches outside the box rect, so the footprint the caller
-  // is told about is the warp's, not the layout's - `ox`/`oy` grow or shrink
-  // with it and the page composite places the bitmap from those, the same
-  // mechanism the ink overhang already grew `layoutBox`'s padding for.
-  let ox = L.ox;
-  let oy = L.oy;
-  let cw = L.cw;
-  let ch = L.ch;
-  if (warpActive(s, box.w, box.h)) {
-    const warped = warpBoxCanvas(out, { warp: s.warp, w: box.w, h: box.h, ox, oy, cw, ch, ss: SS });
-    // Null means the mesh does nothing (or cannot be drawn), and the texture
-    // already in hand is the answer - unwarped output stays byte for byte what
-    // it was before this pass existed.
-    if (warped) {
-      // The texture has been copied into the warped canvas and nothing else
-      // holds it. A box's footprint is megapixels; handing them back here is
-      // the same discipline the strip and page exporters keep.
-      out.width = 0;
-      out.height = 0;
-      out = warped.canvas;
-      ox = warped.ox;
-      oy = warped.oy;
-      cw = warped.cw;
-      ch = warped.ch;
-    }
+  return { canvas: out, ox: L.ox, oy: L.oy, cw: L.cw, ch: L.ch, ss: SS };
+}
+
+// The mesh warp, over everything: the box is a finished picture by now - type
+// and ink and every filter - and the warp carries that one texture, which is
+// the whole point of doing it here. Ink cannot be warped separately because
+// there is no separate ink: it went into that canvas above, under the same blur
+// and behind the same mask.
+//
+// The deformed mesh reaches outside the box rect, so the footprint the caller is
+// told about is the warp's, not the layout's - `ox`/`oy` grow or shrink with it
+// and the page composite places the bitmap from those, the same mechanism the
+// ink overhang already grew `layoutBox`'s padding for.
+//
+// `release` hands the texture's pixels back once they have been copied into the
+// warped canvas, which is what every one-shot render wants and is what this did
+// when it was part of `renderBox`. The gizmo's drag passes false, because the
+// texture it just paid for is the one the NEXT frame draws from too.
+export function warpTexture(tex, box, release = true) {
+  const s = box.style;
+  const keep = { canvas: tex.canvas, ox: tex.ox, oy: tex.oy, cw: tex.cw, ch: tex.ch };
+  if (!warpActive(s, box.w, box.h)) return keep;
+  const warped = warpBoxCanvas(tex.canvas, {
+    warp: s.warp,
+    w: box.w,
+    h: box.h,
+    ox: tex.ox,
+    oy: tex.oy,
+    cw: tex.cw,
+    ch: tex.ch,
+    ss: tex.ss,
+  });
+  // Null means the mesh does nothing (or cannot be drawn), and the texture
+  // already in hand is the answer - unwarped output stays byte for byte what it
+  // was before this pass existed.
+  if (!warped) return keep;
+  if (release) {
+    // The texture has been copied into the warped canvas and nothing else holds
+    // it. A box's footprint is megapixels; handing them back here is the same
+    // discipline the strip and page exporters keep.
+    tex.canvas.width = 0;
+    tex.canvas.height = 0;
   }
-  return { canvas: out, ox, oy, cw, ch };
+  return { canvas: warped.canvas, ox: warped.ox, oy: warped.oy, cw: warped.cw, ch: warped.ch };
 }
 
 // The box drawn into an editor canvas, at the editor's zoom. This is the
@@ -661,7 +687,25 @@ export function renderBox(box, p, tips) {
 // argument. Returns the footprint geometry so the caller can place the canvas -
 // `ox`/`oy` page px left of and above the box's own top-left.
 export function paintWarpedBox(el, box, p, z, tips) {
-  const r = renderBox(box, p, tips);
+  return blitWarped(el, renderBox(box, p, tips), z);
+}
+
+// The same picture from a texture the caller is holding on to: the gizmo's live
+// drag, which renders the box once when the pointer goes down and then only
+// re-runs the mesh. The texture is NOT released - it belongs to the gesture -
+// but the warped bitmap this call made is, exactly as above.
+export function paintWarpedTexture(el, tex, box, z) {
+  const r = warpTexture(tex, box, false);
+  // A mesh that does nothing hands the texture straight back, and THAT canvas
+  // must survive the blit - it is the gesture's, not this frame's.
+  return blitWarped(el, r, z, r.canvas !== tex.canvas);
+}
+
+// The bitmap onto the editor's canvas at the zoom, and the footprint back.
+// `release` hands the source's pixels back once they are on screen: a chapter of
+// warped boxes each holding a supersampled texture is the shape that put
+// gigabytes in the webview before.
+function blitWarped(el, r, z, release = true) {
   const w = Math.max(1, Math.round(r.cw * z));
   const h = Math.max(1, Math.round(r.ch * z));
   if (el.width !== w) el.width = w;
@@ -671,10 +715,10 @@ export function paintWarpedBox(el, box, p, z, tips) {
   ctx.clearRect(0, 0, w, h);
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(r.canvas, 0, 0, w, h);
-  // The supersampled texture has served its purpose; a chapter of warped boxes
-  // each holding one is the shape that put gigabytes in the webview before.
-  r.canvas.width = 0;
-  r.canvas.height = 0;
+  if (release) {
+    r.canvas.width = 0;
+    r.canvas.height = 0;
+  }
   return { ox: r.ox, oy: r.oy, cw: r.cw, ch: r.ch };
 }
 
