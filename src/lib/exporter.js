@@ -811,6 +811,12 @@ function paintBoxOnPage(ctx, box, p, tips) {
       ctx.drawImage(bc, -(box.w / 2 + ox), -(box.h / 2 + oy), cw, ch);
       ctx.restore();
     }
+    // The box's own bitmap has been composited and nothing else holds it. A
+    // footprint is megapixels and a page turn or a batch export makes one per
+    // box; handing them back here is the discipline `paintWarpedBox` and the
+    // slice exporter already keep.
+    bc.width = 0;
+    bc.height = 0;
   }
 }
 

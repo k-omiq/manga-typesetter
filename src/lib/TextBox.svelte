@@ -362,10 +362,20 @@
   const warped = $derived(warpActive(s, box.w, box.h));
   let warpEl = $state(null);
   let warpGeom = $state(null);
-  // Everything the picture is drawn from. The whole style, because a warped box
-  // is drawn by the exporter and the exporter reads all of it.
+  // Everything the picture is drawn from - the whole style, because a warped
+  // box is drawn by the exporter and the exporter reads all of it.
+  //
+  // The ink block is the one thing NOT stringified here. It is far the heaviest
+  // part of a style (a stroke is hundreds of sampled points, and a box can carry
+  // many), the key is recomputed on every reactive cycle that touches the box,
+  // and `inkKey` above already states exactly that block for the layer this one
+  // replaces - it is computed either way, so folding it in costs nothing and
+  // says the same thing. Anything the ink can change, it changes there.
   const warpKey = $derived(
-    warped ? JSON.stringify(s) + `|${text}|${box.w}|${box.h}|${z}|${app.fontsVersion}` : '',
+    warped
+      ? JSON.stringify({ ...s, ink: 0 }) +
+          `|${inkKey}|${text}|${box.w}|${box.h}|${z}|${app.fontsVersion}`
+      : '',
   );
   let warpDrawn = '';
   let warpLive = null; // non-reactive twin of warpEl: what the pixel release acts on

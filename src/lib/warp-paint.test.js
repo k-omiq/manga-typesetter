@@ -3,9 +3,13 @@ import {
   warpPlan,
   warpBoxCanvas,
   expandTriangle,
+  subdivisionFor,
   WARP_PAD,
   WARP_SUB,
+  WARP_SUB_MAX,
   SEAM_OVERDRAW,
+  MAX_DEVICE,
+  MAX_DEVICE_AREA,
 } from './warp-paint.js';
 import { identityMesh, warpPoint, solveHomography, applyHomography } from './warp.js';
 import { renderPageCanvas, paintWarpedBox } from './exporter.js';
@@ -523,6 +527,108 @@ describe('warpPlan', () => {
 
   it('bounds the destination by what the mesh actually covers', () => {
     expect(warpPlan(DRAG, W, H).bounds).toEqual({ minX: 0, minY: 0, maxX: 120, maxY: 140 });
+  });
+});
+
+describe('subdivisionFor', () => {
+  // The projective map is approximated by one affine piece per cell, and that
+  // error is a fraction of the CELL - so a fixed grid is a promise about a box
+  // size rather than about quality. A full-page SFX is forty times the balloon
+  // the number was chosen for.
+  it('leaves a small box at the floor', () => {
+    expect(subdivisionFor(100, 100)).toBe(WARP_SUB);
+    expect(subdivisionFor(200, 400)).toBe(WARP_SUB);
+    // Nothing to measure is nothing to subdivide for.
+    expect(subdivisionFor(0, 0)).toBe(WARP_SUB);
+    expect(subdivisionFor(NaN, undefined)).toBe(WARP_SUB);
+  });
+
+  it('follows the box up, one cell per 120 page px, and stops at the ceiling', () => {
+    expect(subdivisionFor(1200, 400)).toBe(10);
+    expect(subdivisionFor(2400, 600)).toBe(20);
+    expect(subdivisionFor(4000, 1000)).toBe(WARP_SUB_MAX);
+    expect(subdivisionFor(40000, 40000)).toBe(WARP_SUB_MAX);
+  });
+
+  it('gives a full-page trapezoid a finer grid than a balloon-sized one', () => {
+    const quad = (w2, h2) => ({
+      on: true,
+      cols: 1,
+      rows: 1,
+      // The same shape at two sizes: right edge pulled in, so both are
+      // projective and only the size differs.
+      pts: [[0, 0], [w2, h2 * 0.125], [0, h2], [w2, h2 * 0.75]],
+    });
+    const small = warpPlan(quad(100, 100), 100, 100);
+    const big = warpPlan(quad(4000, 4000), 4000, 4000);
+    expect(small.projective).toBe(true);
+    expect(big.projective).toBe(true);
+    expect(small.tris).toHaveLength(2 * WARP_SUB * WARP_SUB);
+    expect(big.tris).toHaveLength(2 * WARP_SUB_MAX * WARP_SUB_MAX);
+    // Which is what it is for: the biggest cell of the big box is finer,
+    // relative to the box, than a fixed 8x8 would have made it.
+    const cell = (plan) => Math.max(...plan.tris.map((t) => Math.abs(t.src[1][0] - t.src[0][0])));
+    expect(cell(big) / 4000).toBeLessThan(cell(small) / 100);
+  });
+});
+
+// A canvas is not allowed to be any size at all, and a mesh close to degenerate
+// asks for one that is not: `SPAN_LIMIT` still lets a big box's footprint out to
+// tens of thousands of px, and at the export's supersample that is a bitmap
+// every browser refuses - by returning null, by throwing, or (worst) by handing
+// back a blank one, which is a box that vanished off the page.
+describe('the canvas cap', () => {
+  // Records what was asked for without allocating it: the whole point here is
+  // sizes that must never be allocated.
+  const sizes = [];
+  const noop = new Proxy({}, { get: () => () => {} });
+  const recorder = (w2, h2) => {
+    sizes.push([w2, h2]);
+    return { width: w2, height: h2, getContext: () => noop };
+  };
+  const bigBox = (bx, by) => ({
+    warp: { on: true, cols: 2, rows: 2, pts: identityMesh(2, 2, 2000, 2000).map((p, i) => (i === 8 ? [bx, by] : p)) },
+    w: 2000,
+    h: 2000,
+    ox: 20,
+    oy: 20,
+    cw: 2040,
+    ch: 2040,
+    makeCanvas: recorder,
+    ss: 2,
+  });
+
+  it('renders a too-large footprint at a lower resolution rather than not at all', () => {
+    sizes.length = 0;
+    const args = bigBox(8000, 8000);
+    const out = warpBoxCanvas(flatTexture(), args);
+    expect(out).not.toBeNull();
+    const [cwPx, chPx] = sizes.at(-1);
+    expect(cwPx).toBeLessThanOrEqual(MAX_DEVICE);
+    expect(chPx).toBeLessThanOrEqual(MAX_DEVICE);
+    expect(cwPx * chPx).toBeLessThanOrEqual(MAX_DEVICE_AREA * 1.001);
+    // The supersample gave way; the geometry did not. `cw`/`ch` are still the
+    // page px the bitmap spans, so the page composite places it unchanged.
+    const b = warpPlan(args.warp, args.w, args.h, { x: -args.ox, y: -args.oy, w: args.cw, h: args.ch }).bounds;
+    expect(out.cw).toBe(Math.ceil(b.maxX + WARP_PAD) - Math.floor(b.minX - WARP_PAD));
+    expect(out.ch).toBe(Math.ceil(b.maxY + WARP_PAD) - Math.floor(b.minY - WARP_PAD));
+    expect(cwPx).toBeLessThan(out.cw * 2); // i.e. below the SS=2 it asked for
+  });
+
+  it('refuses a footprint no resolution would fit, and allocates nothing', () => {
+    sizes.length = 0;
+    // A near-degenerate mesh: a gigapixel of page, which even a quarter of a
+    // device pixel per page pixel cannot hold. Null is the caller's signal to
+    // draw the box unwarped, which is always bounded.
+    expect(warpBoxCanvas(flatTexture(), bigBox(60000, 60000))).toBeNull();
+    expect(sizes).toEqual([]);
+  });
+
+  it('leaves an ordinary box at its full supersample', () => {
+    sizes.length = 0;
+    const out = warpBoxCanvas(flatTexture(4), warpArgs(DRAG, { ss: 4, makeCanvas: recorder }));
+    expect(out).not.toBeNull();
+    expect(sizes.at(-1)).toEqual([out.cw * 4, out.ch * 4]);
   });
 });
 

@@ -32,11 +32,45 @@ import {
 // each edge out by a fraction of a pixel more.
 export const WARP_PAD = 2;
 
-// How finely the four-corner case is subdivided before it is drawn. Eight by
-// eight is 64 cells over the box, which puts the piecewise error of a strong
-// perspective drag under a pixel while costing 128 triangles - a fraction of
-// what the same box costs to lay out and paint in the first place.
+// How finely the four-corner case is subdivided before it is drawn, at the
+// floor and at the ceiling. The projective map is approximated by a straight
+// affine piece per cell, and the error of that approximation is a fraction of
+// the CELL, not of the box: measured against the homography it approximates,
+// eight by eight is a third of a pixel out on a 100px balloon and thirteen out
+// on a 4000px full-page SFX under a moderate drag - which facets visibly, and
+// gets worse the harder the corner is pulled. So the grid
+// follows the box's size - one cell per ~120 page px - and the two bounds are
+// what keeps that honest at both ends: never coarser than the 8x8 that was
+// right for a small box, never finer than 32x32, which is 2048 triangles and
+// already past the point where another one changes a pixel.
 export const WARP_SUB = 8;
+export const WARP_SUB_MAX = 32;
+export const WARP_SUB_PX = 120;
+
+// The virtual grid for a box this big. Exported because it is a claim about
+// quality that deserves a test of its own rather than a number buried in a
+// planner.
+export function subdivisionFor(w, h) {
+  const span = Math.max(num(w), num(h));
+  if (!(span > 0)) return WARP_SUB;
+  return Math.min(WARP_SUB_MAX, Math.max(WARP_SUB, Math.round(span / WARP_SUB_PX)));
+}
+
+// What a canvas may actually be. Every browser refuses past some size, and the
+// numbers below are the smallest of the common caps with room to spare: 16384
+// on a side, and an area that keeps one bitmap under a quarter of a gigabyte -
+// this app has put two whole gigabytes in the webview before, and a warp is not
+// the place to do it again.
+//
+// A mesh can ask for more than that only when it is close to degenerate - a
+// near-horizon projective quad, where a few pixels of drag blow the footprint
+// up by orders of magnitude. The response is graded: the bitmap is rendered at
+// a lower resolution first, keeping the picture and losing sharpness, and only
+// a demand so far past the cap that even that will not fit is refused outright
+// (which draws the box unwarped, the one outcome that is always bounded).
+export const MAX_DEVICE = 16384;
+export const MAX_DEVICE_AREA = 64e6;
+export const MIN_DEVICE_SCALE = 0.25;
 
 // How far each destination triangle's clip is grown, page px. Canvas antialiases
 // a clip edge, so two triangles meeting along a shared edge each cover about
@@ -201,9 +235,12 @@ function planFor(xs, ys, map, span) {
 //
 // The four-handle case goes through the projective map when the quad asks for
 // one: one cell drawn as two triangles creases along its diagonal, so the quad
-// is subdivided into `sub` x `sub` virtual cells whose corners come from the
-// homography. A quad that is already a parallelogram takes the plain path - the
-// affine map is exact there, and both routes draw the same picture.
+// is subdivided into virtual cells whose corners come from the homography -
+// `subdivisionFor` of them per side unless a caller names a number, because the
+// error of an affine piece is a fraction of the cell and a full-page box needs
+// more cells than a balloon does. A quad that is already a parallelogram takes
+// the plain path - the affine map is exact there, and both routes draw the same
+// picture.
 export function warpPlan(warp, w, h, rect = null, opts = {}) {
   const W = num(w);
   const H = num(h);
@@ -213,7 +250,7 @@ export function warpPlan(warp, w, h, rect = null, opts = {}) {
   const pts = warp?.pts;
   if (isIdentityMesh(pts, cols, rows, W, H)) return null;
 
-  const sub = gridN(opts.sub ?? WARP_SUB);
+  const sub = gridN(opts.sub ?? subdivisionFor(W, H));
   const x0 = rect ? Math.min(0, num(rect.x)) : 0;
   const y0 = rect ? Math.min(0, num(rect.y)) : 0;
   const x1 = rect ? Math.max(W, num(rect.x) + num(rect.w)) : W;
@@ -266,7 +303,11 @@ function newCanvas(w, h) {
 // caller's signal to keep the texture it already has, byte for byte.
 //
 // `ss` is the texture's supersampling: it is drawn at its own pixel size, so
-// nothing is resampled here beyond the warp itself.
+// nothing is resampled here beyond the warp itself - unless the footprint the
+// mesh asks for is bigger than a canvas may be, in which case the RESOLUTION
+// gives way and the geometry does not. `cw`/`ch` are always the page px the
+// bitmap spans, whatever resolution it was rendered at, so a caller places it
+// the same way either way.
 export function warpBoxCanvas(src, opts = {}) {
   const { warp, w, h, ox, oy, cw, ch } = opts;
   const ss = num(opts.ss, 1) || 1;
@@ -286,11 +327,35 @@ export function warpBoxCanvas(src, opts = {}) {
   const bottom = Math.ceil(plan.bounds.maxY + pad);
   const outW = Math.max(1, right - left);
   const outH = Math.max(1, bottom - top);
-  const canvas = make(Math.max(1, Math.round(outW * ss)), Math.max(1, Math.round(outH * ss)));
+
+  // What a canvas may be. A mesh close to degenerate can ask for a footprint
+  // orders of magnitude past the box - `SPAN_LIMIT` is the outer bound and it is
+  // 32 times the source - and at the export's supersample that is a bitmap no
+  // browser will hand out: `getContext` on an oversized canvas returns null in
+  // some, throws in others, and silently gives back a blank one in the rest, so
+  // every one of them ends in a box that vanished from the page.
+  //
+  // Resolution is what gives way first: the same picture, rendered at fewer
+  // device px per page px, still lands in the right place at the right size.
+  // Only a demand so far past the cap that even a quarter of a device pixel per
+  // page pixel will not fit is refused, and a refusal here is the caller's
+  // signal to draw the box UNWARPED - the one outcome that is bounded whatever
+  // the mesh says.
+  const fit = Math.min(
+    1,
+    MAX_DEVICE / (outW * ss),
+    MAX_DEVICE / (outH * ss),
+    Math.sqrt(MAX_DEVICE_AREA / (outW * ss * outH * ss)),
+  );
+  if (!(fit > 0)) return null;
+  const rs = ss * Math.min(1, fit);
+  if (rs < MIN_DEVICE_SCALE) return null;
+
+  const canvas = make(Math.max(1, Math.round(outW * rs)), Math.max(1, Math.round(outH * rs)));
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingQuality = 'high';
-  // Box-local page px, at the texture's own resolution.
-  ctx.setTransform(ss, 0, 0, ss, 0, 0);
+  // Box-local page px, at whatever resolution survived the cap.
+  ctx.setTransform(rs, 0, 0, rs, 0, 0);
   ctx.translate(-left, -top);
 
   for (const tri of plan.tris) {
