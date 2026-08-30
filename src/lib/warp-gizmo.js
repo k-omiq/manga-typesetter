@@ -31,6 +31,30 @@ import { record } from './editor/history.svelte.js';
 // hairline is the same idea - one device pixel, whatever the page is scaled to.
 export const HANDLE_R = 5;
 
+// The keyboard's step, PAGE px - the unit the mesh is stored in, so a nudge
+// moves a control point by the same amount at every zoom and a letterer can say
+// "two pixels left" and get two pixels. Shift multiplies, the way every nudge in
+// every editor does.
+export const NUDGE_STEP = 1;
+export const NUDGE_BIG_STEP = 10;
+
+// How long a burst of arrow keys stays one edit. The Inspector's own settle
+// window (SETTLE_MS), and the same number for the same reason: a held arrow key
+// auto-repeats, and one history entry per repeat would empty a five-step stack
+// in half a second and leave the user unable to undo back past the nudge.
+export const NUDGE_SETTLE_MS = 400;
+
+// Which way an arrow key moves a control point, page px, or null for a key that
+// is not a nudge. Pure so the component's key handler is a lookup and a guard.
+export function nudgeDelta(key, shift = false) {
+  const d = shift ? NUDGE_BIG_STEP : NUDGE_STEP;
+  if (key === 'ArrowLeft') return [-d, 0];
+  if (key === 'ArrowRight') return [d, 0];
+  if (key === 'ArrowUp') return [0, -d];
+  if (key === 'ArrowDown') return [0, d];
+  return null;
+}
+
 const gridN = (n) => {
   const v = Math.floor(Number(n));
   if (!Number.isFinite(v)) return WARP_MIN_GRID;
@@ -237,6 +261,58 @@ export function commitWarpDrag(box, pageId, before) {
   markUnsaved();
   record({ t: 'style', pageId, boxId: box.id, before, after });
   return true;
+}
+
+// One gesture, from the moment it starts to the one commit or cancel it is
+// allowed. Every way a gesture can end goes through here - pointer-up, Escape,
+// a pointer the browser cancelled, the settle at the end of a keyboard burst,
+// and the gizmo being unmounted while the pointer is still down - and `settled`
+// is what makes "exactly one history step per gesture" a property of the object
+// rather than a discipline four call sites have to keep.
+//
+// It exists because of the last of those endings. A gizmo can go away mid-drag
+// without a pointer event ever arriving: the user arms the brush, switches
+// sub-tab, or clicks another box. Tearing down the listeners is not enough -
+// the mesh is left wherever the pointer had dragged it to, with no entry on the
+// stack that could undo it. So the component's teardown ends the gesture like
+// any other ending, and this is the thing that guarantees the ending happens
+// once whichever way it is reached.
+export function warpDragGesture(box, pageId, index) {
+  const before = beginWarpDrag(box);
+  let settled = false;
+  return {
+    index,
+    box,
+    get settled() {
+      return settled;
+    },
+    // Absolute, in box-local page px: where the control point goes now.
+    to(x, y) {
+      if (settled) return false;
+      dragWarpTo(box, index, x, y);
+      return true;
+    },
+    // Relative, which is what a keyboard nudge has: the point as it stands, plus
+    // the step. Read from the live mesh rather than kept alongside it, so a
+    // nudge and a drag of the same gesture cannot drift apart.
+    by(dx, dy) {
+      if (settled) return false;
+      const p = box.style.warp.pts?.[index];
+      if (!p) return false;
+      return this.to(+p[0] + (+dx || 0), +p[1] + (+dy || 0));
+    },
+    commit() {
+      if (settled) return false;
+      settled = true;
+      return commitWarpDrag(box, pageId, before);
+    },
+    cancel() {
+      if (settled) return false;
+      settled = true;
+      cancelWarpDrag(box, before);
+      return true;
+    },
+  };
 }
 
 // Reset: the mesh back to identity, one history step, and nothing at all when

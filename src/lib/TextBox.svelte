@@ -492,8 +492,14 @@
       warpLive = null;
     }
     // A gesture's cached texture is a supersampled footprint; a box destroyed
-    // mid-drag must not be the last thing holding one.
+    // mid-drag must not be the last thing holding one. The two flags go with
+    // it: the gizmo's own teardown ends the gesture and calls `end()`, but this
+    // box may be the thing being destroyed and the order of the two teardowns is
+    // not ours to assume. `warpDragging` left true is the expensive one - it is
+    // what holds the reactive repaint off - so it is reset here as well.
     releaseWarpTex();
+    warpDragging = false;
+    warpDrawn = '';
     warpTips = null;
     warpSeq++;
   });

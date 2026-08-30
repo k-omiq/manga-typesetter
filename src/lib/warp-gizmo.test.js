@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   HANDLE_R,
+  NUDGE_STEP,
+  NUDGE_BIG_STEP,
+  NUDGE_SETTLE_MS,
+  nudgeDelta,
+  warpDragGesture,
   gizmoPts,
   handlePoints,
   meshSegments,
@@ -346,6 +351,111 @@ describe('a handle drag against the document', () => {
     const before = beginWarpDrag(b);
     expect(before.warp.pts).toEqual([]);
     expect(b.style.warp.pts).toHaveLength(4);
+  });
+});
+
+describe('nudgeDelta', () => {
+  it('moves a page pixel per arrow, ten with Shift', () => {
+    expect(nudgeDelta('ArrowLeft')).toEqual([-NUDGE_STEP, 0]);
+    expect(nudgeDelta('ArrowRight')).toEqual([NUDGE_STEP, 0]);
+    expect(nudgeDelta('ArrowUp')).toEqual([0, -NUDGE_STEP]);
+    expect(nudgeDelta('ArrowDown')).toEqual([0, NUDGE_STEP]);
+    expect(nudgeDelta('ArrowRight', true)).toEqual([NUDGE_BIG_STEP, 0]);
+    expect(nudgeDelta('ArrowUp', true)).toEqual([0, -NUDGE_BIG_STEP]);
+  });
+
+  it('answers null for every key that is not a nudge, so the handler lets it through', () => {
+    for (const k of ['a', 'Escape', 'Tab', 'Enter', ' ', 'PageUp', undefined]) {
+      expect(nudgeDelta(k)).toBeNull();
+    }
+  });
+
+  it('holds a burst open for the Inspector’s own settle window', () => {
+    // The same number as SETTLE_MS, and stated as a claim rather than a
+    // coincidence: a held arrow auto-repeats, and one entry per repeat would
+    // empty a five-step stack in half a second.
+    expect(NUDGE_SETTLE_MS).toBe(400);
+  });
+});
+
+describe('warpDragGesture', () => {
+  beforeEach(() => {
+    initHistory();
+    resetHistory();
+    loadProjectPages(doc());
+  });
+
+  it('commits once and then refuses everything, so a gesture is one history step', () => {
+    const b = byId('b1');
+    const g = warpDragGesture(b, 1, 1);
+    g.to(W + 40, -20);
+    expect(g.settled).toBe(false);
+    expect(g.commit()).toBe(true);
+    expect(g.settled).toBe(true);
+    // Every later ending is refused - the double-commit and the commit-then-
+    // cancel that a pointer-up racing a teardown would otherwise produce.
+    expect(g.commit()).toBe(false);
+    expect(g.cancel()).toBe(false);
+    expect(g.to(0, 0)).toBe(false);
+    expect(peekStack().undo).toHaveLength(1);
+    expect(byId('b1').style.warp.pts[1]).toEqual([W + 40, -20]);
+  });
+
+  it('cancels once, restores the style, and records nothing', () => {
+    const b = byId('b1');
+    const g = warpDragGesture(b, 1, 2);
+    g.to(-50, H + 50);
+    expect(g.cancel()).toBe(true);
+    expect(g.cancel()).toBe(false);
+    expect(g.commit()).toBe(false);
+    expect(byId('b1').style.warp.pts).toEqual([]);
+    expect(peekStack().undo).toHaveLength(0);
+  });
+
+  // The teardown case the review found: the gizmo is unmounted mid-drag (the
+  // brush is armed, the sub-tab changes, another box is selected) and no pointer
+  // event ever arrives. The component's teardown ends the gesture like any other
+  // ending; this is the guarantee it leans on.
+  it('a gesture ended by a teardown rather than by a pointer still restores the mesh', () => {
+    const b = byId('b1');
+    const g = warpDragGesture(b, 1, 0);
+    g.to(-90, -90);
+    expect(byId('b1').style.warp.pts[0]).toEqual([-90, -90]);
+    // no pointerup, no Escape - just the component going away
+    g.cancel();
+    expect(byId('b1').style.warp.pts).toEqual([]);
+    expect(peekStack().undo).toHaveLength(0);
+  });
+
+  it('a teardown that COMMITS a keyboard burst keeps the nudges, in one entry', () => {
+    // The other half of the same rule: a drag that never came up did not finish,
+    // but every arrow press did - only its history entry was waiting on the
+    // settle - so an unmount writes them, as the Inspector's onDestroy does.
+    const b = byId('b1');
+    const g = warpDragGesture(b, 1, 3);
+    for (let k = 0; k < 6; k++) g.by(NUDGE_STEP, -NUDGE_STEP);
+    expect(g.commit()).toBe(true);
+    expect(byId('b1').style.warp.pts[3]).toEqual([W + 6, H - 6]);
+    expect(peekStack().undo).toHaveLength(1);
+  });
+
+  it('`by` reads the live mesh, so a nudge after a drag carries on from it', () => {
+    const b = byId('b1');
+    const g = warpDragGesture(b, 1, 1);
+    g.to(W + 10, -10);
+    g.by(-NUDGE_BIG_STEP, NUDGE_STEP);
+    expect(byId('b1').style.warp.pts[1]).toEqual([W + 10 - NUDGE_BIG_STEP, -9]);
+    g.commit();
+    expect(peekStack().undo).toHaveLength(1);
+  });
+
+  it('`by` on a mesh that has no such point changes nothing rather than tearing it', () => {
+    const b = byId('b1');
+    const g = warpDragGesture(b, 1, 0);
+    // The one way index and mesh can disagree: a grid change landing mid-burst.
+    b.style.warp = { on: true, cols: 1, rows: 1, pts: [] };
+    expect(g.by(1, 1)).toBe(false);
+    expect(b.style.warp.pts).toEqual([]);
   });
 });
 
