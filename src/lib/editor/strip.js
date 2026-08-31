@@ -108,13 +108,20 @@ export function residentRadiusFor(heights, index, viewportH, opts = {}) {
   if (!n) return min;
   const want = (viewportH > 0 ? viewportH : 0) * screens;
   if (!(want > 0)) return min;
+  // A page whose height is not measured yet counts as one viewport, not as
+  // zero. Zero never fills the quota, so a freshly opened chapter - every
+  // height 0 until its image decodes - walked straight to `max` and put
+  // 2*max+1 full-resolution pages in memory at once, which is the opposite of
+  // what this window is for. One screen is the conservative guess: a shorter
+  // real page only widens the radius on the next measure.
+  const guess = viewportH;
   let up = 0;
   let down = 0;
   for (let r = 1; r <= max; r++) {
     const a = index - r;
     const b = index + r;
-    up = a >= 0 ? up + Math.max(0, heights[a] || 0) : Infinity;
-    down = b < n ? down + Math.max(0, heights[b] || 0) : Infinity;
+    up = a >= 0 ? up + (heights[a] > 0 ? heights[a] : guess) : Infinity;
+    down = b < n ? down + (heights[b] > 0 ? heights[b] : guess) : Infinity;
     if (up >= want && down >= want) return Math.max(min, r);
   }
   return max;

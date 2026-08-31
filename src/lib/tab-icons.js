@@ -51,3 +51,35 @@ export const tabIcons = {
   effects: iconEffects,
   layout: iconLayout,
 };
+
+// Double ring (outer circle and inner circle): an outlined glyph.
+export const iconEffectStroke = wrap('<circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="3.5"/>');
+
+// Two overlapping rounded rects offset diagonally: shadow cast behind.
+export const iconEffectShadow = wrap(
+  '<rect x="7" y="7" width="9" height="9" rx="1.5" stroke-dasharray="2 2"/><rect x="4" y="4" width="9" height="9" rx="1.5"/>',
+);
+
+// S-curve path with control anchor dots at the ends.
+export const iconEffectWarp = wrap(
+  '<path d="M3 13c3.5-6 6-6 8.5-3s5 3 5.5-3"/><circle cx="3" cy="13" r="1" fill="currentColor"/><circle cx="17" cy="7" r="1" fill="currentColor"/>',
+);
+
+// Three horizontal speed lines of varying lengths: motion smear / blur.
+export const iconEffectBlur = wrap('<path d="M3 7h9"/><path d="M5 10.5h11"/><path d="M3 14h7"/>');
+
+// A jagged zigzag stroke: rough / distressed edge.
+export const iconEffectEdges = wrap('<path d="M3 12l2.5-3 2 3 2.5-4 2 4 2.5-3 2 3"/>');
+
+// A circle partly overlapping a rect: balloon / mask clip.
+export const iconEffectMask = wrap('<rect x="3" y="5" width="10" height="10" rx="1.5"/><circle cx="13" cy="9" r="4.5"/>');
+
+export const effectsSubTabIcons = {
+  stroke: iconEffectStroke,
+  shadow: iconEffectShadow,
+  warp: iconEffectWarp,
+  blur: iconEffectBlur,
+  edges: iconEffectEdges,
+  mask: iconEffectMask,
+};
+

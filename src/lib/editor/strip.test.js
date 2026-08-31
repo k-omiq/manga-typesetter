@@ -242,6 +242,18 @@ describe('residentRadiusFor', () => {
     expect(residentRadiusFor(uniform(40, 1000), 20, 800, { screens: 1 })).toBe(RESIDENT_MIN);
     expect(residentRadiusFor(uniform(40, 1000), 20, 800, { max: 2 })).toBe(2);
   });
+
+  it('counts an unmeasured page as one viewport instead of walking to the cap', () => {
+    // A freshly opened chapter: every height 0 until its image decodes. Each
+    // page guessed at one screen means three screens are filled at radius 3 -
+    // not RESIDENT_MAX, which put 2*max+1 full pages in memory at once.
+    expect(residentRadiusFor(uniform(40, 0), 20, 800)).toBe(3);
+    // Mixed: a measured tall page still satisfies its side early.
+    const heights = uniform(40, 0);
+    heights[19] = 8000;
+    heights[21] = 8000;
+    expect(residentRadiusFor(heights, 20, 800)).toBe(RESIDENT_MIN);
+  });
 });
 
 describe('slaving one scroll container to another', () => {

@@ -202,6 +202,23 @@ const KINDS = {
       restoreFit(b, e, dir, p);
     },
   },
+  // A queue line's translation, edited in the Queue panel's textarea. Its own
+  // kind rather than `text` because the edit belongs to the LINE - there may
+  // be no box at all, or one box reading the line, and `text`'s contract
+  // (setBoxText on a box) writes a box-level override that would freeze the
+  // box against its own line forever. Every box bound to the line refits, for
+  // the same reason `setBoxText` fits as it writes.
+  line: {
+    label: 'that translation edit',
+    apply(e, dir) {
+      const p = pageById(e.pageId);
+      if (!p) throw new Error('the page is gone');
+      const ln = p.lines.find((l) => l.n === e.lineN);
+      if (!ln) throw new Error('the queue line is gone');
+      ln.en = dir === 'undo' ? e.before : e.after;
+      for (const b of p.boxes) if (b.lineN === e.lineN) autoFitBox(b, p);
+    },
+  },
   bulk: {
     label: 'that bulk style',
     apply(e, dir) {

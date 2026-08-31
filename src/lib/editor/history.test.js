@@ -178,6 +178,21 @@ describe('command records', () => {
     expect(history.canUndo).toBe(false);
   });
 
+  it('undoes and redoes a queue-line translation edit', () => {
+    const ln = page().lines[0];
+    ln.en = 'ah, changed';
+    record({ t: 'line', pageId: 1, lineN: 1, before: 'ah', after: 'ah, changed' });
+    expect(undo()).toBe(true);
+    expect(page().lines[0].en).toBe('ah');
+    expect(redo()).toBe(true);
+    expect(page().lines[0].en).toBe('ah, changed');
+  });
+
+  it('reports a gone line rather than applying a translation edit blind', () => {
+    record({ t: 'line', pageId: 1, lineN: 99, before: 'x', after: 'y' });
+    expect(undo()).toBe(false);
+  });
+
   it('undoes a text edit', () => {
     page().boxes[0].text = 'changed';
     record({ t: 'text', pageId: 1, boxId: 'b1', before: 'one', after: 'changed' });

@@ -554,6 +554,10 @@ function fitApplies(b, s) {
   // Curved text is laid out along an arc by `arcLayout`, one glyph at a time,
   // and never wrapped into lines - there is no line count here to grow to.
   if (s.curve) return false;
+  // Text on a bezier path is placed glyph by glyph, never wrapped into lines.
+  if (s.path?.on && (s.path.pts?.length ?? 0) >= 2) return false;
+  // Ring text is placed glyph by glyph, never wrapped into lines.
+  if (s.circle?.on) return false;
   // No metrics, no fitting. Under node every measurement falls back to a
   // stand-in (`text.length * size * 0.55`), which is fine for keeping a layout
   // function total and not fine for writing a number into the user's document.
@@ -2507,19 +2511,22 @@ export const BULK_PROPS = [
   // stroke list, never one field of one stroke. Splitting a list by index
   // would name entries the target boxes do not have.
   'color',
-  'fillOpacity',
   'opacity',
   'gradient',
   'pattern',
   'strokes',
   'shadows',
   'blur',
+  'motionBlur',
   // Warp & Edges
   'curve',
+  'circle',
   'roughen.on',
   'roughen.amount',
   'roughen.detail',
   'roughen.seed',
+  'clip',
+  // Path is deliberately absent: its anchors are box-local geometry a bulk edit would smear across boxes of different sizes.
   // Typeset
   'shape',
   'minOrphan',
@@ -2532,12 +2539,12 @@ export const BULK_PROPS = [
   'flipV',
 ];
 
-// The four keys above that are moved WHOLE - a bulk edit copies a whole
+// The keys above that are moved WHOLE - a bulk edit copies a whole
 // gradient or a whole stroke list, never one field of one stroke (see the
 // comment on BULK_PROPS). Named once here because two places have to agree on
 // it: the style-leaf arithmetic that pins BULK_PROPS against `defaultStyle`
 // treats these as single leaves rather than groups of them.
-export const BULK_WHOLE_LEAVES = ['gradient', 'pattern', 'strokes', 'shadows'];
+export const BULK_WHOLE_LEAVES = ['gradient', 'pattern', 'strokes', 'shadows', 'motionBlur', 'clip', 'circle'];
 
 // How the panel rows group the mask's vocabulary for its tick-all headers.
 // Declared beside BULK_PROPS rather than inside the panel so there is one list
@@ -2546,9 +2553,9 @@ export const BULK_WHOLE_LEAVES = ['gradient', 'pattern', 'strokes', 'shadows'];
 // together. Every key appears in exactly one group.
 export const GROUPS = {
   font: ['font', 'size', 'bold', 'italic', 'uppercase', 'align', 'valign', 'lineHeight', 'letterSpacing'],
-  fill: ['color', 'fillOpacity', 'opacity', 'blur', 'strokes', 'gradient', 'pattern'],
+  fill: ['color', 'opacity', 'blur', 'motionBlur', 'strokes', 'gradient', 'pattern'],
   shadow: ['shadows'],
-  warp: ['curve', 'roughen.on', 'roughen.amount', 'roughen.detail', 'roughen.seed'],
+  warp: ['curve', 'circle', 'roughen.on', 'roughen.amount', 'roughen.detail', 'roughen.seed', 'clip'],
   typeset: ['shape', 'minOrphan', 'hyphenate', 'balloon'],
   transform: ['rotation', 'flipH', 'flipV', 'autoHeight'],
 };
