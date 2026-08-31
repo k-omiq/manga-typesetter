@@ -52,7 +52,8 @@
   import { maskTool } from './mask-tool.svelte.js';
   import { inspectorTab, effectsSubTab } from './inspector-tabs.svelte.js';
   import WarpGizmo from './editor/WarpGizmo.svelte';
-  import { brushTool, brushArmed } from './brush-tool.svelte.js';
+  import { brushTool, brushArmed, liquifySettings } from './brush-tool.svelte.js';
+  import { liquifyGesture, frameScaleFor } from './liquify-gesture.js';
   import { buildStroke, strokeHit } from './brush.js';
   import { inkTipIds, settleTips } from './brush-tips.js';
   import { normalizeInkStroke } from './data.js';
@@ -1144,12 +1145,120 @@
     document.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
+  // ---- liquify ----
+  //
+  // The third brush mode bends the strokes that are already there instead of
+  // laying a new one down. The maths is `liquify.js` and the gesture - the
+  // snapshot, the one commit, the cancel - is `liquify-gesture.js`; what lives
+  // here is the pointer, the clock and the circle the cursor draws.
+  //
+  // `liquifyEnd` is how a gesture in flight is ended from anywhere: the pointer
+  // coming up, Escape, a cancelled pointer, and the two endings that arrive
+  // with no pointer event at all - the capture surface being unmounted, and
+  // this box being destroyed. Null when no gesture is running.
+  let liquifyEnd = null;
+  // Where the tool's circle is drawn, box-local page px, or null when the
+  // pointer is not over the box. Only ever read while liquify is armed.
+  let liquifyAt = $state(null);
+  const liquifyOn = $derived(inkArmed && brushTool.mode === 'liquify');
+  const liquifyRing = $derived(
+    liquifyOn && liquifyAt
+      ? { x: liquifyAt[0], y: liquifyAt[1], d: liquifySettings().radius * 2 * z }
+      : null,
+  );
+
+  function onLiquifyPointerDown(e) {
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    const pid = e.pointerId;
+    const g = liquifyGesture(box, pg.id, brushTool.settings);
+    const ac = new AbortController();
+    let [lx, ly] = maskPoint(e);
+    let lastT = e.timeStamp;
+    liquifyAt = [lx, ly];
+
+    // One ending, whichever way it is reached.
+    liquifyEnd = (commit) => {
+      liquifyEnd = null;
+      live.delete(ac);
+      ac.abort();
+      if (commit) g.commit();
+      else g.cancel();
+    };
+    const move = (ev) => {
+      if (ev.pointerId !== pid) return;
+      const [x, y] = maskPoint(ev);
+      const scale = frameScaleFor(ev.timeStamp - lastT);
+      lastT = ev.timeStamp;
+      liquifyAt = [x, y];
+      // The tool is centred where the pointer IS - the ink is dragged towards
+      // the hand rather than pushed from where it was - and the delta is the
+      // hand's own movement over that step, which is what push moves the ink
+      // by. The gesture zeroes it for the modes that do not use it.
+      g.step({ cx: x, cy: y, dx: x - lx, dy: y - ly, scale });
+      lx = x;
+      ly = y;
+    };
+    const up = (ev) => {
+      if (ev.pointerId !== pid) return;
+      liquifyEnd?.(true);
+    };
+    // A cancelled pointer is Escape: it is a gesture the browser took away
+    // mid-drag, and half a deformation is not something to put on the stack.
+    const cancel = (ev) => {
+      if (ev.pointerId !== pid) return;
+      liquifyEnd?.(false);
+    };
+    const key = (ev) => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      liquifyEnd?.(false);
+    };
+    live.add(ac);
+    document.addEventListener('pointermove', move, { signal: ac.signal });
+    document.addEventListener('pointerup', up, { signal: ac.signal });
+    document.addEventListener('pointercancel', cancel, { signal: ac.signal });
+    window.addEventListener('keydown', key, { signal: ac.signal });
+  }
+
+  // The circle follows the pointer while nothing is pressed, so a letterer can
+  // see what the tool would reach before committing to a drag.
+  function onInkPointerMove(e) {
+    if (!liquifyOn || liquifyEnd) return;
+    liquifyAt = maskPoint(e);
+  }
+  function onInkPointerLeave() {
+    if (!liquifyEnd) liquifyAt = null;
+  }
+
+  // The capture surface can go away mid-drag with no pointer event ever
+  // arriving: the brush is disarmed, another box is selected, the warp is
+  // switched on. Tearing the listeners down is not enough - the ink would be
+  // left wherever the drag had bent it with nothing on the stack to take it
+  // back - so the gesture is ended like any other ending, as a cancel, because
+  // a pointer that never came up did not finish. Same reading as the mesh
+  // gizmo's teardown.
+  $effect(() => {
+    if (liquifyOn) return;
+    untrack(() => {
+      liquifyEnd?.(false);
+      liquifyAt = null;
+    });
+  });
+  $effect(() => () => {
+    liquifyEnd?.(false);
+    liquifyAt = null;
+  });
+
   function onInkPointerDown(e) {
     if (e.button !== 0 || !inkArmed || !pageFrameEl) return;
     e.preventDefault();
     e.stopPropagation();
     if (brushTool.mode === 'erase') {
       onErasePointerDown(e);
+      return;
+    }
+    if (brushTool.mode === 'liquify') {
+      onLiquifyPointerDown(e);
       return;
     }
     e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -1522,8 +1631,25 @@
          cannot hide the surface that captures the drag. -->
     <div
       class="ink-capture"
+      class:liquify={liquifyOn}
       style="width:{box.w * z}px;height:{box.h * z}px"
       onpointerdown={onInkPointerDown}
+      onpointermove={onInkPointerMove}
+      onpointerenter={onInkPointerMove}
+      onpointerleave={onInkPointerLeave}
+      aria-hidden="true"
+    ></div>
+  {/if}
+
+  {#if liquifyRing}
+    <!-- The tool's own circle, at its radius in PAGE px times the zoom: what
+         the next application would reach. Drawn rather than made a CSS cursor
+         because the radius goes to 200 page px and a cursor image cannot. It
+         takes no pointer - the capture surface underneath it must keep the
+         drag - and it sits outside the clip wrapper so a mask cannot hide it. -->
+    <div
+      class="liq-ring"
+      style="left:{liquifyRing.x * z}px;top:{liquifyRing.y * z}px;width:{liquifyRing.d}px;height:{liquifyRing.d}px"
       aria-hidden="true"
     ></div>
   {/if}
@@ -1615,5 +1741,20 @@
     cursor: crosshair;
     touch-action: none;
     z-index: 3;
+  }
+  /* Liquify draws its own circle, and the crosshair inside it is what says
+     where the centre of that circle is - so both are shown, unlike a paint app
+     that hides the system cursor behind a brush outline it can draw at native
+     resolution. */
+  .liq-ring {
+    position: absolute;
+    border: 1px solid rgba(255, 153, 0, 0.9);
+    border-radius: 50%;
+    /* A second, darker ring under the first, so the circle reads on white
+       paper and on black art alike - the same trick the mesh hairline uses. */
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 4;
   }
 </style>

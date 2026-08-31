@@ -6,7 +6,14 @@
   // Collapsible sections rather than sub-tabs. Fourteen controls that are mostly
   // set once do not want tab-hunting, and four tabs truncated to "DYNA..." at
   // the panel's width - see the spec for the discarded attempt.
-  import { brushTool } from './brush-tool.svelte.js';
+  import {
+    brushTool,
+    setBrushMode,
+    setLiquifyMode,
+    LIQUIFY_RADIUS_MIN,
+    LIQUIFY_RADIUS_MAX,
+  } from './brush-tool.svelte.js';
+  import { LIQUIFY_MODES } from './liquify.js';
   import { DYN_SOURCES } from './brush.js';
   import { drawInk } from './text-paint.js';
   import {
@@ -250,7 +257,14 @@
 
   $effect(() => {
     const el = prevEl;
-    if (!el) return;
+    // No preview on screen - erase and liquify have no stroke to show - so the
+    // decoded tip goes back too. THE TIP LIFETIME CONTRACT: a panel that is not
+    // drawing must not be the last thing holding a bitmap alive.
+    if (!el) {
+      prevTips = null;
+      prevSeq++;
+      return;
+    }
     // Read every setting so the effect re-runs when any of them moves.
     const live = JSON.stringify($state.snapshot(s));
     // Paint now with whatever is already decoded - usually the tip the last
@@ -289,9 +303,75 @@
     obj[key] = Math.min(hi, Math.max(lo, Number(v) || 0));
   };
   const DYN_LABEL = { off: 'Off', pressure: 'Pressure', velocity: 'Velocity', random: 'Random' };
+
+  // ---- the three modes --------------------------------------------------
+  //
+  // What is on screen is the options for what you are DOING, which is this
+  // panel's whole idea - so a mode that cannot use a control does not show it
+  // greyed, it does not show it. Erase and liquify keep only what they read:
+  // erase takes whole strokes out with a circle of `size / 2`, and liquify has
+  // three numbers of its own and nothing to do with a tip at all. The brush
+  // picker, the preview, opacity, the shape and the dynamics all describe ink
+  // being laid down, and neither of those two lays any.
+  const MODE_LABEL = { draw: 'Draw', erase: 'Erase', liquify: 'Liquify' };
+  const LIQ_LABEL = { push: 'Push', expand: 'Expand', pinch: 'Pinch', twirl: 'Twirl' };
+  const LIQ_HINT = {
+    push: 'Drags the ink along with the pointer.',
+    expand: 'Pushes the ink outwards from the circle’s centre.',
+    pinch: 'Pulls the ink inwards towards the circle’s centre.',
+    twirl: 'Turns the ink about the circle’s centre, keeping its distance.',
+  };
+  const mode = $derived(brushTool.mode ?? 'draw');
 </script>
 
 <div class="insp-pane">
+  <!-- The mode control. First in the panel because it decides what the rest of
+       the panel is: the tool is one brush with three things it can do to the
+       selected box's ink. -->
+  <div class="grp">
+    <span class="lbl">Mode</span>
+    <div class="seg">
+      {#each ['draw', 'erase', 'liquify'] as m (m)}
+        <button type="button" class:on={mode === m} aria-pressed={mode === m} onclick={() => setBrushMode(m)}>{MODE_LABEL[m]}</button>
+      {/each}
+    </div>
+  </div>
+
+  {#if mode === 'liquify'}
+    <!-- Liquify bends strokes that are already drawn, so it shares nothing
+         with the brush below: no tip, no opacity, no taper. Its three controls
+         are all there is. -->
+    <div class="grp">
+      <span class="lbl">Tool</span>
+      <div class="seg">
+        {#each LIQUIFY_MODES as m (m)}
+          <button
+            type="button"
+            class:on={s.liquifyMode === m}
+            aria-pressed={s.liquifyMode === m}
+            title={LIQ_HINT[m]}
+            onclick={() => setLiquifyMode(m)}
+          >{LIQ_LABEL[m]}</button>
+        {/each}
+      </div>
+    </div>
+    <div class="grp">
+      <span class="lbl">Radius</span>
+      <div class="slider-row">
+        <input type="range" min={LIQUIFY_RADIUS_MIN} max={LIQUIFY_RADIUS_MAX} step="1" value={s.liquifyRadius} title="How far the tool reaches, in page px" aria-label="Liquify radius" oninput={(e) => num(s, 'liquifyRadius', e.target.value, LIQUIFY_RADIUS_MIN, LIQUIFY_RADIUS_MAX)} />
+        <input class="num-s" type="number" min={LIQUIFY_RADIUS_MIN} max={LIQUIFY_RADIUS_MAX} step="1" value={s.liquifyRadius} aria-label="Liquify radius, page px" onchange={(e) => num(s, 'liquifyRadius', e.target.value, LIQUIFY_RADIUS_MIN, LIQUIFY_RADIUS_MAX)} />
+      </div>
+    </div>
+    <div class="grp">
+      <span class="lbl">Strength</span>
+      <div class="slider-row">
+        <input type="range" min="0" max="100" step="1" value={s.liquifyStrength} title="How far the ink moves at the centre of the circle" aria-label="Liquify strength" oninput={(e) => num(s, 'liquifyStrength', e.target.value, 0, 100)} />
+        <input class="num-s" type="number" min="0" max="100" step="1" value={s.liquifyStrength} aria-label="Liquify strength, percent" onchange={(e) => num(s, 'liquifyStrength', e.target.value, 0, 100)} />
+      </div>
+    </div>
+    <p class="hint">{LIQ_HINT[s.liquifyMode] ?? ''} The circle over the box is what it reaches; the falloff is smooth to nothing at its rim.</p>
+  {:else}
+  {#if mode === 'draw'}
   <canvas class="bpv" bind:this={prevEl} style="width:{PREV_W}px;height:{PREV_H}px" aria-label="Brush preview"></canvas>
 
   <div class="picker-head">
@@ -394,7 +474,10 @@
   {/if}
 
   <div class="insp-rule"></div>
+  {/if}
 
+  <!-- Size is the one control the eraser shares with the brush: it rubs out
+       whole strokes with a circle half this wide. -->
   <div class="grp">
     <span class="lbl">Size</span>
     <div class="slider-row">
@@ -403,6 +486,11 @@
     </div>
   </div>
 
+  {#if mode === 'erase'}
+    <p class="hint">The eraser takes out any stroke it touches, whole. There are no pixels to cut in a vector stroke.</p>
+  {/if}
+
+  {#if mode === 'draw'}
   <div class="grp">
     <span class="lbl">Opacity</span>
     <div class="slider-row">
@@ -567,6 +655,8 @@
       </div>
     </div>
   </div>
+  {/if}
+  {/if}
 </div>
 
 <style>
