@@ -505,14 +505,6 @@ import {
                 <input type="text" class="hex" value={s.color} onchange={(e) => setHex('color', e.currentTarget.value, e.currentTarget)} />
               </div>
             </div>
-            <div class="brow" class:off={!app.bulk.mask.fillOpacity}>
-              {@render tick('fillOpacity')}
-              <span class="lbl">Fill alpha</span>
-              <div class="slider-row">
-                <input type="range" min="0" max="1" step="0.01" value={s.fillOpacity} oninput={(e) => set('fillOpacity', +e.target.value)} />
-                <span class="val">{Math.round(s.fillOpacity * 100)}%</span>
-              </div>
-            </div>
             <div class="brow" class:off={!app.bulk.mask.opacity}>
               {@render tick('opacity')}
               <span class="lbl">Opacity</span>
@@ -527,6 +519,30 @@ import {
               <div class="slider-row">
                 <input type="range" min="0" max="20" step="0.5" value={s.blur} oninput={(e) => num('blur', e.target.value, 0, 20)} />
                 <span class="val">{s.blur}px</span>
+              </div>
+            </div>
+            <div class="brow" class:off={!app.bulk.mask.motionBlur}>
+              {@render tick('motionBlur')}
+              <span class="lbl">Motion blur</span>
+              <div class="sub-list-block">
+                <div class="sub-list-head">
+                  <div class="switch" class:on={s.motionBlur.on} role="switch" aria-checked={s.motionBlur.on} tabindex="0" onclick={() => { s.motionBlur.on = !s.motionBlur.on; tickBulkProp('motionBlur'); }} onkeydown={(e) => e.key === 'Enter' && ((s.motionBlur.on = !s.motionBlur.on), tickBulkProp('motionBlur'))}><span class="knob"></span></div>
+                  <span class="sub-count">{s.motionBlur.on ? 'On' : 'Off'}</span>
+                </div>
+                <div class="sub-row3">
+                  <div class="field">
+                    <span class="sub-lbl">X</span>
+                    <input type="number" min="-10" max="10" step="0.1" value={s.motionBlur.x} onchange={(e) => { s.motionBlur.x = clamp(+e.target.value || 0, -10, 10); tickBulkProp('motionBlur'); }} />
+                  </div>
+                  <div class="field">
+                    <span class="sub-lbl">Y</span>
+                    <input type="number" min="-10" max="10" step="0.1" value={s.motionBlur.y} onchange={(e) => { s.motionBlur.y = clamp(+e.target.value || 0, -10, 10); tickBulkProp('motionBlur'); }} />
+                  </div>
+                  <div class="field">
+                    <span class="sub-lbl">Amount</span>
+                    <input type="number" min="1" max="32" step="1" value={s.motionBlur.amount} onchange={(e) => { s.motionBlur.amount = Math.round(clamp(+e.target.value || 1, 1, 32)); tickBulkProp('motionBlur'); }} />
+                  </div>
+                </div>
               </div>
             </div>
             <div class="brow" class:off={!app.bulk.mask.strokes}>
@@ -723,6 +739,26 @@ import {
                 <span class="val">{s.curve}</span>
               </div>
             </div>
+            <div class="brow" class:off={!app.bulk.mask.circle}>
+              {@render tick('circle')}
+              <span class="lbl">Circle</span>
+              <div class="sub-list-block">
+                <div class="sub-list-head">
+                  <div class="switch" class:on={s.circle.on} role="switch" aria-checked={s.circle.on} tabindex="0" onclick={() => { s.circle.on = !s.circle.on; tickBulkProp('circle'); }} onkeydown={(e) => e.key === 'Enter' && ((s.circle.on = !s.circle.on), tickBulkProp('circle'))}><span class="knob"></span></div>
+                  <span class="sub-count">{s.circle.on ? 'On' : 'Off'}</span>
+                </div>
+                <div class="sub-row2">
+                  <div class="field">
+                    <span class="sub-lbl">Angle</span>
+                    <input type="number" min="0" max="359" step="1" value={s.circle.angle} onchange={(e) => { s.circle.angle = ((+e.target.value || 0) % 360 + 360) % 360; tickBulkProp('circle'); }} />
+                  </div>
+                  <div class="field">
+                    <span class="sub-lbl">Inside</span>
+                    <div class="switch" class:on={s.circle.inside} role="switch" aria-checked={s.circle.inside} tabindex="0" onclick={() => { s.circle.inside = !s.circle.inside; tickBulkProp('circle'); }} onkeydown={(e) => e.key === 'Enter' && ((s.circle.inside = !s.circle.inside), tickBulkProp('circle'))}><span class="knob"></span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
             <div class="brow" class:off={!app.bulk.mask['roughen.on']}>
               {@render tick('roughen.on')}
               <span class="lbl">Roughen</span>
@@ -748,6 +784,18 @@ import {
               {@render tick('roughen.seed')}
               <span class="lbl">Seed</span>
               <input type="number" min="0" max="999" value={s.roughen.seed} onchange={(e) => set('roughen.seed', Math.round(clamp(+e.target.value || 0, 0, 999)))} />
+            </div>
+            <!-- Shapes and brushSize are box-local geometry, not surfaced in the bulk panel. -->
+            <div class="brow" class:off={!app.bulk.mask.clip}>
+              {@render tick('clip')}
+              <span class="lbl">Mask</span>
+              <div class="sub-row">
+                <div class="switch" class:on={s.clip.on} role="switch" aria-checked={s.clip.on} tabindex="0" onclick={() => { s.clip.on = !s.clip.on; tickBulkProp('clip'); }} onkeydown={(e) => e.key === 'Enter' && ((s.clip.on = !s.clip.on), tickBulkProp('clip'))}><span class="knob"></span></div>
+                <select value={s.clip.mode} onchange={(e) => { s.clip.mode = e.target.value; tickBulkProp('clip'); }} style="flex:1 1 auto; height:24px; min-width:0">
+                  <option value="exclude">Exclude</option>
+                  <option value="include">Include</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>

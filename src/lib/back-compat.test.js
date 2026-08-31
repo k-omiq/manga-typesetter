@@ -318,8 +318,26 @@ describe('a style written before strokes and shadows were lists', () => {
     expect(s.gradient.stops).toHaveLength(2);
     expect(s.pattern.on).toBe(false);
     expect(PATTERN_KINDS).toContain(s.pattern.kind);
-    expect(s.fillOpacity).toBe(1);
+    expect('fillOpacity' in s).toBe(false);
     expect(s.blur).toBe(0);
+  });
+
+  it('folds legacy fillOpacity into whole-box opacity', () => {
+    const s = normalizeStyle({ fillOpacity: 0.5, opacity: 0.8 });
+    expect(s.opacity).toBeCloseTo(0.4);
+    expect('fillOpacity' in s).toBe(false);
+    const full = normalizeStyle({ fillOpacity: 1 });
+    expect(full.opacity).toBe(1);
+  });
+
+  it('migrates legacy motionBlur by dropping length/angle while keeping on and defaulting x/y/amount', () => {
+    const s = normalizeStyle({ motionBlur: { on: true, length: 40, angle: 90 } });
+    expect(s.motionBlur).toEqual({ on: true, x: 2, y: 0, amount: 16 });
+  });
+
+  it('migrates legacy clip with on: true up to the new schema with defaults and empty shapes', () => {
+    const s = normalizeStyle({ clip: { on: true } });
+    expect(s.clip).toEqual({ on: true, mode: 'exclude', brushSize: 20, shapes: [] });
   });
 
   it('is idempotent, so a migrated style survives every later save', () => {
@@ -552,7 +570,7 @@ describe('replaying an era-2 entry against today’s document', () => {
     expect(s.gradient.on).toBe(false);
     expect(s.pattern.on).toBe(false);
     expect(s.shadows).toHaveLength(1);
-    expect(s.fillOpacity).toBe(1);
+    expect('fillOpacity' in s).toBe(false);
     // And forward again, with nothing corrupted on the way.
     expect(redo()).toBe(true);
     expect(pageById(1).boxes.some((b) => b.id === 'b2')).toBe(false);

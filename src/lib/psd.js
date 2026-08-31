@@ -494,7 +494,7 @@ export function textLayerFor(p, box, rendered) {
     effects.gradientOverlay = [
       {
         enabled: true,
-        opacity: s.fillOpacity ?? 1,
+        opacity: 1,
         angle: 90 - (Number(s.gradient.angle) || 0),
         type: 'linear',
         gradient: {

@@ -30,16 +30,20 @@
     caretAfter,
     isAtomicInput,
   } from './editor/field-undo.svelte.js';
-  import { arcLayout, applyCase, layoutLines, BOX_PAD, balloonWidthsFor } from './measure.js';
+  import { arcLayout, circleLayout, pathLayout, pathPolyline, removePathAnchor, applyCase, layoutLines, BOX_PAD, balloonWidthsFor } from './measure.js';
   import {
     strokeBands,
     rgba,
     gradientCss,
     patternTilePx,
     patternTileCanvas,
+    motionBlurPreviewTaps,
+    drawClipShapes,
+    clipActive,
     OCTAVES,
     TILE_SS,
   } from './text-paint.js';
+  import { maskTool } from './mask-tool.svelte.js';
 
   // pg defaults to current page; longstrip passes explicit page.
   let { box, pageFrameEl, pg = page() } = $props();
@@ -67,6 +71,135 @@
   );
 
   const roughId = `rough-${box.id}`;
+  const mbId = `mb-${box.id}`;
+
+  // The directional smear's tap list: here each tap becomes an feOffset plus
+  // an arithmetic accumulate. Offsets are page px, the filter runs in zoomed
+  // px, so they scale by the zoom exactly as the blur radius does. The PREVIEW
+  // list, not the exporter's full one - every named result in the SVG chain is
+  // its own raster surface in WebKit, so the live filter samples the same
+  // smear coarser (see motionBlurPreviewTaps).
+  const mbTaps = $derived(
+    s.motionBlur?.on
+      ? motionBlurPreviewTaps(s.motionBlur.x, s.motionBlur.y, s.motionBlur.amount)
+      : [],
+  );
+
+  // The filter region, sized to what the smear can actually reach instead of a
+  // flat 400%. The region is what WebKit allocates every intermediate surface
+  // over, so on a large box the fixed margin was paying for megapixels of
+  // guaranteed-empty raster per tap. Ink is allowed the same overreach the
+  // clip mask grants (MASK_EXPAND page px) plus the furthest tap offset; each
+  // side is that in percent of the box, floored at 50% and capped at the old
+  // 150% so the region only ever shrinks.
+  const mbRegion = $derived.by(() => {
+    if (!mbTaps.length) return null;
+    let mx = 0;
+    let my = 0;
+    for (const t of mbTaps) {
+      if (Math.abs(t.dx) > mx) mx = Math.abs(t.dx);
+      if (Math.abs(t.dy) > my) my = Math.abs(t.dy);
+    }
+    const side = (reach, size) => Math.min(150, Math.max(50, Math.ceil(((MASK_EXPAND + reach) / Math.max(1, size)) * 100)));
+    const px = side(mx, box.w);
+    const py = side(my, box.h);
+    return { x: `-${px}%`, y: `-${py}%`, w: `${100 + 2 * px}%`, h: `${100 + 2 * py}%` };
+  });
+
+  // How far past the box the editor's mask image reaches, page px each side.
+  // The mask has to cover overflowing text (a path outside the box, a huge
+  // glyph) or CSS masks it to nothing; past this margin, ink is cut off -
+  // the price of a finite image, stated once.
+  const MASK_EXPAND = 300;
+
+  // The mask as a CSS mask-image, drawn by the same painter the exporter
+  // composites with (drawClipShapes). Exclude paints the world white and
+  // erases the shapes; include paints only the shapes.
+  //
+  // A blob URL, not a data URL, and that is the point of the shape below: a
+  // data URL cannot be revoked, so every rebuild left its decoded bitmap in
+  // WebKit's image cache with nothing entitled to evict it, and rebuilds
+  // happen - auto-fit moves `box.h` while the user types. Two defences here:
+  // the canvas extent is bucketed to MASK_STEP so a keystroke-sized resize
+  // reuses the standing image (mask-size covers the slack), and when a rebuild
+  // does happen the old URL is revoked the moment the new one lands, which is
+  // what lets the renderer give the old bitmap back.
+  const MASK_STEP = 32;
+  let maskUrl = $state('');
+  let maskW = $state(0); // page px the mask image spans, MASK_EXPAND included
+  let maskH = $state(0);
+  let maskKey = '';
+  let maskLive = ''; // non-reactive twin of maskUrl: what revocation acts on
+  let maskSeq = 0; // drops a toBlob that lands after a newer build or destroy
+  const setMask = (url, w, h) => {
+    if (maskLive && maskLive !== url) URL.revokeObjectURL(maskLive);
+    maskLive = url;
+    maskUrl = url;
+    maskW = w;
+    maskH = h;
+  };
+  $effect(() => {
+    if (!clipActive(s.clip)) {
+      maskKey = '';
+      maskSeq++;
+      setMask('', 0, 0);
+      return;
+    }
+    const qz = Math.min(1, Math.max(0.125, Math.round(z * 8) / 8));
+    const w = Math.ceil((box.w + MASK_EXPAND * 2) / MASK_STEP) * MASK_STEP;
+    const h = Math.ceil((box.h + MASK_EXPAND * 2) / MASK_STEP) * MASK_STEP;
+    const key = JSON.stringify([s.clip.shapes, s.clip.mode, qz, w, h]);
+    if (key === maskKey) return;
+    maskKey = key;
+    const cnv = document.createElement('canvas');
+    cnv.width = Math.max(2, Math.round(w * qz));
+    cnv.height = Math.max(2, Math.round(h * qz));
+    const ctx = cnv.getContext('2d');
+    if (!ctx) return;
+    ctx.scale(cnv.width / w, cnv.height / h);
+    ctx.translate(MASK_EXPAND, MASK_EXPAND);
+    if (s.clip.mode === 'include') {
+      drawClipShapes(ctx, s.clip.shapes);
+    } else {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(-MASK_EXPAND, -MASK_EXPAND, w, h);
+      ctx.globalCompositeOperation = 'destination-out';
+      drawClipShapes(ctx, s.clip.shapes);
+    }
+    const seq = ++maskSeq;
+    if (typeof cnv.toBlob === 'function') {
+      // Async, so the standing mask holds the frame until the new one is
+      // ready - the swap is invisible. A build superseded before its encode
+      // lands is dropped unminted.
+      cnv.toBlob((b) => {
+        if (seq !== maskSeq || !b) return;
+        setMask(URL.createObjectURL(b), w, h);
+      });
+    } else {
+      // jsdom and friends: no toBlob, no image cache to leak into either.
+      setMask(cnv.toDataURL(), w, h);
+    }
+  });
+  // Reads nothing reactive, so it runs once and its cleanup is the destroy
+  // path: the last URL goes back, and the seq bump orphans any encode still in
+  // flight.
+  $effect(() => {
+    return () => {
+      maskSeq++;
+      if (maskLive) URL.revokeObjectURL(maskLive);
+    };
+  });
+  const maskCss = $derived.by(() => {
+    if (!clipActive(s.clip) || !maskUrl) return '';
+    const sz = `${maskW * z}px ${maskH * z}px`;
+    const pos = `${-MASK_EXPAND * z}px ${-MASK_EXPAND * z}px`;
+    return (
+      `-webkit-mask-image:url(${maskUrl});mask-image:url(${maskUrl});` +
+      `-webkit-mask-size:${sz};mask-size:${sz};` +
+      `-webkit-mask-position:${pos};mask-position:${pos};` +
+      `-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;`
+    );
+  });
 
   const boxStyle = $derived(
     `left:${box.x * z}px;top:${box.y * z}px;width:${box.w * z}px;height:${box.h * z}px;` +
@@ -88,11 +221,14 @@
   );
 
   // The whole-text filters, applied to the composite of every layer: the blur,
-  // and roughening's SVG displacement. Both in one `filter` list, in that order,
-  // because a roughened edge should be blurred rather than the other way round.
+  // then the directional smear, then roughening's SVG displacement. One
+  // `filter` list, in that order, because a roughened edge should be blurred
+  // and smeared rather than the other way round - and the exporter runs its
+  // three passes in the same order.
   const filterCss = $derived.by(() => {
     const f = [];
     if (s.blur > 0) f.push(`blur(${s.blur * z}px)`);
+    if (mbTaps.length) f.push(`url(#${mbId})`);
     if (s.roughen.on) f.push(`url(#${roughId})`);
     return f.length ? `filter:${f.join(' ')};` : '';
   });
@@ -167,15 +303,14 @@
   }
 
   function fillLayer() {
-    const alpha = `opacity:${s.fillOpacity};`;
     if (s.pattern.on) {
       const tile = patternTileUrl();
       if (tile) {
         const px = patternTilePx(s) * z;
         const bg = `background-image:url(${tile});background-repeat:repeat;${CLIP}`;
         return {
-          css: `color:transparent;${alpha}${bg}background-size:${px}px ${px}px;`,
-          arc: `color:transparent;${alpha}`,
+          css: `color:transparent;${bg}background-size:${px}px ${px}px;`,
+          arc: 'color:transparent;',
           line: '',
           bg,
           tile: px,
@@ -185,14 +320,14 @@
     if (s.gradient.on) {
       const bg = `background-image:${gradientCss(s.gradient)};${CLIP}`;
       return {
-        css: s.gradient.scope === 'line' ? `color:transparent;${alpha}` : `color:transparent;${alpha}${bg}`,
-        arc: `color:transparent;${alpha}`,
+        css: s.gradient.scope === 'line' ? 'color:transparent;' : `color:transparent;${bg}`,
+        arc: 'color:transparent;',
         line: s.gradient.scope === 'line' ? bg : '',
         bg,
         tile: 0,
       };
     }
-    return { css: `color:${s.color};${alpha}`, arc: `color:${s.color};${alpha}`, line: '', bg: '' };
+    return { css: `color:${s.color};`, arc: `color:${s.color};`, line: '', bg: '' };
   }
 
   // What the box looks like while it is being typed into: one editable element,
@@ -216,9 +351,17 @@
     return css + filterCss;
   });
 
-  const layout = $derived.by(() =>
-    s.curve && s.curve !== 0 && !editing && text !== '' ? arcLayout(applyCase(text, s), s, effSize) : null,
-  );
+  // Glyph-by-glyph layout, when one applies: the bezier path when it is on and
+  // has a curve to follow, else the closed circle, else the arc. All three
+  // return the same shape, so the markup below draws any of them without
+  // knowing which.
+  const layout = $derived.by(() => {
+    if (editing || text === '') return null;
+    if (s.path?.on && (s.path.pts?.length ?? 0) >= 2)
+      return pathLayout(applyCase(text, s), s, effSize, box.w, box.h);
+    if (s.circle?.on) return circleLayout(applyCase(text, s), s, effSize);
+    return s.curve && s.curve !== 0 ? arcLayout(applyCase(text, s), s, effSize) : null;
+  });
 
   // The lines this box draws, and the ONLY thing that draws them: the editor
   // renders what `layoutLines` returns rather than handing the raw text to the
@@ -471,6 +614,202 @@
     document.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
+  // Drag one bezier-path anchor or handle. `which` is 'a' (the anchor itself),
+  // 'in' or 'out'. Dragging a handle mirrors its partner, exactly as
+  // TypeBubble does, so one drag keeps the curve smooth through the anchor.
+  // The pointer delta is inverse-rotated into box space like a resize is, and
+  // the gesture records one style edit at the end like the rotation handle.
+  function startPathDrag(e, i, which) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    focusPage(pg);
+    settleEdits();
+    const zz = app.zoom;
+    const pid = e.pointerId;
+    const sx = e.clientX,
+      sy = e.clientY;
+    const pt = s.path.pts[i];
+    if (!pt) return;
+    const o = { x: pt.x, y: pt.y, ix: pt.ix, iy: pt.iy, ox: pt.ox, oy: pt.oy };
+    const styleBefore = cloneStyle(box.style);
+    const pageId = pg.id;
+    const rad = (-(s.rotation || 0) * Math.PI) / 180;
+    const cos = Math.cos(rad),
+      sin = Math.sin(rad);
+    const move = (ev) => {
+      if (ev.pointerId !== pid) return;
+      const sdx = (ev.clientX - sx) / zz,
+        sdy = (ev.clientY - sy) / zz;
+      const dx = sdx * cos - sdy * sin,
+        dy = sdx * sin + sdy * cos;
+      if (which === 'a') {
+        pt.x = o.x + dx;
+        pt.y = o.y + dy;
+      } else if (which === 'in') {
+        pt.ix = o.ix + dx;
+        pt.iy = o.iy + dy;
+        pt.ox = -pt.ix;
+        pt.oy = -pt.iy;
+      } else {
+        pt.ox = o.ox + dx;
+        pt.oy = o.oy + dy;
+        pt.ix = -pt.ox;
+        pt.iy = -pt.oy;
+      }
+      markUnsaved();
+    };
+    const ac = new AbortController();
+    const end = (ev) => {
+      if (ev.pointerId !== pid) return;
+      live.delete(ac);
+      ac.abort();
+      const after = cloneStyle(box.style);
+      if (JSON.stringify(after.path) !== JSON.stringify(styleBefore.path)) {
+        record({ t: 'style', pageId, boxId: box.id, before: styleBefore, after });
+      }
+    };
+    live.add(ac);
+    document.addEventListener('pointermove', move, { signal: ac.signal });
+    document.addEventListener('pointerup', end, { signal: ac.signal });
+    document.addEventListener('pointercancel', end, { signal: ac.signal });
+  }
+
+  // ---- mask drawing ----
+  //
+  // The armed tool comes from the Inspector (mask-tool.svelte.js). While one
+  // is armed and this box is selected, a transparent overlay takes the
+  // pointer and turns gestures into mask shapes, committed one per gesture
+  // with one undo record each, like the path gizmo's drags.
+  const maskArmed = $derived(selected && !editing && !bulkOn && s.clip?.on && maskTool.id);
+
+  // The gesture in progress: a shape being drawn, not yet in the style.
+  const maskDraft = $state({ shape: null, poly: null });
+
+  // A pointer event in box-local page px: page coords from the page frame,
+  // then inverse-rotated around the box centre - the same frame the shapes
+  // are stored in and the mask is painted in (the mirror flip lives inside,
+  // on the text, so it does not enter into it).
+  function maskPoint(ev) {
+    const r = pageFrameEl.getBoundingClientRect();
+    const px = (ev.clientX - r.left) / app.zoom - box.x;
+    const py = (ev.clientY - r.top) / app.zoom - box.y;
+    const rad = (-(s.rotation || 0) * Math.PI) / 180;
+    if (!rad) return [px, py];
+    const cx = box.w / 2;
+    const cy = box.h / 2;
+    const dx = px - cx;
+    const dy = py - cy;
+    return [cx + dx * Math.cos(rad) - dy * Math.sin(rad), cy + dx * Math.sin(rad) + dy * Math.cos(rad)];
+  }
+
+  function commitMaskShape(shape) {
+    const styleBefore = cloneStyle(box.style);
+    s.clip.shapes = [...s.clip.shapes, shape];
+    markUnsaved();
+    record({ t: 'style', pageId: pg.id, boxId: box.id, before: styleBefore, after: cloneStyle(box.style) });
+  }
+
+  function onMaskPointerDown(e) {
+    if (e.button !== 0 || !maskArmed || !pageFrameEl) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const p = maskPoint(e);
+    // The polygon is click-built rather than dragged; the other two are drags.
+    if (maskTool.id === 'poly') {
+      maskDraft.poly = [...(maskDraft.poly ?? []), p];
+      return;
+    }
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    const pid = e.pointerId;
+    const start = p;
+    if (maskTool.id === 'brush') maskDraft.shape = { kind: 'stroke', size: s.clip.brushSize, pts: [p] };
+    else maskDraft.shape = { kind: 'ellipse', cx: p[0], cy: p[1], rx: 0, ry: 0 };
+    const move = (ev) => {
+      if (ev.pointerId !== pid || !maskDraft.shape) return;
+      const q = maskPoint(ev);
+      if (maskDraft.shape.kind === 'stroke') {
+        const last = maskDraft.shape.pts[maskDraft.shape.pts.length - 1];
+        if (Math.hypot(q[0] - last[0], q[1] - last[1]) > 1.5) maskDraft.shape.pts.push(q);
+      } else {
+        maskDraft.shape.cx = (start[0] + q[0]) / 2;
+        maskDraft.shape.cy = (start[1] + q[1]) / 2;
+        maskDraft.shape.rx = Math.abs(q[0] - start[0]) / 2;
+        maskDraft.shape.ry = Math.abs(q[1] - start[1]) / 2;
+      }
+    };
+    const ac = new AbortController();
+    const end = (ev) => {
+      if (ev.pointerId !== pid) return;
+      live.delete(ac);
+      ac.abort();
+      const sh = maskDraft.shape;
+      maskDraft.shape = null;
+      if (!sh) return;
+      // An ellipse too small to see was a slip, not a shape.
+      if (sh.kind === 'ellipse' && (sh.rx < 1 || sh.ry < 1)) return;
+      commitMaskShape(sh);
+    };
+    live.add(ac);
+    document.addEventListener('pointermove', move, { signal: ac.signal });
+    document.addEventListener('pointerup', end, { signal: ac.signal });
+    document.addEventListener('pointercancel', end, { signal: ac.signal });
+  }
+
+  // Double-click closes the polygon; Escape drops it.
+  function onMaskDblClick(e) {
+    if (maskTool.id !== 'poly' || !maskDraft.poly) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pts = maskDraft.poly;
+    maskDraft.poly = null;
+    if (pts.length >= 3) commitMaskShape({ kind: 'poly', pts });
+  }
+  $effect(() => {
+    if (!maskArmed) {
+      maskDraft.poly = null;
+      maskDraft.shape = null;
+      return;
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape' && maskDraft.poly) {
+        e.preventDefault();
+        maskDraft.poly = null;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  // Everything the mask overlay draws: committed shapes plus the draft.
+  const maskShapesShown = $derived.by(() => {
+    if (!(selected && !editing && !bulkOn && s.clip?.on)) return null;
+    const out = [...s.clip.shapes];
+    if (maskDraft.shape) out.push(maskDraft.shape);
+    return out;
+  });
+
+  // Right-click on a path anchor removes it (the path keeps at least two).
+  function onAnchorContextMenu(e, i) {
+    e.preventDefault();
+    e.stopPropagation();
+    const next = removePathAnchor(s.path.pts, i);
+    if (next === s.path.pts) return;
+    const styleBefore = cloneStyle(box.style);
+    s.path.pts = next;
+    markUnsaved();
+    record({ t: 'style', pageId: pg.id, boxId: box.id, before: styleBefore, after: cloneStyle(box.style) });
+  }
+
+  // The gizmo's polyline, in zoomed box-local px.
+  const gizmoLine = $derived.by(() => {
+    if (!(selected && !editing && !bulkOn && s.path?.on && (s.path.pts?.length ?? 0) >= 2)) return null;
+    return pathPolyline(s.path.pts, z)
+      .map((p) => `${p[0]},${p[1]}`)
+      .join(' ');
+  });
+
   // Inline contenteditable undo stack.
   const fieldUndo = createFieldUndo();
 
@@ -569,10 +908,42 @@
     </svg>
   {/if}
 
+  {#if mbTaps.length}
+    <svg class="rough-def" width="0" height="0" aria-hidden="true">
+      <!-- The directional smear, as the exporter's tap list stated in SVG:
+           every tap is shifted off the source and added into a running sum
+           (feComposite/arithmetic, k2 = the tap's weight, k3 = 1), which is
+           exactly the exporter's 'lighter' accumulation. sRGB interpolation,
+           because canvas compositing is sRGB and the two smears must be one
+           smear. Offsets are page px scaled by the zoom, like the blur
+           radius. The first tap is the centre one (dx = dy = 0), so it seeds
+           the sum straight off SourceGraphic. -->
+      <filter id={mbId} x={mbRegion.x} y={mbRegion.y} width={mbRegion.w} height={mbRegion.h} color-interpolation-filters="sRGB">
+        {#each mbTaps as t, i (i)}
+          {#if i === 0}
+            <feComposite in="SourceGraphic" in2="SourceGraphic" operator="arithmetic" k1="0" k2={t.w} k3="0" k4="0" result="p0" />
+          {:else}
+            <feOffset in="SourceGraphic" dx={t.dx * z} dy={t.dy * z} result={`t${i}`} />
+            <feComposite in={`t${i}`} in2={`p${i - 1}`} operator="arithmetic" k1="0" k2={t.w} k3="1" k4="0" result={`p${i}`} />
+          {/if}
+        {/each}
+      </filter>
+    </svg>
+  {/if}
+
   {#if selected && jp}
     <div class="jp-pill" class:sfx={isSfx} contenteditable="false">{jp}</div>
   {/if}
 
+  <!-- The wrapper exists for the mask: `mask-image` needs an element whose
+       (0,0) is the box's own top-left, and the text stack is a centred flex
+       child with no fixed origin. It replicates the box's flex layout and
+       padding, so with the mask off it changes nothing. The selection
+       handles and the jp pill stay outside it, unmasked. -->
+  <div
+    class="clipwrap"
+    style="justify-content:{justify};align-items:{alignItems};padding:{2 * z}px;{maskCss}"
+  >
   {#if editing}
     <div
       class="txt editable"
@@ -610,6 +981,63 @@
       {/each}
     </div>
   {/if}
+  </div>
+
+  {#if gizmoLine}
+    <!-- The path gizmo: the baked curve, an anchor dot per point and its two
+         handle dots, all draggable. Outside the clip wrapper on purpose - the
+         curve must stay visible where the clip has cropped the letters. -->
+    <svg class="path-gizmo" width={box.w * z} height={box.h * z} aria-hidden="true">
+      <polyline points={gizmoLine} />
+      {#each s.path.pts as p, i (i)}
+        <line x1={p.x * z} y1={p.y * z} x2={(p.x + p.ix) * z} y2={(p.y + p.iy) * z} />
+        <line x1={p.x * z} y1={p.y * z} x2={(p.x + p.ox) * z} y2={(p.y + p.oy) * z} />
+        <rect class="ph" x={(p.x + p.ix) * z - 4} y={(p.y + p.iy) * z - 4} width="8" height="8" onpointerdown={(e) => startPathDrag(e, i, 'in')} />
+        <rect class="ph" x={(p.x + p.ox) * z - 4} y={(p.y + p.oy) * z - 4} width="8" height="8" onpointerdown={(e) => startPathDrag(e, i, 'out')} />
+        <circle class="pa" cx={p.x * z} cy={p.y * z} r="5" onpointerdown={(e) => startPathDrag(e, i, 'a')} oncontextmenu={(e) => onAnchorContextMenu(e, i)} />
+      {/each}
+    </svg>
+  {/if}
+
+  {#if maskShapesShown}
+    <!-- The mask overlay: committed shapes (and the drag in progress) drawn
+         as outlines so the user can see what they have painted, plus - while
+         a tool is armed - a full-coverage capture surface that turns the
+         pointer into shapes. Outside the clip wrapper on purpose: the
+         outlines must stay visible where the mask has hidden the letters. -->
+    <svg class="mask-gizmo" class:excl={s.clip.mode === 'exclude'} width={box.w * z} height={box.h * z} aria-hidden="true">
+      {#if maskArmed}
+        <rect
+          class="capture"
+          x={-MASK_EXPAND * z}
+          y={-MASK_EXPAND * z}
+          width={(box.w + MASK_EXPAND * 2) * z}
+          height={(box.h + MASK_EXPAND * 2) * z}
+          onpointerdown={onMaskPointerDown}
+          ondblclick={onMaskDblClick}
+        />
+      {/if}
+      {#each maskShapesShown as sh, i (i)}
+        {#if sh.kind === 'ellipse'}
+          <ellipse cx={sh.cx * z} cy={sh.cy * z} rx={sh.rx * z} ry={sh.ry * z} />
+        {:else if sh.kind === 'poly'}
+          <polygon points={sh.pts.map(([px, py]) => `${px * z},${py * z}`).join(' ')} />
+        {:else}
+          <polyline
+            class="stroke"
+            points={sh.pts.map(([px, py]) => `${px * z},${py * z}`).join(' ')}
+            style="stroke-width:{sh.size * z}px"
+          />
+        {/if}
+      {/each}
+      {#if maskDraft.poly}
+        <polyline class="draft" points={maskDraft.poly.map(([px, py]) => `${px * z},${py * z}`).join(' ')} />
+        {#each maskDraft.poly as [px, py], i (i)}
+          <circle class="vert" cx={px * z} cy={py * z} r="3.5" />
+        {/each}
+      {/if}
+    </svg>
+  {/if}
 
   {#if selected && !editing && !bulkOn}
     <div class="rotate-stem"></div>
@@ -634,4 +1062,30 @@
   /* Curved layers are already absolute (.arc is inset:0), so this only has to
      give them something to be absolute inside. */
   .arcstack { position: absolute; inset: 0; }
+  /* The clip wrapper mirrors the box's own flex layout (justify/align/padding
+     are inlined per box) so the text lands exactly where it did as a direct
+     child. Its border box IS the box rect, which is the frame the clip-path
+     is stated in. */
+  .clipwrap { position: absolute; inset: 0; display: flex; box-sizing: border-box; }
+  /* The path gizmo. The svg itself lets clicks through to the box; only the
+     anchors and handles take the pointer. Colours are TypeBubble's, which read
+     well on both white pages and dark art. */
+  .path-gizmo { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+  .path-gizmo polyline { fill: none; stroke: #00d5e0; stroke-width: 1.5; }
+  .path-gizmo line { stroke: #663399; stroke-width: 1; }
+  .path-gizmo .pa, .path-gizmo .ph { pointer-events: all; cursor: grab; }
+  .path-gizmo .pa { fill: #e33; stroke: #fff; stroke-width: 1; }
+  .path-gizmo .ph { fill: #fff; stroke: #663399; stroke-width: 1; }
+  /* The mask overlay. Shape outlines are hints, not paint: red for exclusion
+     (this ink goes away), teal for inclusion (this ink stays). The capture
+     rect is the drawing surface while a tool is armed; it reaches past the
+     box exactly as far as the mask image does. */
+  .mask-gizmo { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+  .mask-gizmo .capture { fill: transparent; pointer-events: all; cursor: crosshair; }
+  .mask-gizmo ellipse, .mask-gizmo polygon { fill: rgba(0, 180, 190, 0.14); stroke: #00b4be; stroke-width: 1; }
+  .mask-gizmo .stroke { fill: none; stroke: rgba(0, 180, 190, 0.3); stroke-linecap: round; stroke-linejoin: round; }
+  .mask-gizmo.excl ellipse, .mask-gizmo.excl polygon { fill: rgba(230, 60, 60, 0.14); stroke: #e33; }
+  .mask-gizmo.excl .stroke { stroke: rgba(230, 60, 60, 0.3); }
+  .mask-gizmo .draft { fill: none; stroke: #f90; stroke-width: 1.5; stroke-dasharray: 4 3; }
+  .mask-gizmo .vert { fill: #f90; stroke: #fff; stroke-width: 1; }
 </style>

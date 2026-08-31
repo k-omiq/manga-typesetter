@@ -755,6 +755,124 @@ export function roughenPixels(src, dst, r, { ss = 1, originX = 0, originY = 0 } 
   return dst;
 }
 
+// ---------------------------------------------------------------------------
+// Motion blur.
+//
+// TypeBubble's shader, restated as a flat tap list. The original (see
+// external/TypeBubble/src/Shaders/motion_blur.gdshader) runs `amount`
+// iterations of the Experience-Monks 5-tap gaussian, each iteration at a
+// growing spread (`size = amount - i`), and divides the sum by `amount + 1` -
+// which dims the picture by amount/(amount+1), and that dimming is part of
+// the look, so it is kept. Every sample is a point mass on the line through
+// the direction vector, so the whole thing collapses to one weighted tap
+// list, computed here once and executed by BOTH renderers: the editor as an
+// SVG feOffset + feComposite/arithmetic accumulation chain, the exporter as
+// 'lighter' canvas draws at each tap's weight. One list, two executions, the
+// same smear.
+//
+// `x`/`y` are the shader's blur_direction (pixels per unit step - the shader
+// divides its uv offsets by pixel size, so the vector is already in pixels),
+// `amount` its iteration count. Direction (0,0) means no taps at all: the
+// shader would still dim by 1/(amount+1), but a smear control that only
+// darkens is a bug, not a look.
+const MB_OFF1 = 1.3846153846;
+const MB_OFF2 = 3.2307692308;
+const MB_W0 = 0.227027027;
+const MB_W1 = 0.3162162162;
+const MB_W2 = 0.0702702703;
+
+export function motionBlurTaps(x, y, amount) {
+  const dx = Number(x) || 0;
+  const dy = Number(y) || 0;
+  if (dx === 0 && dy === 0) return [];
+  const it = Math.min(32, Math.max(1, Math.round(Number(amount) || 0)));
+  const norm = 1 / (it + 1);
+  // The centre tap is sampled once per iteration, always at the origin.
+  const out = [{ dx: 0, dy: 0, w: MB_W0 * it * norm }];
+  for (let s = 1; s <= it; s++) {
+    for (const [c, w] of [[MB_OFF1, MB_W1], [MB_OFF2, MB_W2]]) {
+      out.push({ dx: c * dx * s, dy: c * dy * s, w: w * norm });
+      out.push({ dx: -c * dx * s, dy: -c * dy * s, w: w * norm });
+    }
+  }
+  return out;
+}
+
+// The editor's live filter pays for taps in a way the exporter does not: every
+// named result in an SVG filter chain is its own raster surface in WebKit, so
+// 129 taps on one box is hundreds of megabytes of backing store the canvas
+// path never allocates. The preview therefore samples the same smear coarser:
+// at most `maxIt` iterations stretched over the full extent (offsets scale
+// with the step, so scaling the direction keeps the reach), re-dimmed to the
+// full list's it/(it+1) brightness so the preview and the export match in
+// tone. The exporter keeps calling `motionBlurTaps` - its accumulation is flat
+// canvas draws, where taps are nearly free.
+export function motionBlurPreviewTaps(x, y, amount, maxIt = 8) {
+  const dx = Number(x) || 0;
+  const dy = Number(y) || 0;
+  if (dx === 0 && dy === 0) return [];
+  const it = Math.min(32, Math.max(1, Math.round(Number(amount) || 0)));
+  if (it <= maxIt) return motionBlurTaps(dx, dy, it);
+  const stretch = it / maxIt;
+  const dim = (it / (it + 1)) / (maxIt / (maxIt + 1));
+  return motionBlurTaps(dx * stretch, dy * stretch, maxIt).map((t) => ({ ...t, w: t.w * dim }));
+}
+
+// How far the smear can carry ink past the glyphs, in page px: the furthest
+// tap, plus a pixel for the rounding.
+export function motionBlurExtent(mb) {
+  if (!mb?.on) return 0;
+  const d = Math.hypot(Number(mb.x) || 0, Number(mb.y) || 0);
+  if (d === 0) return 0;
+  const it = Math.min(32, Math.max(1, Math.round(Number(mb.amount) || 0)));
+  return Math.ceil(MB_OFF2 * d * it) + 1;
+}
+
+// ---------------------------------------------------------------------------
+// The visibility mask.
+//
+// Paints the style's mask shapes as opaque ink into `ctx`, in the same
+// box-local page px the shapes are stored in. What the caller does with the
+// ink is the mode: the exporter composites it 'destination-in' (include) or
+// 'destination-out' (exclude) over the finished raster, the editor turns the
+// same drawing into a CSS mask-image. One painter, so the two masks are the
+// one mask.
+export function drawClipShapes(ctx, shapes) {
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#fff';
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const sh of shapes ?? []) {
+    if (sh.kind === 'ellipse') {
+      ctx.beginPath();
+      ctx.ellipse(sh.cx, sh.cy, sh.rx, sh.ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (sh.kind === 'poly') {
+      ctx.beginPath();
+      sh.pts.forEach(([px, py], i) => (i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)));
+      ctx.closePath();
+      ctx.fill();
+    } else if (sh.kind === 'stroke') {
+      if (sh.pts.length === 1) {
+        // A click with no drag: the brush's dot.
+        ctx.beginPath();
+        ctx.arc(sh.pts[0][0], sh.pts[0][1], sh.size / 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        sh.pts.forEach(([px, py], i) => (i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)));
+        ctx.lineWidth = sh.size;
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+// Whether the mask changes anything at all: on, with at least one shape.
+export function clipActive(clip) {
+  return !!(clip?.on && (clip.shapes?.length ?? 0) > 0);
+}
+
 // Which fill the style asks for. Pattern beats gradient when both are on, which
 // is stated once here rather than in each renderer's if-chain.
 export function fillKind(style) {

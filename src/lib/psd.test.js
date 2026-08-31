@@ -430,11 +430,12 @@ describe('textLayerFor', () => {
         { color: '#000000', pos: 1 },
       ],
     };
-    const layer = textLayerFor(page, box({ ...baseStyle, gradient: g, fillOpacity: 0.5 }), rendered);
+    const layer = textLayerFor(page, box({ ...baseStyle, gradient: g }), rendered);
     expect(layer.effects.gradientOverlay).toHaveLength(1);
     const go = layer.effects.gradientOverlay[0];
     expect(go.angle).toBe(-90); // CSS 180deg (top→bottom) is Photoshop's -90
-    expect(go.opacity).toBe(0.5);
+    // `fillOpacity` is gone from the schema; the overlay is always full-on.
+    expect(go.opacity).toBe(1);
     expect(go.gradient.colorStops.map((c) => c.location)).toEqual([0, 1]);
 
     // Per-line scope has no Photoshop equivalent, and neither has a pattern.

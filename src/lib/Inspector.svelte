@@ -21,15 +21,27 @@
   } from './store.svelte.js';
   import { record } from './editor/history.svelte.js';
   import { modKey } from './format.js';
-  import { PATTERN_KINDS, GRADIENT_MAX_STOPS } from './data.js';
+  import {
+    PATTERN_KINDS,
+    GRADIENT_MAX_STOPS,
+    defaultPathPts,
+  } from './data.js';
   import { gradientCss, patternTileCanvas, sampleStops } from './text-paint.js';
+  import { insertPathAnchor } from './measure.js';
+  import { maskTool, setMaskTool } from './mask-tool.svelte.js';
   import { prefs } from './prefs.svelte.js';
   // Which tab is open is session state shared with the keyboard - see
   // inspector-tabs.svelte.js. The panel is one of two writers, not the owner.
-  import { inspectorTab, setInspectorTab } from './inspector-tabs.svelte.js';
+  import {
+    inspectorTab,
+    setInspectorTab,
+    effectsSubTab,
+    setEffectsSubTab,
+  } from './inspector-tabs.svelte.js';
   import { presets, savePreset, removePreset } from './presets.svelte.js';
   import {
     tabIcons,
+    effectsSubTabIcons,
     iconRotate,
     iconGradientLinear,
     iconGradientRadial,
@@ -76,6 +88,29 @@
     document.getElementById(`insp-tab-${next}`)?.focus();
   }
 
+  const EFFECTS_TABS = [
+    ['stroke', 'Stroke'],
+    ['shadow', 'Shadow'],
+    ['warp', 'Warp'],
+    ['blur', 'Blur'],
+    ['edges', 'Edges'],
+    ['mask', 'Mask'],
+  ];
+
+  function onSubTabKey(e, id) {
+    const i = EFFECTS_TABS.findIndex(([t]) => t === id);
+    let n = null;
+    if (e.key === 'ArrowLeft') n = (i + EFFECTS_TABS.length - 1) % EFFECTS_TABS.length;
+    else if (e.key === 'ArrowRight') n = (i + 1) % EFFECTS_TABS.length;
+    else if (e.key === 'Home') n = 0;
+    else if (e.key === 'End') n = EFFECTS_TABS.length - 1;
+    if (n == null) return;
+    e.preventDefault();
+    const next = EFFECTS_TABS[n][0];
+    setEffectsSubTab(next);
+    document.getElementById(`insp-subtab-${next}`)?.focus();
+  }
+
   function clamp(v, a, b) {
     return Math.max(a, Math.min(b, v));
   }
@@ -102,12 +137,35 @@
 
   const fitOf = (snap) => ({ y: snap.y, h: snap.h });
 
+  // The box as it stood BEFORE the change `touch` is being told about. Every
+  // handler in this panel mutates first and calls `touch` after, so a snapshot
+  // taken inside `touch` is already the after - and a one-click edit (a
+  // switch, a mode button) then diffed as before === after and recorded
+  // nothing: single-click changes were simply not undoable, and a slider
+  // burst lost its first tick. So the snapshot is taken where the change has
+  // provably not happened yet: a capture-phase pointerdown/keydown on the
+  // panel itself, which runs before any control's own handler. `armSnap`
+  // refreshes it only while no entry is pending - two edits inside one settle
+  // window are one burst, and the burst diffs against its own start.
+  let preSnap = null;
+  function armSnap() {
+    if (!box) return;
+    if (pending && pending.boxId === box.id) return;
+    preSnap = { boxId: box.id, snap: snapOf(box) };
+  }
+
   // Explicit geometry edits record resize history.
   function touch(opts) {
 
     if (pending && pending.boxId !== box?.id) settle();
 
-    if (box && !pending) pending = { pageId: page().id, boxId: box.id, before: snapOf(box) };
+    if (box && !pending) {
+      pending = {
+        pageId: page().id,
+        boxId: box.id,
+        before: preSnap?.boxId === box.id ? preSnap.snap : snapOf(box),
+      };
+    }
     if (pending && opts?.geom) pending.geom = true;
     if (box) autoFitBox(box);
     markUnsaved();
@@ -136,6 +194,11 @@
     clearTimeout(settleT);
     const pend = pending;
     pending = null;
+    // The armed snapshot served the burst that just closed. Cleared so a later
+    // mutation that somehow arrives without its own pointerdown/keydown (a
+    // scripted write, a test) falls back to a fresh snapshot instead of
+    // blaming this burst's start for changes it never saw.
+    preSnap = null;
     if (!pend) return;
     // Ignore pending edits for previous pages.
     if (pend.pageId !== page().id) return;
@@ -736,7 +799,10 @@
   </div>
 {:else}
   {@const s = box.style}
-  <div class="insp">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- Capture phase, so the snapshot lands before any control's own handler
+       mutates the style - see armSnap. -->
+  <div class="insp" onpointerdowncapture={armSnap} onkeydowncapture={armSnap}>
     <div class="insp-tabs" role="tablist" aria-label="Text box options">
       {#each TABS as [id, label] (id)}
         <button
@@ -1038,17 +1104,10 @@
         <div class="insp-rule"></div>
 
         <div class="grp">
-          <span class="lbl">Fill opacity</span>
+          <span class="lbl">Opacity</span>
           <div class="slider-row">
-            <input type="range" min="0" max="100" step="1" value={pct(s.fillOpacity)} aria-label="Fill opacity" oninput={(e) => setAlpha(s, 'fillOpacity', e.target.value)} />
-            <input class="num-s" type="number" min="0" max="100" step="1" value={pct(s.fillOpacity)} title="Fill opacity, %" aria-label="Fill opacity, percent" onchange={(e) => commitAlpha(s, 'fillOpacity', e)} />
-          </div>
-        </div>
-        <div class="grp">
-          <span class="lbl">Box opacity</span>
-          <div class="slider-row">
-            <input type="range" min="0" max="100" step="1" value={pct(s.opacity)} aria-label="Box opacity" oninput={(e) => setAlpha(s, 'opacity', e.target.value)} />
-            <input class="num-s" type="number" min="0" max="100" step="1" value={pct(s.opacity)} title="Box opacity, %" aria-label="Box opacity, percent" onchange={(e) => commitAlpha(s, 'opacity', e)} />
+            <input type="range" min="0" max="100" step="1" value={pct(s.opacity)} aria-label="Opacity" oninput={(e) => setAlpha(s, 'opacity', e.target.value)} />
+            <input class="num-s" type="number" min="0" max="100" step="1" value={pct(s.opacity)} title="Opacity, %" aria-label="Opacity, percent" onchange={(e) => commitAlpha(s, 'opacity', e)} />
           </div>
         </div>
       </div>
@@ -1057,90 +1116,296 @@
     <!-- ===== Effects ===== -->
     {#if tab === 'effects'}
       <div class="insp-pane" role="tabpanel" id="insp-pane-effects" aria-labelledby="insp-tab-effects">
-        <!-- Strokes: innermost first, which is also the order they are listed. -->
-        {@render secHead('Strokes · inner to outer')}
-        <div class="grp">
-          {#if !s.strokes.length}
-            <div class="insp-none">No stroke.</div>
-          {/if}
-          <div class="insp-list k-stroke">
-            {#if s.strokes.length}
-              <div class="insp-cap"><span></span><span class="left">Colour</span><span>Width</span><span>Op %</span><span></span></div>
+        <div class="sub-tabs" role="tablist" aria-label="Effects options">
+          {#each EFFECTS_TABS as [id, label] (id)}
+            <button
+              type="button"
+              role="tab"
+              id="insp-subtab-{id}"
+              class="sub-tab"
+              class:on={effectsSubTab.id === id}
+              aria-selected={effectsSubTab.id === id}
+              aria-label={label}
+              tabindex={effectsSubTab.id === id ? 0 : -1}
+              title={label}
+              onclick={() => setEffectsSubTab(id)}
+              onkeydown={(e) => onSubTabKey(e, id)}
+            >
+              {@html effectsSubTabIcons[id]}
+            </button>
+          {/each}
+        </div>
+
+        {#if effectsSubTab.id === 'stroke'}
+          <!-- Strokes: innermost first, which is also the order they are listed. -->
+          {@render secHead('Strokes · inner to outer')}
+          <div class="grp">
+            {#if !s.strokes.length}
+              <div class="insp-none">No stroke.</div>
             {/if}
-            {#each s.strokes as k, i (k)}
-              <div class="insp-row">
-                {@render swatchCell(k, 'color', `Stroke ${i + 1} colour`)}
-                <input type="text" class="hex" value={k.color} aria-label="Stroke {i + 1} hex colour" oninput={hexInput} onchange={(e) => setHex(k, 'color', e.target.value, e.target)} />
-                <input type="number" min="0.5" max="40" step="0.5" value={k.width} aria-label="Stroke {i + 1} width" title="Visible band width, page px" oninput={(e) => setNum(k, 'width', e.target.value, 0.5, 40)} />
-                <input type="number" min="0" max="100" step="1" value={pct(k.opacity)} aria-label="Stroke {i + 1} opacity" title="Opacity, %" oninput={(e) => setAlpha(k, 'opacity', e.target.value)} />
-                {@render rmBtn(`stroke ${i + 1}`, () => removeStroke(i))}
-              </div>
-            {/each}
+            <div class="insp-list k-stroke">
+              {#if s.strokes.length}
+                <div class="insp-cap"><span></span><span class="left">Colour</span><span>Width</span><span>Op %</span><span></span></div>
+              {/if}
+              {#each s.strokes as k, i (k)}
+                <div class="insp-row">
+                  {@render swatchCell(k, 'color', `Stroke ${i + 1} colour`)}
+                  <input type="text" class="hex" value={k.color} aria-label="Stroke {i + 1} hex colour" oninput={hexInput} onchange={(e) => setHex(k, 'color', e.target.value, e.target)} />
+                  <input type="number" min="0.5" max="40" step="0.5" value={k.width} aria-label="Stroke {i + 1} width" title="Visible band width, page px" oninput={(e) => setNum(k, 'width', e.target.value, 0.5, 40)} />
+                  <input type="number" min="0" max="100" step="1" value={pct(k.opacity)} aria-label="Stroke {i + 1} opacity" title="Opacity, %" oninput={(e) => setAlpha(k, 'opacity', e.target.value)} />
+                  {@render rmBtn(`stroke ${i + 1}`, () => removeStroke(i))}
+                </div>
+              {/each}
+            </div>
+            {@render addBtn('Add stroke', addStroke)}
           </div>
-          {@render addBtn('Add stroke', addStroke)}
-        </div>
+        {/if}
 
-        <div class="insp-rule"></div>
-
-        <!-- Shadows: the first one is painted on top of the rest. -->
-        {@render secHead('Shadows · first on top')}
-        <div class="grp">
-          {#if !s.shadows.length}
-            <div class="insp-none">No shadow.</div>
-          {/if}
-          <div class="insp-list k-shadow">
-            {#if s.shadows.length}
-              <div class="insp-cap"><span></span><span>X</span><span>Y</span><span>Blur</span><span>Op %</span><span></span></div>
+        {#if effectsSubTab.id === 'shadow'}
+          <!-- Shadows: the first one is painted on top of the rest. -->
+          {@render secHead('Shadows · first on top')}
+          <div class="grp">
+            {#if !s.shadows.length}
+              <div class="insp-none">No shadow.</div>
             {/if}
-            {#each s.shadows as sh, i (sh)}
-              <div class="insp-row">
-                {@render swatchCell(sh, 'color', `Shadow ${i + 1} colour`)}
-                <input type="number" min="-200" max="200" step="1" value={sh.x} aria-label="Shadow {i + 1} offset X" title="Offset X, page px" onchange={(e) => commitNum(sh, 'x', e, -200, 200)} />
-                <input type="number" min="-200" max="200" step="1" value={sh.y} aria-label="Shadow {i + 1} offset Y" title="Offset Y, page px" onchange={(e) => commitNum(sh, 'y', e, -200, 200)} />
-                <input type="number" min="0" max="50" step="1" value={sh.blur} aria-label="Shadow {i + 1} blur" title="Blur, page px" oninput={(e) => setNum(sh, 'blur', e.target.value, 0, 50)} />
-                <input type="number" min="0" max="100" step="1" value={pct(sh.opacity)} aria-label="Shadow {i + 1} opacity" title="Opacity, %" oninput={(e) => setAlpha(sh, 'opacity', e.target.value)} />
-                {@render rmBtn(`shadow ${i + 1}`, () => removeShadow(i))}
+            <div class="insp-list k-shadow">
+              {#if s.shadows.length}
+                <div class="insp-cap"><span></span><span>X</span><span>Y</span><span>Blur</span><span>Op %</span><span></span></div>
+              {/if}
+              {#each s.shadows as sh, i (sh)}
+                <div class="insp-row">
+                  {@render swatchCell(sh, 'color', `Shadow ${i + 1} colour`)}
+                  <input type="number" min="-200" max="200" step="1" value={sh.x} aria-label="Shadow {i + 1} offset X" title="Offset X, page px" onchange={(e) => commitNum(sh, 'x', e, -200, 200)} />
+                  <input type="number" min="-200" max="200" step="1" value={sh.y} aria-label="Shadow {i + 1} offset Y" title="Offset Y, page px" onchange={(e) => commitNum(sh, 'y', e, -200, 200)} />
+                  <input type="number" min="0" max="50" step="1" value={sh.blur} aria-label="Shadow {i + 1} blur" title="Blur, page px" oninput={(e) => setNum(sh, 'blur', e.target.value, 0, 50)} />
+                  <input type="number" min="0" max="100" step="1" value={pct(sh.opacity)} aria-label="Shadow {i + 1} opacity" title="Opacity, %" oninput={(e) => setAlpha(sh, 'opacity', e.target.value)} />
+                  {@render rmBtn(`shadow ${i + 1}`, () => removeShadow(i))}
+                </div>
+              {/each}
+            </div>
+            {@render addBtn('Add shadow', addShadow)}
+          </div>
+        {/if}
+
+        {#if effectsSubTab.id === 'warp'}
+          <div class="grp">
+            <span class="lbl" title="Bend the baseline upward/downward">Arc</span>
+            <div class="slider-row">
+              <input type="range" min="-100" max="100" step="1" value={s.curve} disabled={s.path.on || s.circle.on} title={s.path.on || s.circle.on ? 'Curve path or Circle is on; they override Arc' : undefined} aria-label="Arc" oninput={(e) => setNum(s, 'curve', e.target.value, -100, 100)} />
+              <input class="num-s" type="number" min="-100" max="100" step="1" value={s.curve} disabled={s.path.on || s.circle.on} title={s.path.on || s.circle.on ? 'Curve path or Circle is on; they override Arc' : 'Bend the baseline upward/downward'} aria-label="Arc, amount" onchange={(e) => commitNum(s, 'curve', e, -100, 100)} />
+            </div>
+          </div>
+          <div class="insp-rule"></div>
+          <div class="switch-row">
+            <button
+              type="button"
+              class="switch"
+              class:on={s.circle.on}
+              role="switch"
+              aria-checked={s.circle.on}
+              aria-label="Circle"
+              onclick={() => {
+                s.circle.on = !s.circle.on;
+                if (s.circle.on) s.path.on = false;
+                touch();
+              }}
+            ><span class="knob"></span></button>
+            <span class="lbl2">Circle</span>
+          </div>
+          <div class="insp-sub-body" class:disabled={!s.circle.on} style="padding:0;border:none;gap:11px">
+            <div class="grp">
+              <span class="lbl">Angle</span>
+              <div class="slider-row">
+                <input type="range" min="0" max="359" step="1" value={s.circle.angle} disabled={!s.circle.on} title="Turns the ring, degrees" aria-label="Angle" oninput={(e) => setNum(s.circle, 'angle', e.target.value, 0, 359)} />
+                <input class="num-s" type="number" min="0" max="359" step="1" value={s.circle.angle} disabled={!s.circle.on} title="Turns the ring, degrees" aria-label="Angle, degrees" onchange={(e) => commitNum(s.circle, 'angle', e, 0, 359)} />
               </div>
-            {/each}
+            </div>
+            <div class="switch-row">
+              <button
+                type="button"
+                class="switch"
+                class:on={s.circle.inside}
+                role="switch"
+                aria-checked={s.circle.inside}
+                aria-label="Inside (badge bottom)"
+                onclick={() => {
+                  if (!s.circle.on) return;
+                  s.circle.inside = !s.circle.inside;
+                  touch();
+                }}
+              ><span class="knob"></span></button>
+              <span class="lbl2">Inside (badge bottom)</span>
+            </div>
           </div>
-          {@render addBtn('Add shadow', addShadow)}
-        </div>
+          <div class="insp-rule"></div>
+          <div class="switch-row">
+            <button
+              type="button"
+              class="switch"
+              class:on={s.path.on}
+              role="switch"
+              aria-checked={s.path.on}
+              aria-label="Curve path"
+              onclick={() => {
+                s.path.on = !s.path.on;
+                if (s.path.on) s.circle.on = false;
+                if (s.path.on && s.path.pts.length < 2) s.path.pts = defaultPathPts(box.w, box.h);
+                touch();
+              }}
+            ><span class="knob"></span></button>
+            <span class="lbl2">Curve path</span>
+          </div>
+          {#if s.path.on}
+            <div class="insp-none">Drag the red anchors and square handles on the box. Right-click an anchor to remove it.</div>
+            {@render addBtn('Add anchor', () => { s.path.pts = insertPathAnchor(s.path.pts); touch(); })}
+            {@render addBtn('Reset path', () => { s.path.pts = defaultPathPts(box.w, box.h); touch(); })}
+          {/if}
+        {/if}
 
-        <div class="insp-rule"></div>
+        {#if effectsSubTab.id === 'blur'}
+          <div class="grp">
+            <span class="lbl">Blur</span>
+            <div class="slider-row">
+              <input type="range" min="0" max="20" step="0.5" value={s.blur} aria-label="Blur" oninput={(e) => setNum(s, 'blur', e.target.value, 0, 20)} />
+              <input class="num-s" type="number" min="0" max="20" step="0.5" value={s.blur} title="Blur, page px" aria-label="Blur, page px" onchange={(e) => commitNum(s, 'blur', e, 0, 20)} />
+            </div>
+          </div>
+          <div class="insp-rule"></div>
+          <div class="switch-row">
+            <button
+              type="button"
+              class="switch"
+              class:on={s.motionBlur.on}
+              role="switch"
+              aria-checked={s.motionBlur.on}
+              aria-label="Motion blur"
+              onclick={() => { s.motionBlur.on = !s.motionBlur.on; touch(); }}
+            ><span class="knob"></span></button>
+            <span class="lbl2">Motion blur</span>
+          </div>
+          <div class="insp-sub-body" class:disabled={!s.motionBlur.on} style="padding:0;border:none;gap:11px">
+            <div class="grp">
+              <span class="lbl">X</span>
+              <div class="slider-row">
+                <input type="range" min="-10" max="10" step="0.1" value={s.motionBlur.x} disabled={!s.motionBlur.on} aria-label="X" oninput={(e) => setNum(s.motionBlur, 'x', e.target.value, -10, 10)} />
+                <input class="num-s" type="number" min="-10" max="10" step="0.1" value={s.motionBlur.x} disabled={!s.motionBlur.on} title="Smear direction X, pixels per step" aria-label="X" onchange={(e) => commitNum(s.motionBlur, 'x', e, -10, 10)} />
+              </div>
+            </div>
+            <div class="grp">
+              <span class="lbl">Y</span>
+              <div class="slider-row">
+                <input type="range" min="-10" max="10" step="0.1" value={s.motionBlur.y} disabled={!s.motionBlur.on} aria-label="Y" oninput={(e) => setNum(s.motionBlur, 'y', e.target.value, -10, 10)} />
+                <input class="num-s" type="number" min="-10" max="10" step="0.1" value={s.motionBlur.y} disabled={!s.motionBlur.on} title="Smear direction Y, pixels per step" aria-label="Y" onchange={(e) => commitNum(s.motionBlur, 'y', e, -10, 10)} />
+              </div>
+            </div>
+            <div class="grp">
+              <span class="lbl">Amount</span>
+              <div class="slider-row">
+                <input type="range" min="1" max="32" step="1" value={s.motionBlur.amount} disabled={!s.motionBlur.on} aria-label="Amount" oninput={(e) => setNum(s.motionBlur, 'amount', e.target.value, 1, 32, true)} />
+                <input class="num-s" type="number" min="1" max="32" step="1" value={s.motionBlur.amount} disabled={!s.motionBlur.on} title="Blur iterations - more is smoother and longer" aria-label="Amount" onchange={(e) => commitNum(s.motionBlur, 'amount', e, 1, 32, true)} />
+              </div>
+            </div>
+          </div>
+        {/if}
 
-        {@render secHead('Distort')}
-        <div class="grp">
-          <span class="lbl" title="Bend the baseline upward/downward">Arc</span>
-          <div class="slider-row">
-            <input type="range" min="-100" max="100" step="1" value={s.curve} aria-label="Arc" oninput={(e) => setNum(s, 'curve', e.target.value, -100, 100)} />
-            <input class="num-s" type="number" min="-100" max="100" step="1" value={s.curve} title="Bend the baseline upward/downward" aria-label="Arc, amount" onchange={(e) => commitNum(s, 'curve', e, -100, 100)} />
+        {#if effectsSubTab.id === 'edges'}
+          <div class="switch-row">
+            <button type="button" class="switch" class:on={s.roughen.on} role="switch" aria-checked={s.roughen.on} aria-label="Roughen edges" onclick={() => { s.roughen.on = !s.roughen.on; touch(); }}><span class="knob"></span></button>
+            <span class="lbl2">Roughen edges</span>
           </div>
-        </div>
-        <div class="grp">
-          <span class="lbl">Blur</span>
-          <div class="slider-row">
-            <input type="range" min="0" max="20" step="0.5" value={s.blur} aria-label="Blur" oninput={(e) => setNum(s, 'blur', e.target.value, 0, 20)} />
-            <input class="num-s" type="number" min="0" max="20" step="0.5" value={s.blur} title="Blur, page px" aria-label="Blur, page px" onchange={(e) => commitNum(s, 'blur', e, 0, 20)} />
+          <div class="insp-sub-body" class:disabled={!s.roughen.on} style="padding:0;border:none;gap:11px">
+            <div class="grp">
+              <span class="lbl">Amount</span>
+              <div class="slider-row"><input type="range" min="0" max="20" step="0.5" value={s.roughen.amount} disabled={!s.roughen.on} aria-label="Roughen amount" oninput={(e) => setNum(s.roughen, 'amount', e.target.value, 0, 20)} /><input class="num-s" type="number" min="0" max="20" step="0.5" value={s.roughen.amount} disabled={!s.roughen.on} title="Distortion strength" aria-label="Roughen amount" onchange={(e) => commitNum(s.roughen, 'amount', e, 0, 20)} /></div>
+            </div>
+            <div class="grp">
+              <span class="lbl">Grain</span>
+              <div class="slider-row"><input type="range" min="0.01" max="0.2" step="0.005" value={s.roughen.detail} disabled={!s.roughen.on} aria-label="Roughen grain" oninput={(e) => setNum(s.roughen, 'detail', e.target.value, 0.01, 0.2)} /><input class="num-s" type="number" min="0.01" max="0.2" step="0.005" value={s.roughen.detail} disabled={!s.roughen.on} title="Grain density, 0.01–0.2" aria-label="Roughen grain" onchange={(e) => commitNum(s.roughen, 'detail', e, 0.01, 0.2)} /></div>
+            </div>
+            <div class="grp">
+              <label class="lbl" for="insp-seed">Seed</label>
+              <input id="insp-seed" type="number" min="0" max="999" value={s.roughen.seed} disabled={!s.roughen.on} title="Varies the distortion pattern; same seed = same result" oninput={(e) => setNum(s.roughen, 'seed', e.target.value, 0, 999, true)} />
+            </div>
           </div>
-        </div>
-        <div class="switch-row">
-          <button type="button" class="switch" class:on={s.roughen.on} role="switch" aria-checked={s.roughen.on} aria-label="Roughen edges" onclick={() => { s.roughen.on = !s.roughen.on; touch(); }}><span class="knob"></span></button>
-          <span class="lbl2">Roughen edges</span>
-        </div>
-        <div class="insp-sub-body" class:disabled={!s.roughen.on} style="padding:0;border:none;gap:11px">
-          <div class="grp">
-            <span class="lbl">Amount</span>
-            <div class="slider-row"><input type="range" min="0" max="20" step="0.5" value={s.roughen.amount} disabled={!s.roughen.on} aria-label="Roughen amount" oninput={(e) => setNum(s.roughen, 'amount', e.target.value, 0, 20)} /><input class="num-s" type="number" min="0" max="20" step="0.5" value={s.roughen.amount} disabled={!s.roughen.on} title="Distortion strength" aria-label="Roughen amount" onchange={(e) => commitNum(s.roughen, 'amount', e, 0, 20)} /></div>
+        {/if}
+
+        {#if effectsSubTab.id === 'mask'}
+          <div class="switch-row">
+            <button
+              type="button"
+              class="switch"
+              class:on={s.clip.on}
+              role="switch"
+              aria-checked={s.clip.on}
+              aria-label="Mask"
+              onclick={() => {
+                s.clip.on = !s.clip.on;
+                if (!s.clip.on && maskTool.id !== null) setMaskTool(maskTool.id);
+                touch();
+              }}
+            ><span class="knob"></span></button>
+            <span class="lbl2">Mask</span>
           </div>
-          <div class="grp">
-            <span class="lbl">Grain</span>
-            <div class="slider-row"><input type="range" min="0.01" max="0.2" step="0.005" value={s.roughen.detail} disabled={!s.roughen.on} aria-label="Roughen grain" oninput={(e) => setNum(s.roughen, 'detail', e.target.value, 0.01, 0.2)} /><input class="num-s" type="number" min="0.01" max="0.2" step="0.005" value={s.roughen.detail} disabled={!s.roughen.on} title="Grain density, 0.01–0.2" aria-label="Roughen grain" onchange={(e) => commitNum(s.roughen, 'detail', e, 0.01, 0.2)} /></div>
+          <div class="insp-sub-body" class:disabled={!s.clip.on} style="padding:0;border:none;gap:11px">
+            <div class="seg">
+              <button
+                type="button"
+                class:on={s.clip.mode === 'exclude'}
+                aria-pressed={s.clip.mode === 'exclude'}
+                title="Shapes hide the text under them"
+                onclick={() => { s.clip.mode = 'exclude'; touch(); }}
+              >Exclude</button>
+              <button
+                type="button"
+                class:on={s.clip.mode === 'include'}
+                aria-pressed={s.clip.mode === 'include'}
+                title="Only text under the shapes stays visible"
+                onclick={() => { s.clip.mode = 'include'; touch(); }}
+              >Include</button>
+            </div>
+            <div class="seg">
+              <button
+                type="button"
+                class:on={maskTool.id === 'brush'}
+                aria-pressed={maskTool.id === 'brush'}
+                onclick={() => { if (!s.clip.on) return; setMaskTool('brush'); }}
+              >Brush</button>
+              <button
+                type="button"
+                class:on={maskTool.id === 'poly'}
+                aria-pressed={maskTool.id === 'poly'}
+                onclick={() => { if (!s.clip.on) return; setMaskTool('poly'); }}
+              >Polygon</button>
+              <button
+                type="button"
+                class:on={maskTool.id === 'ellipse'}
+                aria-pressed={maskTool.id === 'ellipse'}
+                onclick={() => { if (!s.clip.on) return; setMaskTool('ellipse'); }}
+              >Ellipse</button>
+            </div>
+            <div class="grp">
+              <span class="lbl">Brush size</span>
+              <div class="slider-row">
+                <input type="range" min="2" max="200" step="1" value={s.clip.brushSize} disabled={!s.clip.on} aria-label="Brush size" oninput={(e) => setNum(s.clip, 'brushSize', e.target.value, 2, 200, true)} />
+                <input class="num-s" type="number" min="2" max="200" step="1" value={s.clip.brushSize} disabled={!s.clip.on} title="Brush size, page px" aria-label="Brush size, page px" onchange={(e) => commitNum(s.clip, 'brushSize', e, 2, 200, true)} />
+              </div>
+            </div>
+            <div class="insp-none">Draw on the box: brush drags, polygon clicks corner points (double-click closes, Esc cancels), ellipse drags a bounds box. Shapes hide or keep the text per the mode.</div>
+            <div class="mask-row">
+              <span class="mask-count">{s.clip.shapes.length} shape(s)</span>
+              <button
+                type="button"
+                class="rbtn"
+                disabled={!s.clip.shapes.length}
+                onclick={() => {
+                  if (!s.clip.shapes.length) return;
+                  s.clip.shapes = [];
+                  touch();
+                }}
+              >Clear shapes</button>
+            </div>
           </div>
-          <div class="grp">
-            <label class="lbl" for="insp-seed">Seed</label>
-            <input id="insp-seed" type="number" min="0" max="999" value={s.roughen.seed} disabled={!s.roughen.on} title="Varies the distortion pattern; same seed = same result" oninput={(e) => setNum(s.roughen, 'seed', e.target.value, 0, 999, true)} />
-          </div>
-        </div>
+        {/if}
       </div>
     {/if}
 
@@ -1629,5 +1894,51 @@
   .preset-row .rbtn.arm {
     color: var(--warn);
     border-color: var(--warn);
+  }
+
+  .sub-tabs {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 3px;
+  }
+  .sub-tab {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 24px;
+    padding: 0 2px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--t2);
+    cursor: pointer;
+    min-width: 0;
+  }
+  .sub-tab :global(svg) {
+    width: 15px;
+    height: 15px;
+  }
+  .sub-tab:hover {
+    color: var(--text);
+    background: var(--surface);
+  }
+  .sub-tab.on {
+    color: var(--accent-fg);
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .sub-tab:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .mask-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .mask-count {
+    font-size: 11.5px;
+    color: var(--t3);
   }
 </style>

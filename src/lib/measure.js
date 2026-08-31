@@ -97,6 +97,252 @@ export function arcLayout(text, style, sizePx) {
   return out;
 }
 
+// Lay out characters around a FULL circle, closed exactly: the radius comes
+// from the text's own advance (R = total / 2π), so the last letter meets the
+// first again whatever the font or size. Same contract as `arcLayout`:
+// positions relative to the box centre, rotation in radians, glyph drawn
+// centred on its anchor.
+//
+// `style.circle.angle` (degrees, clockwise) turns the whole ring.
+// `style.circle.inside` puts the text on the inner face instead - the bottom
+// arc of a badge: it starts at six o'clock, runs counter-clockwise, and every
+// glyph's top points at the centre, which is what keeps it readable.
+//
+// Letter spacing buys the ring one gap PER character rather than the line's
+// n-1: the ring closes, so the seam between the last glyph and the first is a
+// neighbour gap like any other - and widening the spacing is also the one
+// knob that grows the circle.
+export function circleLayout(text, style, sizePx) {
+  if (!text || sizePx <= 0 || !style || (style.size ?? 0) <= 0) return [];
+  const chars = [...text];
+  const widths = charWidths(text, style, sizePx);
+  const ls = (Number(style?.letterSpacing) || 0) * (style.size > 0 ? sizePx / style.size : 0);
+  const total = widths.reduce((a, b) => a + b, 0) + chars.length * ls;
+  if (!Number.isFinite(total) || total <= 0) return [];
+  const R = total / (2 * Math.PI);
+  const inside = !!style.circle?.inside;
+  const a0 = ((Number(style.circle?.angle) || 0) * Math.PI) / 180;
+  const out = [];
+  let cum = 0;
+  for (let i = 0; i < chars.length; i++) {
+    // Angle is arc length over radius, i.e. 2π x the share of the advance;
+    // measured clockwise from twelve o'clock, which is where `angle` 0 starts.
+    const t = (2 * Math.PI * (cum + widths[i] / 2)) / total;
+    const th = inside ? a0 + Math.PI - t : a0 + t;
+    out.push({
+      ch: chars[i],
+      x: R * Math.sin(th),
+      y: -R * Math.cos(th),
+      rot: inside ? th - Math.PI : th,
+      w: widths[i],
+    });
+    cum += widths[i] + ls;
+  }
+  return out;
+}
+
+// ---- text on a bezier path ----
+//
+// The path is `style.path.pts`: anchors in box-local page px, each with in/out
+// handle OFFSETS. Between anchor i and i+1 runs the cubic (P[i], P[i]+out[i],
+// P[i+1]+in[i+1], P[i+1]). Glyphs are placed by cumulative advance along the
+// path's arc length - real text-on-path, not TypeBubble's closest-point
+// projection, which folds glyphs together on tight bends - and rotated to the
+// tangent. The line as a whole sits on the path by `align`: left starts at the
+// path's start, right ends at its end, center centres it; text longer than the
+// path runs off the ends along the end tangents.
+//
+// Same contract as `arcLayout`: positions are relative to the BOX CENTRE, in
+// the same px `sizePx` is in (the caller passes zoomed size and gets zoomed
+// coordinates), rotation in radians, glyph drawn centred on its anchor.
+const PATH_SEG_SAMPLES = 48;
+
+function bez(p0, c1, c2, p1, t) {
+  const u = 1 - t;
+  const a = u * u * u;
+  const b = 3 * u * u * t;
+  const c = 3 * u * t * t;
+  const d = t * t * t;
+  return [
+    a * p0[0] + b * c1[0] + c * c2[0] + d * p1[0],
+    a * p0[1] + b * c1[1] + c * c2[1] + d * p1[1],
+  ];
+}
+
+function bezTan(p0, c1, c2, p1, t) {
+  const u = 1 - t;
+  const x = 3 * u * u * (c1[0] - p0[0]) + 6 * u * t * (c2[0] - c1[0]) + 3 * t * t * (p1[0] - c2[0]);
+  const y = 3 * u * u * (c1[1] - p0[1]) + 6 * u * t * (c2[1] - c1[1]) + 3 * t * t * (p1[1] - c2[1]);
+  // A degenerate tangent (handles collapsed onto the anchor at t=0/1) falls
+  // back to the chord, so a glyph never gets rotation NaN.
+  if (x === 0 && y === 0) return [p1[0] - p0[0], p1[1] - p0[1]];
+  return [x, y];
+}
+
+// The path baked to a polyline with cumulative arc lengths and per-sample
+// tangents. `scale` maps the stored page-px anchors into the caller's px.
+function bakePath(pts, scale) {
+  const P = pts.map((p) => ({
+    a: [p.x * scale, p.y * scale],
+    i: [(p.x + p.ix) * scale, (p.y + p.iy) * scale],
+    o: [(p.x + p.ox) * scale, (p.y + p.oy) * scale],
+  }));
+  const xs = [];
+  const tans = [];
+  const lens = [0];
+  let total = 0;
+  for (let i = 0; i < P.length - 1; i++) {
+    const p0 = P[i].a;
+    const c1 = P[i].o;
+    const c2 = P[i + 1].i;
+    const p1 = P[i + 1].a;
+    const from = i === 0 ? 0 : 1; // segment joints share a sample
+    for (let k = from; k <= PATH_SEG_SAMPLES; k++) {
+      const t = k / PATH_SEG_SAMPLES;
+      const pt = bez(p0, c1, c2, p1, t);
+      const tn = bezTan(p0, c1, c2, p1, t);
+      if (xs.length) {
+        const prev = xs[xs.length - 1];
+        total += Math.hypot(pt[0] - prev[0], pt[1] - prev[1]);
+        lens.push(total);
+      }
+      xs.push(pt);
+      tans.push(tn);
+    }
+  }
+  return { xs, tans, lens, total };
+}
+
+// Position + unit-ish tangent at arc length `s`, extrapolating past both ends
+// along the end tangents so an over-long line keeps its direction.
+function pathAt(baked, s) {
+  const { xs, tans, lens, total } = baked;
+  const unit = (v) => {
+    const n = Math.hypot(v[0], v[1]) || 1;
+    return [v[0] / n, v[1] / n];
+  };
+  if (s <= 0) {
+    const t = unit(tans[0]);
+    return { x: xs[0][0] + t[0] * s, y: xs[0][1] + t[1] * s, tan: t };
+  }
+  if (s >= total) {
+    const last = xs.length - 1;
+    const t = unit(tans[last]);
+    const over = s - total;
+    return { x: xs[last][0] + t[0] * over, y: xs[last][1] + t[1] * over, tan: t };
+  }
+  // Binary search for the sample span holding `s`.
+  let lo = 0;
+  let hi = lens.length - 1;
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    if (lens[mid] <= s) lo = mid;
+    else hi = mid;
+  }
+  const span = lens[hi] - lens[lo] || 1;
+  const f = (s - lens[lo]) / span;
+  const t = unit([
+    tans[lo][0] + (tans[hi][0] - tans[lo][0]) * f,
+    tans[lo][1] + (tans[hi][1] - tans[lo][1]) * f,
+  ]);
+  return {
+    x: xs[lo][0] + (xs[hi][0] - xs[lo][0]) * f,
+    y: xs[lo][1] + (xs[hi][1] - xs[lo][1]) * f,
+    tan: t,
+  };
+}
+
+// Split the path's longest segment in half and return a NEW pts array with an
+// anchor at the split. De Casteljau at t = 0.5, so the curve through the new
+// anchor is byte-for-byte the curve that was there - the anchor adds control,
+// never a kink. "Longest" is measured on the baked polyline, which is the
+// length the eye sees.
+export function insertPathAnchor(pts) {
+  if (!Array.isArray(pts) || pts.length < 2) return pts;
+  // Per-segment baked length.
+  let best = 0;
+  let bestLen = -1;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const seg = bakePath([pts[i], pts[i + 1]], 1);
+    if (seg.total > bestLen) {
+      bestLen = seg.total;
+      best = i;
+    }
+  }
+  const a = pts[best];
+  const b = pts[best + 1];
+  const p0 = [a.x, a.y];
+  const c1 = [a.x + a.ox, a.y + a.oy];
+  const c2 = [b.x + b.ix, b.y + b.iy];
+  const p3 = [b.x, b.y];
+  const mid = (u, v) => [(u[0] + v[0]) / 2, (u[1] + v[1]) / 2];
+  const q0 = mid(p0, c1);
+  const q1 = mid(c1, c2);
+  const q2 = mid(c2, p3);
+  const r0 = mid(q0, q1);
+  const r1 = mid(q1, q2);
+  const m = mid(r0, r1);
+  const out = pts.map((p) => ({ ...p }));
+  out[best] = { ...out[best], ox: q0[0] - a.x, oy: q0[1] - a.y };
+  out[best + 1] = { ...out[best + 1], ix: q2[0] - b.x, iy: q2[1] - b.y };
+  out.splice(best + 1, 0, {
+    x: m[0],
+    y: m[1],
+    ix: r0[0] - m[0],
+    iy: r0[1] - m[1],
+    ox: r1[0] - m[0],
+    oy: r1[1] - m[1],
+  });
+  return out;
+}
+
+// Remove one anchor, keeping at least two so the path stays a path.
+export function removePathAnchor(pts, i) {
+  if (!Array.isArray(pts) || pts.length <= 2 || i < 0 || i >= pts.length) return pts;
+  const out = pts.map((p) => ({ ...p }));
+  out.splice(i, 1);
+  return out;
+}
+
+// The baked path as a flat point list, for the editor's gizmo polyline.
+// `scale` maps the stored page px into the caller's px (the zoom).
+export function pathPolyline(pts, scale = 1) {
+  if (!Array.isArray(pts) || pts.length < 2) return [];
+  return bakePath(pts, scale).xs;
+}
+
+export function pathLayout(text, style, sizePx, boxW, boxH) {
+  const pts = style?.path?.pts;
+  if (!text || sizePx <= 0 || !style || (style.size ?? 0) <= 0) return [];
+  if (!Array.isArray(pts) || pts.length < 2) return [];
+  const chars = [...text];
+  const widths = charWidths(text, style, sizePx);
+  const scale = sizePx / style.size;
+  const ls = (Number(style?.letterSpacing) || 0) * scale;
+  const total = widths.reduce((a, b) => a + b, 0) + Math.max(0, chars.length - 1) * ls;
+  if (!Number.isFinite(total) || total <= 0) return [];
+  const baked = bakePath(pts, scale);
+  if (!(baked.total > 0)) return [];
+  const start =
+    style.align === 'left' ? 0 : style.align === 'right' ? baked.total - total : (baked.total - total) / 2;
+  const hw = (boxW * scale) / 2;
+  const hh = (boxH * scale) / 2;
+  const out = [];
+  let cum = 0;
+  for (let i = 0; i < chars.length; i++) {
+    const at = pathAt(baked, start + cum + widths[i] / 2);
+    out.push({
+      ch: chars[i],
+      x: at.x - hw,
+      y: at.y - hh,
+      rot: Math.atan2(at.tan[1], at.tan[0]),
+      w: widths[i],
+    });
+    cum += widths[i] + ls;
+  }
+  return out;
+}
+
 // Greedy word-wrap to a max pixel width. Respects explicit newlines.
 export function wrapLines(text, style, sizePx, maxWidth) {
   if (!text) return [''];

@@ -29,3 +29,15 @@ export function cycleInspectorTab(step = 1) {
   inspectorTab.id = INSPECTOR_TABS[(((from + step) % n) + n) % n];
   return inspectorTab.id;
 }
+
+// ===== Which Effects sub-tab is open =====
+// Session-only state, same reasoning as the main tabs.
+export const EFFECTS_SUBTABS = ['stroke', 'shadow', 'warp', 'blur', 'edges', 'mask'];
+
+export const effectsSubTab = $state({ id: 'stroke' });
+
+export function setEffectsSubTab(id) {
+  if (!EFFECTS_SUBTABS.includes(id)) return false;
+  effectsSubTab.id = id;
+  return true;
+}

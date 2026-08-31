@@ -1041,7 +1041,7 @@ describe('the style schema migration', () => {
     const s = normalizeStyle({ size: 30 });
     expect(s.strokes).toEqual(defaultStyle().strokes);
     expect(s.shadows).toEqual([]);
-    expect(s.fillOpacity).toBe(1);
+    expect('fillOpacity' in s).toBe(false);
     expect(s.blur).toBe(0);
     expect(s.gradient.on).toBe(false);
     expect(s.pattern.on).toBe(false);
@@ -1091,7 +1091,6 @@ const BULK_VALUES = () => ({
   lineHeight: 1.8,
   letterSpacing: 3,
   color: '#123456',
-  fillOpacity: 0.42,
   opacity: 0.33,
   // Three stops rather than the default two, and one of them part-transparent:
   // a bulk edit moves the WHOLE gradient, so a stop list of a different length
@@ -1119,6 +1118,9 @@ const BULK_VALUES = () => ({
   strokes: [{ color: '#abcdef', width: 9, opacity: 0.5 }],
   shadows: [{ x: 5, y: 6, blur: 7, color: '#0f0f0f', opacity: 0.8 }],
   blur: 7,
+  motionBlur: { on: true, x: 3, y: -1, amount: 8 },
+  clip: { on: true, mode: 'include', brushSize: 30, shapes: [{ kind: 'ellipse', cx: 10, cy: 10, rx: 5, ry: 5 }] },
+  circle: { on: true, angle: 90, inside: true },
   curve: 33,
   'roughen.on': true,
   'roughen.amount': 11,
@@ -1180,17 +1182,19 @@ describe('the bulk edit mask', () => {
   // fails this. Geometry cannot appear because x/y/w/h live on the box, not the
   // style - which is also why they stay the Inspector's.
   it('covers every leaf of the style, and nothing that is not one', () => {
-    // `gradient`, `pattern`, `strokes` and `shadows` are leaves in their own
-    // right - a bulk edit moves a whole gradient or a whole stroke list, never
-    // one field of one stroke, because splitting a list by index would name
-    // entries the target boxes do not have. Every other group is still one row
-    // per field.
+    // `gradient`, `pattern`, `strokes`, `shadows`, `motionBlur`, `clip` and
+    // `circle` are leaves in their own right - a bulk edit moves a whole
+    // gradient, smear or stroke list, never one field of one stroke. `path` is
+    // box-local geometry, so it stays the Inspector's along with x/y/w/h. Every
+    // other group is still one row per field.
     const WHOLE = new Set(BULK_WHOLE_LEAVES);
-    const leaves = Object.entries(defaultStyle()).flatMap(([k, v]) =>
-      v && typeof v === 'object' && !WHOLE.has(k) ? Object.keys(v).map((f) => `${k}.${f}`) : [k],
-    );
+    const leaves = Object.entries(defaultStyle())
+      .filter(([k]) => k !== 'path')
+      .flatMap(([k, v]) =>
+        v && typeof v === 'object' && !WHOLE.has(k) ? Object.keys(v).map((f) => `${k}.${f}`) : [k],
+      );
     expect([...BULK_PROPS].sort()).toEqual(leaves.sort());
-    for (const geom of ['x', 'y', 'w', 'h']) expect(BULK_PROPS).not.toContain(geom);
+    for (const geom of ['x', 'y', 'w', 'h', 'path']) expect(BULK_PROPS).not.toContain(geom);
   });
 
   // The panel's tick-all headers are laid out against GROUPS, which lives in

@@ -1,6 +1,6 @@
 // Native-resolution raster export via canvas 2D. PNG is lossless.
 import { app, page, toast, boxText, saveExportPrefs, isLongstrip, PAGE_W, PAGE_H } from './store.svelte.js';
-import { familyFor, fontShorthand, applyCase, layoutLines, arcLayout, maxLineWidth, BOX_PAD, balloonWidthsFor } from './measure.js';
+import { familyFor, fontShorthand, applyCase, layoutLines, arcLayout, circleLayout, pathLayout, maxLineWidth, BOX_PAD, balloonWidthsFor } from './measure.js';
 import {
   strokeBands,
   strokeExtent,
@@ -12,6 +12,10 @@ import {
   roughenPixels,
   stopColor,
   ensureNoisePhase,
+  motionBlurTaps,
+  motionBlurExtent,
+  drawClipShapes,
+  clipActive,
   TILE_SS,
 } from './text-paint.js';
 import { withPageImages } from './page-images.js';
@@ -164,10 +168,17 @@ function layoutBox(box, p) {
       s.roughen.on ? s.roughen.amount + 2 : 0,
     ) +
       (s.blur > 0 ? s.blur * 3 : 0) +
+      motionBlurExtent(s.motionBlur) +
       4,
   );
 
-  const isCurve = s.curve && s.curve !== 0 && text.trim() !== '';
+  // Every glyph-by-glyph layout - the bezier path, the closed circle and the
+  // arc - goes down the same "curve" path here: everything below it only
+  // reads `layout`, and the precedence (path > circle > arc) is exactly what
+  // the editor states.
+  const isPath = s.path?.on && (s.path.pts?.length ?? 0) >= 2 && text.trim() !== '';
+  const isCircle = !isPath && s.circle?.on && text.trim() !== '';
+  const isCurve = isPath || isCircle || (s.curve && s.curve !== 0 && text.trim() !== '');
 
   let lines = null;
   let layout = null;
@@ -181,7 +192,11 @@ function layoutBox(box, p) {
     blockY = 0;
 
   if (isCurve) {
-    layout = arcLayout(text, s, s.size);
+    layout = isPath
+      ? pathLayout(text, s, s.size, box.w, box.h)
+      : isCircle
+        ? circleLayout(text, s, s.size)
+        : arcLayout(text, s, s.size);
     let minX = 0,
       maxX = 0,
       minY = 0,
@@ -366,10 +381,7 @@ function paintBox(ctx, box, L) {
       drawFns.stroke();
       ctx.restore();
     }
-    ctx.save();
-    ctx.globalAlpha = s.fillOpacity ?? 1;
     drawFns.fill();
-    ctx.restore();
   };
 
   // The silhouette a shadow is cast from: the glyphs plus every stroke, as one
@@ -541,7 +553,49 @@ function renderBox(box, p) {
     octx.drawImage(cnv, 0, 0);
     octx.filter = 'none';
   }
+  // The directional smear, after the gaussian and before the roughening - the
+  // order the editor's filter list states. The tap list is the shader's whole
+  // sum flattened (see motionBlurTaps); an empty transparent canvas plus
+  // 'lighter' draws is an exact weighted sum, where source-over would
+  // composite instead of adding. Offsets are page px, applied in device px,
+  // same as every other filter here.
+  {
+    const taps = s.motionBlur?.on
+      ? motionBlurTaps(s.motionBlur.x, s.motionBlur.y, s.motionBlur.amount)
+      : [];
+    if (taps.length) {
+      const acc = document.createElement('canvas');
+      acc.width = cnv.width;
+      acc.height = cnv.height;
+      const actx = acc.getContext('2d');
+      actx.globalCompositeOperation = 'lighter';
+      for (const t of taps) {
+        actx.globalAlpha = t.w;
+        actx.drawImage(out, t.dx * SS, t.dy * SS);
+      }
+      out = acc;
+    }
+  }
   if (s.roughen.on) roughen(out.getContext('2d'), L, SS);
+  // The visibility mask, last of all: it decides what of the finished picture
+  // - blur, smear and crumple included - is shown at all, exactly as the
+  // editor's CSS mask sits outside its filter list. Shapes are box-local page
+  // px; (L.ox, L.oy) is the box's top-left inside the footprint.
+  if (clipActive(s.clip)) {
+    const m = document.createElement('canvas');
+    m.width = out.width;
+    m.height = out.height;
+    const mctx = m.getContext('2d');
+    mctx.scale(SS, SS);
+    mctx.translate(L.ox, L.oy);
+    drawClipShapes(mctx, s.clip.shapes);
+    const octx = out.getContext('2d');
+    octx.save();
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+    octx.globalCompositeOperation = s.clip.mode === 'include' ? 'destination-in' : 'destination-out';
+    octx.drawImage(m, 0, 0);
+    octx.restore();
+  }
   return { canvas: out, pad: L.pad, leftExtra: L.leftExtra, topExtra: L.topExtra, cw: L.cw, ch: L.ch };
 }
 
@@ -614,10 +668,15 @@ function paintBoxOnPage(ctx, box, p) {
   const fx = s.flipH ? -1 : 1;
   const fy = s.flipV ? -1 : 1;
   const flipped = fx !== 1 || fy !== 1;
-  // A shadow or a whole-text blur is an operation on the composite in device
-  // pixels (see paintShadows), so a box with either one takes the raster path
-  // too - the direct draw has no composite to work on.
-  const composited = (s.shadows ?? []).length > 0 || (s.blur ?? 0) > 0;
+  // A shadow, a whole-text blur, the directional smear or the visibility mask
+  // is an operation on the composite in device pixels (see paintShadows /
+  // renderBox), so a box with any of them takes the raster path too - the
+  // direct draw has no composite to work on.
+  const composited =
+    (s.shadows ?? []).length > 0 ||
+    (s.blur ?? 0) > 0 ||
+    (s.motionBlur?.on && ((s.motionBlur.x ?? 0) !== 0 || (s.motionBlur.y ?? 0) !== 0)) ||
+    clipActive(s.clip);
   if (rot !== 0 && !s.roughen.on && opaque && !composited) {
     // Rotated text: paint glyphs DIRECTLY at the angle so they rasterize sharp
     // (rotating a pre-rendered bitmap would resample and soften it). Pivot
@@ -651,8 +710,8 @@ function paintBoxOnPage(ctx, box, p) {
         ctx.drawImage(bc, originX, originY, cw, ch);
       }
     } else {
-      // Rotated raster fallback (roughened/translucent): downsample the SSx
-      // bitmap into its native footprint, pivoting at the box center.
+      // Rotated raster fallback (roughened/translucent/masked): downsample the
+      // SSx bitmap into its native footprint, pivoting at the box center.
       ctx.save();
       ctx.translate(box.x + box.w / 2, box.y + box.h / 2);
       ctx.rotate((rot * Math.PI) / 180);
@@ -722,6 +781,11 @@ export function renderBoxLayer(box, W, H, scratch, p, scale = 1) {
 async function renderPageBlob(p, fmt) {
   const canvas = await renderPageCanvas(p);
   const blob = await new Promise((res) => canvas.toBlob(res, MIME[fmt], QUALITY[fmt]));
+  // Hand the page's pixels back before the caller allocates the next page's.
+  // Same reasoning as the strip exporter: a local canvas is collectable, but
+  // "eventually" is not a budget when a batch export renders one per loop turn.
+  canvas.width = 0;
+  canvas.height = 0;
   if (!blob) {
     throw new Error(`Could not render page ${p?.id ?? ''} (page too large)`.trim());
   }
@@ -872,7 +936,13 @@ async function exportStripImages(fmt) {
   const n = cuts.length - 1;
   const digits = Math.max(2, String(n).length);
   const baseName = sanitizeExportName(app.exportName);
-  const items = [];
+  // Destination first, then render: each slice is written and dropped as it is
+  // produced. Slices are the biggest blobs the app makes, and accumulating
+  // them across the whole column meant holding the entire chapter's encoded
+  // output at once behind the directory dialog.
+  const dir = isTauri() ? await pickExportDir() : null;
+  if (isTauri() && !dir) return true; // user cancelled
+  let written = 0;
   for (let i = 0; i < n; i++) {
     const canvas = await renderStripSliceCanvas(pages, tops, cuts[i], cuts[i + 1]);
     const blob = await new Promise((res) => canvas.toBlob(res, MIME[fmt], QUALITY[fmt]));
@@ -881,23 +951,22 @@ async function exportStripImages(fmt) {
     // memory budget when the next line asks for another few hundred megapixels.
     canvas.width = 0;
     canvas.height = 0;
-    items.push({
-      name: `${baseName}-strip-${String(i + 1).padStart(digits, '0')}.${ext}`,
-      blob,
-      page: pages[0],
-    });
+    const name = `${baseName}-strip-${String(i + 1).padStart(digits, '0')}.${ext}`;
+    if (dir) await writeItemTo(dir, name, blob);
+    else downloadBlob(blob, name);
+    written++;
   }
-  if (isTauri()) {
-    if (!(await saveNative(items, 'all', fmt))) return true; // user cancelled
+  if (dir) {
+    saveExportPrefs(dir, app.exportName);
+    toast(`Saved ${written} file(s) to ${dir}`);
   } else {
-    for (const it of items) downloadBlob(it.blob, it.name);
-    toast(`Exported ${items.length} strip slice(s) as ${fmt} (browser download)`);
+    toast(`Exported ${written} strip slice(s) as ${fmt} (browser download)`);
   }
   if (warnings.length) {
     // Said out loud rather than swallowed: these are the files with a seam
     // through lettering, and the fix (a taller slice, or moving that box) is the
     // user's to make.
-    toast(`Saved ${items.length} slice(s) - ${warnings.length} cut(s) had no gap to land in.`);
+    toast(`Saved ${written} slice(s) - ${warnings.length} cut(s) had no gap to land in.`);
   }
   return true;
 }
@@ -929,43 +998,50 @@ export function stripPageSuffix(stem, pageId) {
   return stem.endsWith(suffix) ? stem.slice(0, -suffix.length) : stem;
 }
 
-// Native save via the OS dialog + filesystem (Tauri). Returns the directory used.
-async function saveNative(items, scope, fmt) {
-  const [{ save, open }, { join, dirname, basename }] = await Promise.all([
+// The directory half of `saveNative`'s 'all' path, split out so batch exports
+// can ask for the destination before rendering and stream each file to it as
+// it is produced. Returns the directory, or null on cancel.
+async function pickExportDir() {
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const dir = await open({ directory: true, defaultPath: app.exportDir || undefined });
+  return dir || null;
+}
+
+// Write one export item into a directory picked by `pickExportDir`.
+async function writeItemTo(dir, name, blob) {
+  const { join } = await import('@tauri-apps/api/path');
+  await fsx.writeFileAtomic(await join(dir, name), await blobBytes(blob));
+}
+
+// Native single-file save via the OS dialog + filesystem (Tauri). Returns the
+// directory used. Batch scopes do not come through here any more: they pick a
+// directory up front (`pickExportDir`) and stream each file as it is rendered,
+// so nothing ever accumulates a chapter's worth of blobs behind a dialog.
+async function saveNative(items, fmt) {
+  const [{ save }, { join, dirname, basename }] = await Promise.all([
     import('@tauri-apps/plugin-dialog'),
     import('@tauri-apps/api/path'),
   ]);
   const ext = EXT[fmt];
-  if (scope === 'current') {
-    const first = items[0];
-    const defaultPath = app.exportDir ? await join(app.exportDir, first.name) : first.name;
-    const path = await save({
-      defaultPath,
-      filters: [{ name: fmt, extensions: [ext] }],
-    });
-    if (!path) return null; // user cancelled
-    await fsx.writeFileAtomic(path, await blobBytes(first.blob));
-    const dir = await dirname(path);
-    // Learn the base name from a page file only - the JSON export's name carries
-    // a "-text" suffix that must not become the project's export base.
-    // Only strip the suffix if it matches the current page id appended by export.
-    const stem = (await basename(path)).replace(/\.[^.]+$/, '');
-    const base =
-      fmt === 'JSON'
-        ? app.exportName
-        : stripPageSuffix(stem, first?.page?.id);
-    saveExportPrefs(dir, base || app.exportName);
-    toast(`Saved to ${path}`);
-    return dir;
-  }
-  // scope === 'all' → pick a directory, write every page into it
-  const dir = await open({ directory: true, defaultPath: app.exportDir || undefined });
-  if (!dir) return null; // cancelled
-  for (const it of items) {
-    await fsx.writeFileAtomic(await join(dir, it.name), await blobBytes(it.blob));
-  }
-  saveExportPrefs(dir, app.exportName);
-  toast(`Saved ${items.length} file(s) to ${dir}`);
+  const first = items[0];
+  const defaultPath = app.exportDir ? await join(app.exportDir, first.name) : first.name;
+  const path = await save({
+    defaultPath,
+    filters: [{ name: fmt, extensions: [ext] }],
+  });
+  if (!path) return null; // user cancelled
+  await fsx.writeFileAtomic(path, await blobBytes(first.blob));
+  const dir = await dirname(path);
+  // Learn the base name from a page file only - the JSON export's name carries
+  // a "-text" suffix that must not become the project's export base.
+  // Only strip the suffix if it matches the current page id appended by export.
+  const stem = (await basename(path)).replace(/\.[^.]+$/, '');
+  const base =
+    fmt === 'JSON'
+      ? app.exportName
+      : stripPageSuffix(stem, first?.page?.id);
+  saveExportPrefs(dir, base || app.exportName);
+  toast(`Saved to ${path}`);
   return dir;
 }
 
@@ -988,7 +1064,7 @@ export async function exportTextJson(scope) {
   ];
   if (isTauri()) {
     // Always the single-file save dialog - 'all' is still one document.
-    await saveNative(items, 'current', 'JSON');
+    await saveNative(items, 'JSON');
   } else {
     downloadBlob(items[0].blob, items[0].name);
     toast(`Exported text for ${pages.length} page(s) as JSON (browser download)`);
@@ -1017,7 +1093,15 @@ export async function exportImages(fmt, scope) {
     }
 
     const baseName = sanitizeExportName(app.exportName);
+    // The destination is asked for BEFORE the render loop, so every page's
+    // file is written - and its blob dropped - the moment it is rendered.
+    // Rendering the whole chapter first and asking afterwards held every
+    // encoded page in memory at once, across a dialog the user may sit on:
+    // a 100-page PSD export is gigabytes of blobs for no better dialog.
+    const streamDir = isTauri() && scope === 'all' ? await pickExportDir() : null;
+    if (isTauri() && scope === 'all' && !streamDir) return true; // cancelled
     const items = [];
+    let written = 0;
     for (const p of pages) {
       // Only five pages' pictures are in memory at a time (see page-images.js),
       // and a whole-chapter export needs all of them - one at a time. This is
@@ -1035,10 +1119,24 @@ export async function exportImages(fmt, scope) {
         }
         return await renderPageBlob(p, fmt);
       });
-      items.push({ name: `${baseName}-${p.id}.${ext}`, blob, page: p });
+      const name = `${baseName}-${p.id}.${ext}`;
+      if (streamDir) {
+        await writeItemTo(streamDir, name, blob);
+        written++;
+      } else if (!isTauri() && scope === 'all') {
+        downloadBlob(blob, name);
+        written++;
+      } else {
+        items.push({ name, blob, page: p });
+      }
     }
-    if (isTauri()) {
-      await saveNative(items, scope, fmt);
+    if (streamDir) {
+      saveExportPrefs(streamDir, app.exportName);
+      toast(`Saved ${written} file(s) to ${streamDir}`);
+    } else if (isTauri()) {
+      await saveNative(items, fmt);
+    } else if (scope === 'all') {
+      toast(`Exported ${written} image(s) as ${fmt} (browser download)`);
     } else {
       for (const it of items) downloadBlob(it.blob, it.name);
       toast(`Exported ${items.length} image(s) as ${fmt} (browser download)`);

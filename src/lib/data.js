@@ -140,6 +140,13 @@ export function setBoxDefaults(next) {
 export function applyBoxDefaults(style) {
   if (!style || typeof style !== 'object') return style;
   Object.assign(style, boxDefaults);
+  // A newborn box never inherits the previous box's bezier path or mask
+  // shapes: both are that box's own geometry, and carried onto a box of
+  // another size they curve or hide text they were never drawn for. A
+  // DUPLICATE keeps them - duplicateBox copies the style whole and does not
+  // come through here - which is the same line the comment above draws.
+  style.path = { on: false, pts: [] };
+  style.clip = { on: false, mode: 'exclude', brushSize: style.clip?.brushSize ?? 20, shapes: [] };
   return style;
 }
 
@@ -159,8 +166,6 @@ export function defaultStyle() {
     // neither gradient nor pattern is on; when one of them is on it is the
     // colour behind the fill layer (and the PSD fallback colour).
     color: '#1a1a1a',
-    // Alpha of the fill layer alone. `opacity` below is the whole box.
-    fillOpacity: 1,
     // Gradient fill. `scope` decides what the gradient spans: 'box' runs once
     // across the whole text block, 'line' restarts on every wrapped line.
     // `kind` is 'linear' or 'radial'.
@@ -207,6 +212,37 @@ export function defaultStyle() {
     shadows: [],
     // Gaussian blur of the whole text (fill + strokes + shadows), page px.
     blur: 0,
+    // Directional smear of the whole text, on top of (and after) `blur`.
+    // TypeBubble's own parameter model, kept verbatim so the pictures match
+    // its demo: `x`/`y` are the direction vector in pixels per unit step and
+    // `amount` the iteration count of the Experience-Monks gaussian. Both
+    // renderers build the smear from the same tap list - see
+    // `motionBlurTaps` in text-paint.js. Direction (0,0) draws nothing.
+    motionBlur: { on: false, x: 2, y: 0, amount: 16 },
+    // Text on an editable bezier path. `pts` is the path's anchors in
+    // box-local page px (origin at the box's top-left, unscaled), each with
+    // its in/out handle as an OFFSET from the anchor. Empty until the effect
+    // is first switched on, when the editor seeds the TypeBubble default -
+    // a straight three-point line across the box's middle. When `on` and
+    // `pts` has at least two anchors, this wins over `curve` below.
+    path: { on: false, pts: [] },
+    // The visibility mask: shapes the user paints over the box that hide
+    // ('exclude') or solely keep ('include') the text's ink under them. Not
+    // tied to the box rect or the balloon fit - the shapes are their own
+    // geometry, in box-local page px (origin at the box top-left; they may
+    // reach outside the box). Three shape kinds, all plain JSON:
+    //   { kind: 'ellipse', cx, cy, rx, ry }
+    //   { kind: 'poly',    pts: [[x, y], ...] }        (>= 3 points)
+    //   { kind: 'stroke',  size, pts: [[x, y], ...] }  (a brush drag)
+    // With no shapes the mask does nothing, whichever mode is set - so a box
+    // that only flipped the switch looks exactly like the switch is off.
+    clip: { on: false, mode: 'exclude', brushSize: 20, shapes: [] },
+    // Text closed into a full circle (see `circleLayout`): the ring's size
+    // comes from the text's own advance, `angle` (degrees, clockwise) turns
+    // it, `inside` flips the text onto the inner face - the bottom arc of a
+    // badge. Sits between `path` and `curve` in precedence: path > circle >
+    // arc.
+    circle: { on: false, angle: 0, inside: false },
     uppercase: false,
     lineHeight: 1.1,
     letterSpacing: 0,
@@ -367,17 +403,102 @@ export function normalizeStyle(s) {
   const flat = {};
   for (const k of Object.keys(srcFlat)) if (known.has(k)) flat[k] = srcFlat[k];
 
-  return {
+  // The directional smear, gated field by field. Built explicitly rather than
+  // spread so a style saved by the short-lived length/angle build arrives with
+  // its `on` intact and the dead fields simply gone.
+  const mb = {
+    on: !!src.motionBlur?.on,
+    x: Math.min(50, Math.max(-50, num(src.motionBlur?.x, d.motionBlur.x))),
+    y: Math.min(50, Math.max(-50, num(src.motionBlur?.y, d.motionBlur.y))),
+    amount: Math.min(32, Math.max(1, Math.round(num(src.motionBlur?.amount, d.motionBlur.amount)))),
+  };
+
+  // The bezier path. An anchor that is not finite is dropped rather than
+  // repaired; a path left with fewer than two anchors cannot place a glyph,
+  // and the renderers treat it as off.
+  const pth = { on: !!src.path?.on, pts: [] };
+  if (Array.isArray(src.path?.pts)) {
+    for (const p of src.path.pts) {
+      const x = num(p?.x, NaN);
+      const y = num(p?.y, NaN);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      pth.pts.push({
+        x,
+        y,
+        ix: num(p?.ix, 0),
+        iy: num(p?.iy, 0),
+        ox: num(p?.ox, 0),
+        oy: num(p?.oy, 0),
+      });
+    }
+  }
+
+  // `fillOpacity` (the fill layer's own alpha) is gone from the schema. A style
+  // saved while it existed folds it into the whole-box opacity - not the same
+  // picture (strokes used to stay opaque), but the intent it carried, that this
+  // box was translucent, survives the migration.
+  const fo = Math.min(1, Math.max(0, num(src.fillOpacity, 1)));
+
+  // The circle, gated like the smear: angle normalized into [0, 360).
+  const circ = { ...d.circle, ...(src.circle || {}) };
+  circ.on = !!circ.on;
+  circ.angle = ((num(circ.angle, 0) % 360) + 360) % 360;
+  circ.inside = !!circ.inside;
+
+  // The mask, shape by shape. A shape that is not one of the three kinds, or
+  // whose numbers are not finite, is dropped rather than repaired - a mask
+  // with no valid shapes is simply inactive, which every renderer handles.
+  const pair = (q) => Array.isArray(q) && Number.isFinite(+q[0]) && Number.isFinite(+q[1]);
+  const cl = {
+    on: !!src.clip?.on,
+    mode: src.clip?.mode === 'include' ? 'include' : 'exclude',
+    brushSize: Math.min(200, Math.max(2, num(src.clip?.brushSize, d.clip.brushSize))),
+    shapes: [],
+  };
+  for (const sh of Array.isArray(src.clip?.shapes) ? src.clip.shapes : []) {
+    if (sh?.kind === 'ellipse') {
+      const e = { kind: 'ellipse', cx: num(sh.cx, NaN), cy: num(sh.cy, NaN), rx: num(sh.rx, 0), ry: num(sh.ry, 0) };
+      if (Number.isFinite(e.cx) && Number.isFinite(e.cy) && e.rx > 0 && e.ry > 0) cl.shapes.push(e);
+    } else if (sh?.kind === 'poly') {
+      const pts = (Array.isArray(sh.pts) ? sh.pts : []).filter(pair).map((q) => [+q[0], +q[1]]);
+      if (pts.length >= 3) cl.shapes.push({ kind: 'poly', pts });
+    } else if (sh?.kind === 'stroke') {
+      const pts = (Array.isArray(sh.pts) ? sh.pts : []).filter(pair).map((q) => [+q[0], +q[1]]);
+      const size = num(sh.size, 0);
+      if (pts.length >= 1 && size > 0) cl.shapes.push({ kind: 'stroke', size: Math.min(200, size), pts });
+    }
+  }
+
+  const out = {
     ...d,
     ...flat,
-    fillOpacity: Math.min(1, Math.max(0, num(src.fillOpacity, 1))),
     blur: Math.max(0, num(src.blur, 0)),
+    motionBlur: mb,
+    path: pth,
+    clip: cl,
+    circle: circ,
     gradient: g,
     pattern: pat,
     strokes,
     shadows,
     roughen: { ...d.roughen, ...(src.roughen || {}) },
   };
+  if (fo < 1) out.opacity = Math.min(1, Math.max(0, num(out.opacity, 1) * fo));
+  return out;
+}
+
+// The path a box starts with when the effect is switched on: TypeBubble's
+// default - a straight line across the box's middle, whose centre anchor
+// carries symmetric horizontal handles so one drag bends it. In box-local
+// page px, for a box `w` by `h`.
+export function defaultPathPts(w, h) {
+  const half = Math.max(10, Math.min(50, (Number(w) || 0) / 4));
+  const midY = (Number(h) || 0) / 2;
+  return [
+    { x: 0, y: midY, ix: 0, iy: 0, ox: 0, oy: 0 },
+    { x: (Number(w) || 0) / 2, y: midY, ix: -half, iy: 0, ox: half, oy: 0 },
+    { x: Number(w) || 0, y: midY, ix: 0, iy: 0, ox: 0, oy: 0 },
+  ];
 }
 
 // ---- the balloon a box was fitted to ----
