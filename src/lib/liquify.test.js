@@ -170,6 +170,43 @@ describe('liquifyField: twirl', () => {
   });
 });
 
+describe('liquifyField: the frame scale', () => {
+  it('doubles the radial step at scale 2 and stops it dead at scale 0', () => {
+    const one = liquifyField('expand', CX, CY, R, 100, 0, 0, CX + 50, CY, 1);
+    const two = liquifyField('expand', CX, CY, R, 100, 0, 0, CX + 50, CY, 2);
+    expect(two[0]).toBeCloseTo(one[0] * 2, 12);
+    expect(liquifyField('expand', CX, CY, R, 100, 0, 0, CX + 50, CY, 0)[0]).toBe(0);
+    expect(liquifyField('pinch', CX, CY, R, 100, 0, 0, CX + 50, CY, 2)[0]).toBeCloseTo(
+      -two[0],
+      12,
+    );
+  });
+
+  it('doubles the twirl ANGLE at scale 2 - the rotation is what is being rated', () => {
+    const a = 0.5625 * TWIRL_MAX * 2;
+    const [ox, oy] = liquifyField('twirl', CX, CY, R, 100, 0, 0, CX + 50, CY, 2);
+    expect(ox).toBeCloseTo(50 * Math.cos(a) - 50, 12);
+    expect(oy).toBeCloseTo(50 * Math.sin(a), 12);
+    expect(liquifyField('twirl', CX, CY, R, 100, 0, 0, CX + 50, CY, 0)).toEqual([0, 0]);
+  });
+
+  it('leaves push alone: its magnitude is already the pointer delta', () => {
+    const base = liquifyField('push', CX, CY, R, 100, 7, -3, CX + 50, CY);
+    for (const sc of [0, 0.5, 1, 2]) {
+      expect(liquifyField('push', CX, CY, R, 100, 7, -3, CX + 50, CY, sc)).toEqual(base);
+    }
+  });
+
+  it('clamps the scale to 0..2 and reads a missing one as one frame', () => {
+    const two = liquifyField('expand', CX, CY, R, 100, 0, 0, CX + 50, CY, 2);
+    expect(liquifyField('expand', CX, CY, R, 100, 0, 0, CX + 50, CY, 99)).toEqual(two);
+    const one = liquifyField('expand', CX, CY, R, 100, 0, 0, CX + 50, CY, 1);
+    expect(liquifyField('expand', CX, CY, R, 100, 0, 0, CX + 50, CY)).toEqual(one);
+    expect(liquifyField('expand', CX, CY, R, 100, 0, 0, CX + 50, CY, NaN)).toEqual(one);
+    expect(liquifyField('expand', CX, CY, R, 100, 0, 0, CX + 50, CY, -5)[0]).toBe(0);
+  });
+});
+
 describe('liquifyField: the guards', () => {
   it('gives no displacement for a mode it does not know', () => {
     expect(liquifyField('smudge', CX, CY, R, 100, 5, 5, CX, CY)).toEqual([0, 0]);
@@ -354,6 +391,49 @@ describe('applyLiquify', () => {
     }
   });
 
+  it('matches liquifyField exactly, point for point, in every mode', () => {
+    // maxSeg is huge so nothing is resampled and the points compared are the
+    // ones written here: inside, at the centre, on the rim, and outside it.
+    const pts = [
+      [CX, CY, 1],
+      [CX + 30, CY + 40, 0.5],
+      [CX - 55, CY + 12, 0.9],
+      [CX + R, CY, 1],
+      [CX, CY + 300, 1],
+    ];
+    for (const mode of LIQUIFY_MODES) {
+      for (const scale of [1, 1.5]) {
+        const s = stroke(pts);
+        const o = opts({ mode, scale, maxSeg: 1e6, dx: 7, dy: -3 });
+        const out = applyLiquify([s], o)[0];
+        expect(out.pts).toHaveLength(pts.length);
+        // The agreement has to be about real numbers: if the field did nothing
+        // here, matching it point for point would prove nothing.
+        expect(out.pts.some((p, i) => p[0] !== s.pts[i][0] || p[1] !== s.pts[i][1])).toBe(true);
+        out.pts.forEach((p, i) => {
+          const [ox, oy] = liquifyField(
+            mode, o.cx, o.cy, o.radius, o.strength, o.dx, o.dy,
+            s.pts[i][0], s.pts[i][1], scale,
+          );
+          expect(p[0]).toBe(s.pts[i][0] + ox);
+          expect(p[1]).toBe(s.pts[i][1] + oy);
+          expect(p[2]).toBe(s.pts[i][2]);
+        });
+      }
+    }
+  });
+
+  it('carries the frame scale through to the strokes it moves', () => {
+    const s = stroke([[CX + 50, CY, 1], [CX + 55, CY, 1]]);
+    const one = applyLiquify([s], opts({ mode: 'expand', maxSeg: 1e6 }))[0];
+    const two = applyLiquify([s], opts({ mode: 'expand', scale: 2, maxSeg: 1e6 }))[0];
+    expect(two.pts[0][0] - (CX + 50)).toBeCloseTo((one.pts[0][0] - (CX + 50)) * 2, 12);
+    // Push is deliberately unrated, so its result does not move with the scale.
+    const p1 = applyLiquify([s], opts({ maxSeg: 1e6 }))[0];
+    const p2 = applyLiquify([s], opts({ scale: 2, maxSeg: 1e6 }))[0];
+    expect(p2.pts).toEqual(p1.pts);
+  });
+
   it('returns every stroke by reference when the field can do nothing', () => {
     const a = inside();
     for (const dead of [
@@ -361,6 +441,14 @@ describe('applyLiquify', () => {
       opts({ strength: 0 }),
       opts({ mode: 'smudge' }),
       opts({ cx: NaN }),
+      // A pointer that did not move is a push that does nothing.
+      opts({ dx: 0, dy: 0 }),
+      opts({ dx: NaN }),
+      // And a hold mode given no frame is the same story.
+      opts({ mode: 'expand', scale: 0 }),
+      opts({ mode: 'pinch', scale: 0 }),
+      opts({ mode: 'twirl', scale: 0 }),
+      opts({ mode: 'twirl', scale: -1 }),
     ]) {
       const out = applyLiquify([a], dead);
       expect(out[0]).toBe(a);

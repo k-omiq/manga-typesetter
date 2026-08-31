@@ -22,17 +22,39 @@
 // The four fields the tool offers, in panel order.
 export const LIQUIFY_MODES = ['push', 'expand', 'pinch', 'twirl'];
 
-// How far expand/pinch move a point at the very centre of the tool, per
-// application, as a fraction of the tool's RADIUS. Stated relative to the
-// radius rather than in px so that the tool feels the same when it is resized:
-// a big brush should push a proportionally big distance. 5% is small enough
-// that a drag reads as a continuous squeeze rather than as a jump - the gesture
-// applies the field once per pointer move, so a real drag is dozens of these.
+// ===== The rate the three "hold" modes run at =====
+//
+// Expand, pinch and twirl are not driven by the pointer's motion the way push
+// is: they keep working while the tool sits still, so what they do per
+// application is a RATE, and a rate needs a clock. The constants below are
+// stated per 16.7 ms application - one frame at 60 Hz - at `scale` 1, and every
+// call takes a `scale` that says how much of such a frame this application is
+// worth.
+//
+// THE CONTRACT FOR THE GESTURE (task 5.2): pass `scale = dt_ms / 16.7`, where
+// dt is the time since the previous application. Without it the effect's speed
+// is the pointer's event rate, so the same drag bloats twice as fast on a
+// 120 Hz digitiser as on a 60 Hz one - and holding still would expand at
+// 6 radii/s and twirl at 14 rad/s, which is not a tool. `scale` is clamped to
+// 0..2 so a stalled frame cannot land one enormous jump; a longer gap simply
+// under-applies for that step, which reads as the tool briefly easing off
+// rather than as a lurch.
+//
+// PUSH IGNORES `scale`. Its magnitude is already the pointer's own delta, which
+// is measured over that same elapsed time and so is time-normalised by
+// construction; scaling it again would make a fast flick move further than the
+// hand did.
+
+// How far expand/pinch move a point at the very centre of the tool, per 16.7 ms
+// application at scale 1, as a fraction of the tool's RADIUS. Stated relative
+// to the radius rather than in px so that the tool feels the same when it is
+// resized: a big brush should push a proportionally big distance. 5% of the
+// radius per frame is a steady squeeze, not a jump.
 export const EXPAND_STEP = 0.05;
 
 // The most one twirl application may turn a point, in radians (0.12 rad is
-// about 6.9 degrees), reached only at the exact centre at full strength. Same
-// reasoning as EXPAND_STEP: small per application, because a drag is many.
+// about 6.9 degrees), per 16.7 ms application at scale 1, reached only at the
+// exact centre at full strength. Same reasoning as EXPAND_STEP.
 export const TWIRL_MAX = 0.12;
 
 // The default resampling floor, derived from the tool's radius: a quarter of it,
@@ -46,6 +68,13 @@ export const defaultMaxSeg = (radius) =>
   Math.min(MAX_SEG_MAX, Math.max(MAX_SEG_MIN, (Number(radius) || 0) / 4));
 
 const num = (v) => (Number.isFinite(+v) ? +v : NaN);
+
+// The frame weight, clamped. Absent reads as 1 - one 60 Hz frame - so a caller
+// that has no clock still gets the documented per-application step.
+const frameScale = (v) => {
+  const n = +v;
+  return Number.isFinite(n) ? Math.min(2, Math.max(0, n)) : 1;
+};
 
 // The tool's weight at distance `d` from its centre: 1 at the centre, 0 at the
 // rim and beyond.
@@ -71,18 +100,21 @@ export function falloff(d, radius) {
 // zero for anything unreadable.
 //
 // `strength` is the panel's 0..100; it is clamped and scaled to 0..1 here, so a
-// caller never has to know the units.
+// caller never has to know the units. `scale` is the frame weight described
+// above - `dt_ms / 16.7`, clamped to 0..2, defaulting to 1 - and it multiplies
+// the per-application step of expand, pinch and twirl only.
 //
 // The modes:
 //
 //   push    - along the pointer's own motion (dx, dy). At the centre at full
 //             strength the point moves exactly the pointer's delta, which is
-//             what makes the tool feel like it is dragging the ink.
-//   expand  - directly away from the centre, by `radius * EXPAND_STEP`.
+//             what makes the tool feel like it is dragging the ink. IGNORES
+//             `scale`: the delta is already what the hand did in that time.
+//   expand  - directly away from the centre, by `radius * EXPAND_STEP * scale`.
 //   pinch   - the same magnitude, inwards. Exactly expand negated.
-//   twirl   - an EXACT rotation about the centre by `w * s * TWIRL_MAX`, not a
-//             tangential shove. A shove would push points off their circle and
-//             pull the stroke apart over a long drag; a rotation conserves the
+//   twirl   - an EXACT rotation about the centre by `w * s * TWIRL_MAX * scale`,
+//             not a tangential shove. A shove would push points off their circle
+//             and pull the stroke apart over a long drag; a rotation conserves the
 //             distance to the centre no matter how many times it is applied.
 //             The angle carries +x towards +y. Page y grows downwards, so on
 //             screen that reads as a clockwise swirl; in the maths it is the
@@ -92,7 +124,7 @@ export function falloff(d, radius) {
 // AT THE EXACT CENTRE, expand and pinch have no direction to move along - the
 // radial unit vector is undefined - so they return zero there. Twirl returns
 // zero there too, because rotating the centre about itself is the identity.
-export function liquifyField(mode, cx, cy, radius, strength, dx, dy, x, y) {
+export function liquifyField(mode, cx, cy, radius, strength, dx, dy, x, y, scale = 1) {
   const r = num(radius);
   const px = num(x);
   const py = num(y);
@@ -116,13 +148,14 @@ export function liquifyField(mode, cx, cy, radius, strength, dx, dy, x, y) {
     if (!Number.isFinite(mx) || !Number.isFinite(my)) return [0, 0];
     return [k * mx, k * my];
   }
+  const sc = frameScale(scale);
   if (mode === 'expand' || mode === 'pinch') {
     if (d <= 0) return [0, 0]; // no radial direction at the centre
-    const step = k * r * EXPAND_STEP * (mode === 'pinch' ? -1 : 1);
+    const step = k * r * EXPAND_STEP * sc * (mode === 'pinch' ? -1 : 1);
     return [(vx / d) * step, (vy / d) * step];
   }
   if (mode === 'twirl') {
-    const a = k * TWIRL_MAX;
+    const a = k * TWIRL_MAX * sc;
     const c = Math.cos(a);
     const sn = Math.sin(a);
     // Rotate the offset, then report the difference: the returned value is a
@@ -221,9 +254,10 @@ function boxDistance(b, cx, cy) {
 
 // One application of the tool to a list of strokes, as a NEW array.
 //
-//   opts = { mode, cx, cy, radius, strength, dx, dy, maxSeg }
+//   opts = { mode, cx, cy, radius, strength, dx, dy, scale, maxSeg }
 //
-// `maxSeg` is optional and defaults to `defaultMaxSeg(radius)`.
+// `maxSeg` is optional and defaults to `defaultMaxSeg(radius)`; `scale` is the
+// frame weight (`dt_ms / 16.7`) and defaults to 1.
 //
 // Nothing is mutated, at any depth: a stroke that moves is rebuilt with a fresh
 // pts array of fresh points, and the caller's stroke - and the array it sits in
@@ -233,8 +267,17 @@ function boxDistance(b, cx, cy) {
 // the tool's circle is the same object in the output array, which is what lets
 // the gesture repaint and diff cheaply while a drag is in flight, and what keeps
 // a page of ink from being rewritten on every pointer move. A field that can do
-// nothing at all - no radius, no strength, a mode this module does not know -
-// returns every stroke that way.
+// nothing at all returns every stroke that way, and there are four ways to be
+// that field: no radius, no strength, a mode this module does not know, or a
+// mode whose own driver is at rest - a push whose pointer did not move (dx and
+// dy both zero), or a hold mode given `scale` 0.
+//
+// The point loop below INLINES what `liquifyField` computes rather than calling
+// it. That is not a second opinion about the maths: `liquifyField` stays the
+// exported reference implementation, the two are held to the bit by a test, and
+// the only reason for the copy is that the loop runs over every point of every
+// touched stroke on every pointer move, where returning a fresh `[ox, oy]` pair
+// per point is a garbage-collector's problem and nothing else.
 export function applyLiquify(strokes, opts) {
   const list = Array.isArray(strokes) ? strokes : [];
   const o = opts ?? {};
@@ -242,16 +285,26 @@ export function applyLiquify(strokes, opts) {
   const s = Math.min(1, Math.max(0, (Number(o.strength) || 0) / 100));
   const cx = num(o.cx);
   const cy = num(o.cy);
+  const mode = o.mode;
+  const sc = frameScale(o.scale);
+  const mx = num(o.dx);
+  const my = num(o.dy);
+  const push = mode === 'push';
+  const dead = push
+    ? !Number.isFinite(mx) || !Number.isFinite(my) || (mx === 0 && my === 0)
+    : sc <= 0;
   if (
     !(r > 0) ||
     s <= 0 ||
-    !LIQUIFY_MODES.includes(o.mode) ||
+    !LIQUIFY_MODES.includes(mode) ||
     !Number.isFinite(cx) ||
-    !Number.isFinite(cy)
+    !Number.isFinite(cy) ||
+    dead
   ) {
     return list.slice();
   }
   const seg = Number.isFinite(+o.maxSeg) && +o.maxSeg > 0 ? +o.maxSeg : defaultMaxSeg(r);
+  const sign = mode === 'pinch' ? -1 : 1;
 
   return list.map((stroke) => {
     const b = ptsBounds(stroke?.pts);
@@ -262,11 +315,25 @@ export function applyLiquify(strokes, opts) {
     const pts = dense.pts.map((p) => {
       const x = +p[0];
       const y = +p[1];
-      const w = p[2] ?? 1;
-      const [ox, oy] = liquifyField(o.mode, cx, cy, r, o.strength, o.dx, o.dy, x, y);
       // Pressure is a property of how the stroke was drawn, not of where its
       // points are, so liquify never touches it.
-      return [x + ox, y + oy, w];
+      const w2 = p[2] ?? 1;
+      const vx = x - cx;
+      const vy = y - cy;
+      const d = Math.hypot(vx, vy);
+      const w = falloff(d, r);
+      if (w <= 0) return [x, y, w2];
+      const k = w * s;
+      if (push) return [x + k * mx, y + k * my, w2];
+      if (mode === 'twirl') {
+        const a = k * TWIRL_MAX * sc;
+        const c = Math.cos(a);
+        const sn = Math.sin(a);
+        return [x + (vx * c - vy * sn - vx), y + (vx * sn + vy * c - vy), w2];
+      }
+      if (d <= 0) return [x, y, w2]; // expand/pinch have no direction at the centre
+      const step = k * r * EXPAND_STEP * sc * sign;
+      return [x + (vx / d) * step, y + (vy / d) * step, w2];
     });
     return { ...dense, pts };
   });
