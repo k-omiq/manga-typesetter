@@ -1208,16 +1208,24 @@
       if (ev.pointerId !== pid) return;
       liquifyEnd?.(false);
     };
+    // Escape puts the ink back exactly as the pointer found it, and does ONLY
+    // that. Capture phase on the document - the mesh gizmo's own answer to the
+    // same problem - so this press is read before App's window handler can read
+    // it as "deselect the box", and stopped there: cancelling a drag and losing
+    // the selection are two different things, and the second would take the
+    // panel and the tool away with it. The listener lives only for as long as
+    // the gesture does, so Escape with no drag in flight still deselects.
     const key = (ev) => {
       if (ev.key !== 'Escape') return;
       ev.preventDefault();
+      ev.stopPropagation();
       liquifyEnd?.(false);
     };
     live.add(ac);
     document.addEventListener('pointermove', move, { signal: ac.signal });
     document.addEventListener('pointerup', up, { signal: ac.signal });
     document.addEventListener('pointercancel', cancel, { signal: ac.signal });
-    window.addEventListener('keydown', key, { signal: ac.signal });
+    document.addEventListener('keydown', key, { signal: ac.signal, capture: true });
   }
 
   // The circle follows the pointer while nothing is pressed, so a letterer can

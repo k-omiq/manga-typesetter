@@ -290,13 +290,22 @@
     );
     void live;
   });
+  // The preview's pixels go back whichever way its canvas goes: the panel
+  // closing, or the mode switching off draw and taking this section with it. On
+  // that second path `prevEl` is already null by the time the component's own
+  // teardown runs, so the release belongs on the NODE rather than on the
+  // binding - the shape `tipCell` above already has.
+  function prevCanvas(node) {
+    return {
+      destroy() {
+        node.width = 0;
+        node.height = 0;
+      },
+    };
+  }
   $effect(() => () => {
     prevTips = null;
     prevSeq++;
-    if (prevEl) {
-      prevEl.width = 0;
-      prevEl.height = 0;
-    }
   });
 
   const num = (obj, key, v, lo, hi) => {
@@ -372,7 +381,7 @@
     <p class="hint">{LIQ_HINT[s.liquifyMode] ?? ''} The circle over the box is what it reaches; the falloff is smooth to nothing at its rim.</p>
   {:else}
   {#if mode === 'draw'}
-  <canvas class="bpv" bind:this={prevEl} style="width:{PREV_W}px;height:{PREV_H}px" aria-label="Brush preview"></canvas>
+  <canvas class="bpv" bind:this={prevEl} use:prevCanvas style="width:{PREV_W}px;height:{PREV_H}px" aria-label="Brush preview"></canvas>
 
   <div class="picker-head">
     <input
