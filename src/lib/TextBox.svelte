@@ -1168,6 +1168,14 @@
   );
 
   function onLiquifyPointerDown(e) {
+    // A second pointer arriving mid-gesture - a finger on a multi-touch screen,
+    // a pen tapped while a mouse button is down - starts a new session, and the
+    // old one has to END rather than be overwritten: its listeners would go on
+    // running against an AbortController nothing holds any more, and it would
+    // never settle, so its deformation would sit on the box with no history
+    // entry able to take it back. Cancelled, not committed, for the reason the
+    // mesh gizmo cancels: a pointer that never came up did not finish.
+    liquifyEnd?.(false);
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const pid = e.pointerId;
     const g = liquifyGesture(box, pg.id, brushTool.settings);
@@ -1639,7 +1647,6 @@
          cannot hide the surface that captures the drag. -->
     <div
       class="ink-capture"
-      class:liquify={liquifyOn}
       style="width:{box.w * z}px;height:{box.h * z}px"
       onpointerdown={onInkPointerDown}
       onpointermove={onInkPointerMove}

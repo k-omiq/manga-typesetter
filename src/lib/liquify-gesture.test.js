@@ -194,6 +194,25 @@ describe('a liquify drag against the document', () => {
     expect(peekStack().undo).toHaveLength(0);
   });
 
+  it('records nothing for a drag inside a stroke that encloses the tool', () => {
+    // The concave case the phase review found: a square outline (a C, an O) has
+    // a bounding box the tool sits well inside, but no POINT the tool reaches.
+    // The engine hands such a stroke back by reference, so the gesture reads it
+    // as "nothing moved" - no entry, and no resample left behind either.
+    const b = byId('b1');
+    b.style.ink.strokes = [
+      normalizeInkStroke({ brush: 'round', size: 8, seed: 3, pts: [[50, 20, 1], [250, 20, 1], [250, 180, 1], [50, 180, 1]] }),
+    ];
+    const ref = b.style.ink.strokes[0];
+    const n0 = peekStack().undo.length;
+    const g = liquifyGesture(b, 1, tool({ liquifyRadius: 10 }));
+    expect(g.step({ cx: 150, cy: 100, dx: 6, dy: 6, scale: 1 })).toBe(false);
+    expect(g.commit()).toBe(false);
+    expect(byId('b1').style.ink.strokes[0]).toBe(ref);
+    expect(byId('b1').style.ink.strokes[0].pts).toHaveLength(4);
+    expect(peekStack().undo).toHaveLength(n0);
+  });
+
   it('records nothing for a press and release that never moved', () => {
     const b = byId('b1');
     expect(drag(b, tool(), [[100, 50]])).toBe(false);

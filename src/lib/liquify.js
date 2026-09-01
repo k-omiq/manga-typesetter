@@ -263,14 +263,18 @@ function boxDistance(b, cx, cy) {
 // pts array of fresh points, and the caller's stroke - and the array it sits in
 // - are only ever read.
 //
-// UNTOUCHED STROKES COME BACK BY REFERENCE. A stroke whose points cannot reach
-// the tool's circle is the same object in the output array, which is what lets
-// the gesture repaint and diff cheaply while a drag is in flight, and what keeps
-// a page of ink from being rewritten on every pointer move. A field that can do
-// nothing at all returns every stroke that way, and there are four ways to be
-// that field: no radius, no strength, a mode this module does not know, or a
-// mode whose own driver is at rest - a push whose pointer did not move (dx and
-// dy both zero), or a hold mode given `scale` 0.
+// UNTOUCHED STROKES COME BACK BY REFERENCE. A stroke NONE OF WHOSE POINTS MOVED
+// is the same object in the output array, which is what lets the gesture
+// repaint and diff cheaply while a drag is in flight, and what keeps a page of
+// ink from being rewritten on every pointer move. That is decided by the
+// displacement itself and not by the bounding-box test above it: a stroke can
+// enclose the tool without a single point being inside the circle - a C, an O,
+// a square outline dragged in its own empty middle - and such a stroke goes
+// back untouched and UNRESAMPLED. A field that can do nothing at all returns
+// every stroke that way, and there are four ways to be that field: no radius,
+// no strength, a mode this module does not know, or a mode whose own driver is
+// at rest - a push whose pointer did not move (dx and dy both zero), or a hold
+// mode given `scale` 0.
 //
 // The point loop below INLINES what `liquifyField` computes rather than calling
 // it. That is not a second opinion about the maths: `liquifyField` stays the
@@ -312,6 +316,15 @@ export function applyLiquify(strokes, opts) {
     // falloff is exactly zero, so there is nothing to do for it either.
     if (!b || boxDistance(b, cx, cy) >= r) return stroke;
     const dense = resampleStroke(stroke, seg);
+    // Whether any point actually ended up somewhere else. THE BOUNDS TEST IS A
+    // FILTER, NOT AN ANSWER: it asks whether the tool could reach the stroke's
+    // rectangle, and a stroke can enclose the tool without a single point being
+    // inside it - a C, an O, a square outline dragged in its own empty middle.
+    // Without this the resampled copy would go back as a new object, and the
+    // caller's identity test (see the header) would read a gesture that moved
+    // nothing as a gesture that moved something: a history entry for no change,
+    // and a stroke permanently subdivided by a drag that never touched it.
+    let moved = false;
     const pts = dense.pts.map((p) => {
       const x = +p[0];
       const y = +p[1];
@@ -324,17 +337,29 @@ export function applyLiquify(strokes, opts) {
       const w = falloff(d, r);
       if (w <= 0) return [x, y, w2];
       const k = w * s;
-      if (push) return [x + k * mx, y + k * my, w2];
-      if (mode === 'twirl') {
+      let nx = x;
+      let ny = y;
+      if (push) {
+        nx = x + k * mx;
+        ny = y + k * my;
+      } else if (mode === 'twirl') {
         const a = k * TWIRL_MAX * sc;
         const c = Math.cos(a);
         const sn = Math.sin(a);
-        return [x + (vx * c - vy * sn - vx), y + (vx * sn + vy * c - vy), w2];
+        nx = x + (vx * c - vy * sn - vx);
+        ny = y + (vx * sn + vy * c - vy);
+      } else if (d > 0) {
+        // expand/pinch have no direction at the centre, so the centre stays.
+        const step = k * r * EXPAND_STEP * sc * sign;
+        nx = x + (vx / d) * step;
+        ny = y + (vy / d) * step;
       }
-      if (d <= 0) return [x, y, w2]; // expand/pinch have no direction at the centre
-      const step = k * r * EXPAND_STEP * sc * sign;
-      return [x + (vx / d) * step, y + (vy / d) * step, w2];
+      if (nx !== x || ny !== y) moved = true;
+      return [nx, ny, w2];
     });
+    // The resample does not stick either: a stroke the tool did not move is the
+    // same object it was, at the point count it was drawn with.
+    if (!moved) return stroke;
     return { ...dense, pts };
   });
 }

@@ -456,6 +456,41 @@ describe('applyLiquify', () => {
     expect(applyLiquify([a], undefined)[0]).toBe(a);
   });
 
+  it('leaves a stroke that ENCLOSES the tool by reference, and unresampled', () => {
+    // The bounds test only asks whether the tool could reach the stroke's
+    // rectangle. A square outline dragged in its own empty middle passes it
+    // with no point anywhere near the circle - as do a C and an O - and before
+    // this the resampled copy came back as a NEW object: the gesture read that
+    // as "the ink moved", recorded a history entry for a drag that changed
+    // nothing, and left the stroke permanently subdivided (4 points to 121).
+    const square = stroke([
+      [CX - 60, CY - 60, 1],
+      [CX + 60, CY - 60, 1],
+      [CX + 60, CY + 60, 1],
+      [CX - 60, CY + 60, 1],
+    ]);
+    for (const mode of LIQUIFY_MODES) {
+      const out = applyLiquify([square], opts({ mode, radius: 10 }));
+      expect(out[0]).toBe(square);
+      expect(out[0].pts).toHaveLength(4);
+    }
+  });
+
+  it('still resamples and moves a stroke the tool really does reach', () => {
+    // The other half of the claim above: the skip is about points that did not
+    // move, not about leaving long strokes alone.
+    const s = stroke([[CX - 150, CY, 1], [CX + 150, CY, 1]]);
+    const out = applyLiquify([s], opts())[0];
+    expect(out).not.toBe(s);
+    expect(out.pts.length).toBeGreaterThan(2);
+    // Against the plain resample of the same stroke: the same points, and at
+    // least one of them somewhere else - so the copy is there because something
+    // moved, not merely because the stroke was long.
+    const dense = resampleStroke(s, defaultMaxSeg(R));
+    expect(out.pts).toHaveLength(dense.pts.length);
+    expect(out.pts.some((p, i) => p[0] !== dense.pts[i][0])).toBe(true);
+  });
+
   it('takes anything that is not a list of strokes as an empty page', () => {
     expect(applyLiquify(null, opts())).toEqual([]);
     expect(applyLiquify(undefined, opts())).toEqual([]);
