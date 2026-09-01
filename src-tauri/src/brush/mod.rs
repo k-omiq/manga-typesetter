@@ -2,7 +2,8 @@
 //!
 //! [`sut`] is the parser for Clip Studio Paint `.sut` files; [`score`] grades
 //! what it read against the preview image CSP ships inside the same file;
-//! [`variant`] normalises the brush settings out of the outer database.
+//! [`variant`] normalises the brush settings out of the outer database, and
+//! [`effector`] reads the size dynamics out of the blobs beside them.
 //! [`abr`] is the parser for Photoshop brush sets, which ship no preview and so
 //! are validated structurally instead. This module is the [`brush_import`]
 //! command, the extension dispatch, and the fallback ladder over them.
@@ -13,6 +14,7 @@
 //! import.
 
 pub mod abr;
+pub mod effector;
 pub mod score;
 pub mod sut;
 pub mod variant;
