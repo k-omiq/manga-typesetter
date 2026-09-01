@@ -131,9 +131,20 @@ impl EffectorDynamics {
     }
 
     /// The one source to hand an engine that models a single driver, which is
-    /// what `src/lib/brush.js` does. Pressure wins over velocity and velocity
-    /// over random, which is the order of how much of the stroke's expression
-    /// each carries; `None` when the parameter has no dynamics at all.
+    /// what `src/lib/brush.js` does with its `off`/`pressure`/`velocity`/
+    /// `random` choice.
+    ///
+    /// A parameter may have several sources switched on at once - one corpus
+    /// brush drives its size off three - so the precedence is fixed and stated
+    /// here: pressure, then velocity, then random, which is the order of how
+    /// much of the stroke's expression each carries. `None` when the parameter
+    /// has no dynamics at all.
+    ///
+    /// Tilt is never returned, whether or not it is switched on: the engine
+    /// has no tilt source to map it onto, and a pointer event the app can
+    /// receive does not carry tilt. A tilt-only parameter therefore reads as
+    /// `None` rather than as something the engine would silently mis-drive.
+    /// No corpus file switches tilt on.
     pub fn primary(&self) -> Option<Source> {
         [Source::Pressure, Source::Velocity, Source::Random].into_iter().find(|s| self.on(*s))
     }
@@ -187,12 +198,10 @@ pub fn decode_effector(blob: &[u8]) -> Option<EffectorDynamics> {
     if HEADER_LEN.checked_add(pressure_len)?.checked_add(velocity_len)? != blob.len() {
         return None;
     }
-    // A velocity graph with no pressure graph before it would mean the two
-    // length words are not the slots this reading says they are.
-    if pressure_len == 0 && velocity_len != 0 {
-        return None;
-    }
-
+    // A velocity graph with no pressure graph before it is a layout the corpus
+    // never uses - CSP wrote slot A whenever it wrote slot B - but nothing in
+    // the container forbids it, and the size identity above already gates
+    // where each slot starts, so it is read rather than refused.
     let pressure_curve = read_curve(blob, HEADER_LEN, pressure_len)?;
     let velocity_curve = read_curve(blob, HEADER_LEN + pressure_len, velocity_len)?;
 
@@ -312,6 +321,35 @@ mod tests {
         out
     }
 
+    /// Every graph coordinate in a blob, read straight out of the bytes as
+    /// `f64`, independently of the decoder. The grid check has to see the
+    /// stored value: a coordinate rounded into an `f32` is off the grid by up
+    /// to 7e-6 after scaling, which is enough slack to hide a wrong reading.
+    fn raw_graph_values(blob: &[u8]) -> Vec<f64> {
+        let word = |o: usize| -> usize {
+            blob.get(o..o + 4)
+                .and_then(|b| b.try_into().ok())
+                .map_or(0, |b| u32::from_be_bytes(b) as usize)
+        };
+        let f64_at = |o: usize| -> f64 {
+            blob.get(o..o + 8)
+                .and_then(|b| b.try_into().ok())
+                .map_or(f64::NAN, f64::from_be_bytes)
+        };
+        let mut out = Vec::new();
+        let mut o = HEADER_LEN;
+        while o + 12 <= blob.len() {
+            let (head, count) = (word(o), word(o + 4));
+            for i in 0..count {
+                let p = o + head + i * 16;
+                out.push(f64_at(p));
+                out.push(f64_at(p + 8));
+            }
+            o += head + count * 16;
+        }
+        out
+    }
+
     /// A minimal blob: the header words, then the graphs verbatim.
     fn blob(words: [i32; 10], graphs: &[&[(f64, f64)]]) -> Vec<u8> {
         let mut out = (HEADER_LEN as u32).to_be_bytes().to_vec();
@@ -359,10 +397,12 @@ mod tests {
                     let m = d.minimum(s);
                     assert!((-100.0..=100.0).contains(&m), "{name}/{column}: minimum {m}");
                 }
+                let mut here = 0;
                 for s in [Source::Pressure, Source::Velocity] {
                     let Some(c) = d.curve(s) else { continue };
                     with_curve += 1;
                     points += c.len();
+                    here += c.len();
                     assert!(c.len() >= 2, "{name}/{column}: a graph of one node");
                     assert_eq!(c[0][0], 0.0, "{name}/{column}: a graph not starting at zero");
                     assert_eq!(c[c.len() - 1][0], 1.0, "{name}/{column}: a graph not ending at one");
@@ -371,17 +411,21 @@ mod tests {
                     }
                     for p in c {
                         assert!((0.0..=1.0).contains(&p[0]) && (0.0..=1.0).contains(&p[1]));
-                        // CSP's graph editor is 110 units across, so every node
-                        // it ever wrote lands on a 110th. Nothing else about
-                        // this reading would survive being one byte off.
-                        for v in p {
-                            let k = v * 110.0;
-                            assert!(
-                                (k - k.round()).abs() < 1e-3,
-                                "{name}/{column}: {v} is not a multiple of 1/110"
-                            );
-                        }
                     }
+                }
+                // CSP's graph editor is 110 units across, so every node it ever
+                // wrote lands on an exact 110th. Nothing else about this
+                // reading - the offset, the endianness, the width - survives
+                // being wrong, so it is checked against the stored `f64` at
+                // full precision rather than against the decoder's `f32`.
+                let raw = raw_graph_values(&bytes);
+                assert_eq!(raw.len(), here * 2, "{name}/{column}: the graphs do not fill the blob");
+                for v in raw {
+                    let k = v * 110.0;
+                    assert!(
+                        (k - k.round()).abs() < 1e-6,
+                        "{name}/{column}: {v} is not a multiple of 1/110"
+                    );
                 }
             }
         }
@@ -460,6 +504,26 @@ mod tests {
         assert_eq!(r.primary(), Some(Source::Random));
         assert_eq!(r.minimum(Source::Random), -100.0);
         assert_eq!(r.pressure_curve, None);
+        // Tilt is never the primary source: the engine has no tilt to drive.
+        let t = decode_effector(&blob([496, 0x20, 0, 40, 0, 0, 0, 0, 0, 100], &[]))
+            .expect("a tilt-driven parameter still decodes");
+        assert!(t.on(Source::Tilt));
+        assert_eq!(t.primary(), None, "tilt is read but never handed to the engine");
+    }
+
+    #[test]
+    fn a_velocity_graph_with_no_pressure_graph_is_read_rather_than_refused() {
+        // The corpus never stores this - CSP wrote slot A whenever it wrote
+        // slot B - but nothing in the container forbids it, and the size
+        // identity still says where the one graph starts.
+        let velocity = [(0.0, 0.0), (0.5, 1.0), (1.0, 0.5)];
+        let (_, b) = lens(0, velocity.len());
+        let d = decode_effector(&blob([496, 0x40, 0, 0, 60, 0, 0, 0, b, 100], &[&velocity[..]]))
+            .expect("slot B alone is a layout, not damage");
+        assert_eq!(d.pressure_curve, None);
+        assert_eq!(d.curve(Source::Velocity).map(<[_]>::len), Some(3));
+        assert_eq!(d.primary(), Some(Source::Velocity));
+        assert_eq!(d.minimum(Source::Velocity), 60.0);
     }
 
     #[test]
@@ -486,13 +550,6 @@ mod tests {
         let nan = [(0.0, 0.0), (1.0, f64::NAN)];
         assert_eq!(
             decode_effector(&blob([496, 0x10, 0, 0, 0, 0, 0, a, 0, 100], &[&nan[..]])),
-            None
-        );
-        // A velocity graph with no pressure graph before it: the slots would
-        // not be the slots this reading names.
-        let (_, b) = lens(0, good.len());
-        assert_eq!(
-            decode_effector(&blob([496, 0x40, 0, 0, 0, 0, 0, 0, b, 100], &[&good[..]])),
             None
         );
         // A node count the blob cannot hold, which must not be allocated for.
