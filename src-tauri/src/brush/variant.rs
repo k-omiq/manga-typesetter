@@ -105,11 +105,20 @@ pub struct SharpAngles {
 /// one of that file's `DYN_SOURCES` (never `off` - a brush with no size dynamics
 /// omits the whole struct rather than switching the letterer's off) and `amount`
 /// is its 0-100 strength slider.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SizeDynamics {
     pub src: Source,
     /// 0-100, the engine's strength slider.
     pub amount: f32,
+    /// The brush's response graph for `src`, input then output, both 0 to 1 and
+    /// `x` ascending - `dynCurve` in `src/lib/brush.js`, which remaps the
+    /// source's raw input through it before `amount` fades the result.
+    ///
+    /// Absent for the straight line, which is both what the file stores when it
+    /// has no graph and what an identity graph means. Random has no graph in the
+    /// format at all: there is no input axis to plot a random draw against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curve: Option<Vec<[f32; 2]>>,
 }
 
 /// One imported brush's settings, in the units `src/lib/brush.js` expects.
@@ -204,15 +213,32 @@ impl Default for BrushSettings {
 /// saturation, value) ever store, never a size in the corpus - is read as 0 for
 /// the same reason: the engine's width factor only ever scales a stamp down.
 ///
-/// [`EffectorDynamics::curve`] is decoded and available on both the pressure and
-/// the velocity graph, and is deliberately NOT consumed: the engine has no
-/// response curve to hang it on, and inventing one here would be a new engine
-/// capability smuggled in as an import detail.
+/// The response graph rides along with them, for the PRIMARY source only.
+/// [`EffectorDynamics::curve`] keeps one graph per source and the engine drives
+/// size off one source, so handing over the other source's graph would apply a
+/// velocity response to pressure input. Random has no graph in the format and
+/// therefore sends none.
+///
+/// An identity graph - every node on `y = x` - is omitted rather than sent. It
+/// is what the engine does with no curve at all, so sending it would put an
+/// array in the settings, in the index on disk and in every equality check to
+/// say precisely nothing.
 fn size_dynamics(d: &EffectorDynamics) -> Option<SizeDynamics> {
     let src = d.primary()?;
     let minimum = f64::from(d.minimum(src)).clamp(0.0, 100.0);
     let amount = ((100.0 - minimum) / (1.0 - ENGINE_MIN_W)).round().clamp(0.0, 100.0);
-    Some(SizeDynamics { src, amount: amount as f32 })
+    let curve = d.curve(src).filter(|c| !is_identity(c)).map(<[[f32; 2]]>::to_vec);
+    Some(SizeDynamics { src, amount: amount as f32, curve })
+}
+
+/// Whether a graph is the straight line the engine already draws without one.
+///
+/// The tolerance is a hair rather than exact equality because the control points
+/// come off the file as `f64` on CSP's 1/110 grid and arrive here as `f32`: a
+/// node the author left on the diagonal can land a rounding step off it, and
+/// treating that as a curve would ship an array that changes no pixel.
+fn is_identity(curve: &[[f32; 2]]) -> bool {
+    curve.iter().all(|[x, y]| (x - y).abs() <= 1e-6)
 }
 
 /// What the outer database says about a brush: its name, its settings, and
@@ -489,6 +515,52 @@ mod tests {
         hex(&bytes)
     }
 
+    /// The same blob with response graphs in one or both slots. An empty slice
+    /// is the slot the file leaves out, which is what a straight line stores.
+    fn effector_curved(
+        available: i32,
+        enabled: i32,
+        minimums: [i32; 4],
+        pressure: &[[f64; 2]],
+        velocity: &[[f64; 2]],
+    ) -> String {
+        // One graph as its own record: a 12-byte header, then big-endian `f64`
+        // pairs. This is the writer for the reader in `effector.rs`.
+        let graph = |pts: &[[f64; 2]]| {
+            let mut out = Vec::new();
+            if pts.is_empty() {
+                return out;
+            }
+            out.extend_from_slice(&12u32.to_be_bytes());
+            out.extend_from_slice(&(pts.len() as u32).to_be_bytes());
+            out.extend_from_slice(&16u32.to_be_bytes());
+            for [x, y] in pts {
+                out.extend_from_slice(&x.to_be_bytes());
+                out.extend_from_slice(&y.to_be_bytes());
+            }
+            out
+        };
+        let (p, v) = (graph(pressure), graph(velocity));
+        let mut bytes = 44u32.to_be_bytes().to_vec();
+        for w in [
+            available,
+            enabled,
+            minimums[0],
+            minimums[1],
+            minimums[2],
+            minimums[3],
+            0,
+            p.len() as i32,
+            v.len() as i32,
+            100,
+        ] {
+            bytes.extend_from_slice(&w.to_be_bytes());
+        }
+        bytes.extend_from_slice(&p);
+        bytes.extend_from_slice(&v);
+        hex(&bytes)
+    }
+
     /// Any bytes as a SQLite blob literal.
     fn hex(bytes: &[u8]) -> String {
         let mut out = String::from("x'");
@@ -658,7 +730,7 @@ mod tests {
         ]))
         .settings;
         // 30% minimum size inverted through the engine's strength slider.
-        assert_eq!(s.dynamics, Some(SizeDynamics { src: Source::Pressure, amount: 76.0 }));
+        assert_eq!(s.dynamics, Some(SizeDynamics { src: Source::Pressure, amount: 76.0, curve: None }));
         // And the plain columns beside it are untouched by any of this.
         assert_eq!(s.size, 40.0);
     }
@@ -695,18 +767,116 @@ mod tests {
         // Velocity alone, and its own minimum - not pressure's.
         assert_eq!(
             dynamics(0x40, [90, 0, 50, 0]),
-            Some(SizeDynamics { src: Source::Velocity, amount: 54.0 })
+            Some(SizeDynamics { src: Source::Velocity, amount: 54.0, curve: None })
         );
         // Pressure and velocity together: pressure carries the stroke.
         assert_eq!(dynamics(0x50, [30, 0, 50, 0]).map(|d| d.src), Some(Source::Pressure));
         // Random alone is still a driver.
         assert_eq!(
             dynamics(0x80, [0, 0, 0, 20]),
-            Some(SizeDynamics { src: Source::Random, amount: 87.0 })
+            Some(SizeDynamics { src: Source::Random, amount: 87.0, curve: None })
         );
         // A negative minimum is a signed parameter's, never a size's; read as
         // zero because the engine's width factor only scales a stamp down.
         assert_eq!(dynamics(0x80, [0, 0, 0, -100]).map(|d| d.amount), Some(100.0));
+    }
+
+    /// A drastic graph: full output by 1% input, then flat. The corpus really
+    /// holds shapes like this, and it is the one the engine has to honour for an
+    /// imported brush to behave like it does in CSP.
+    const STEEP: [[f64; 2]; 3] = [[0.0, 0.0], [0.01, 1.0], [1.0, 1.0]];
+
+    #[test]
+    fn the_primary_sources_response_graph_rides_along_with_it() {
+        let curve = |enabled, pressure: &[[f64; 2]], velocity: &[[f64; 2]]| {
+            read(&db(&[(
+                "BrushSizeEffector",
+                &effector_curved(OFFERED, enabled, [30, 0, 30, 0], pressure, velocity),
+            )]))
+            .settings
+            .dynamics
+            .expect("a source is switched on")
+            .curve
+        };
+        // Pressure drives, so it is the PRESSURE graph that arrives - handing
+        // over the velocity graph would apply one source's response to another's
+        // input, which is a different pen and a silent one.
+        let gentle = [[0.0, 0.0], [0.5, 0.9], [1.0, 1.0]];
+        assert_eq!(
+            curve(0x10, &STEEP, &gentle),
+            Some(vec![[0.0, 0.0], [0.01, 1.0], [1.0, 1.0]])
+        );
+        assert_eq!(
+            curve(0x40, &STEEP, &gentle),
+            Some(vec![[0.0, 0.0], [0.5, 0.9], [1.0, 1.0]]),
+            "velocity drives, so velocity's graph is the one that ships"
+        );
+        // Both switched on: pressure wins the source, and takes its graph with
+        // it rather than leaving velocity's behind.
+        assert_eq!(
+            curve(0x50, &STEEP, &gentle),
+            Some(vec![[0.0, 0.0], [0.01, 1.0], [1.0, 1.0]])
+        );
+        // Random has no input axis to plot, so the format stores no graph for it
+        // and none is invented from the slots that are there.
+        assert_eq!(curve(0x80, &STEEP, &gentle), None);
+        // A driver whose own slot is empty: the straight line, sent as absent.
+        assert_eq!(curve(0x40, &STEEP, &[]), None);
+    }
+
+    #[test]
+    fn a_straight_line_graph_is_omitted_rather_than_shipped() {
+        let curve = |pressure: &[[f64; 2]]| {
+            read(&db(&[(
+                "BrushSizeEffector",
+                &effector_curved(OFFERED, 0x10, [30, 0, 0, 0], pressure, &[]),
+            )]))
+            .settings
+            .dynamics
+            .and_then(|d| d.curve)
+        };
+        // y = x at two nodes and at four: identical to no curve at all, so it
+        // must not travel as an array that changes nothing.
+        assert_eq!(curve(&[[0.0, 0.0], [1.0, 1.0]]), None);
+        assert_eq!(curve(&[[0.0, 0.0], [0.25, 0.25], [0.75, 0.75], [1.0, 1.0]]), None);
+        // One node a hair off the diagonal is still the straight line: the
+        // control points are `f64` on CSP's 1/110 grid and land here as `f32`.
+        assert_eq!(curve(&[[0.0, 0.0], [0.5, 0.5 + 1e-9], [1.0, 1.0]]), None);
+        // Visibly off it is a curve, and travels.
+        assert!(curve(&[[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]]).is_some());
+    }
+
+    #[test]
+    fn the_curve_reaches_the_json_as_pairs_the_engine_can_read() {
+        let v = serde_json::to_value(
+            read(&db(&[(
+                "BrushSizeEffector",
+                &effector_curved(OFFERED, 0x10, [30, 0, 0, 0], &STEEP, &[]),
+            )]))
+            .settings,
+        )
+        .unwrap();
+        assert_eq!(v["dyn"]["src"], "pressure");
+        // An array of pairs, in order, in range - the shape `dynCurve` accepts.
+        // Compared with a tolerance rather than exactly because the points pass
+        // through `f32`, and 0.01 comes back out as 0.00999999977.
+        let got = v["dyn"]["curve"].as_array().expect("an array of pairs");
+        assert_eq!(got.len(), 3);
+        for (pair, want) in got.iter().zip(STEEP) {
+            let p = pair.as_array().expect("a pair");
+            assert_eq!(p.len(), 2);
+            for (n, w) in p.iter().zip(want) {
+                let v = n.as_f64().expect("a number");
+                assert!((0.0..=1.0).contains(&v) && (v - w).abs() < 1e-6, "{v} is not {w}");
+            }
+        }
+        // And a brush with no graph carries no `curve` key, for the same reason
+        // a brush with no dynamics carries no `dyn` key.
+        let plain = serde_json::to_value(
+            read(&db(&[("BrushSizeEffector", &effector(OFFERED, 0x10, [30, 0, 0, 0]))])).settings,
+        )
+        .unwrap();
+        assert!(plain["dyn"].get("curve").is_none(), "no graph, no key");
     }
 
     #[test]
@@ -743,7 +913,7 @@ mod tests {
         let none = serde_json::to_value(BrushSettings::default()).unwrap();
         assert!(none.get("dyn").is_none(), "a brush with no dynamics carries no dyn key");
         let some = serde_json::to_value(BrushSettings {
-            dynamics: Some(SizeDynamics { src: Source::Velocity, amount: 76.0 }),
+            dynamics: Some(SizeDynamics { src: Source::Velocity, amount: 76.0, curve: None }),
             ..BrushSettings::default()
         })
         .unwrap();

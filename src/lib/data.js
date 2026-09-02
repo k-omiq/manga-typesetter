@@ -347,6 +347,14 @@ export function normalizeShadow(x) {
 // that paints nothing is worse than no stroke: it still costs a history slot
 // and a bounds pass. Individual unreadable points are dropped, the way a mask
 // shape's are, so one bad number does not lose the whole gesture.
+//
+// There is deliberately no `dyn` here. The size dynamics - source, strength and
+// the imported response curve - are CAPTURE-time inputs: `buildStroke` resolves
+// them once and bakes the answer into each point's third number, which this
+// clamps to 0..1 like any other width. So a saved project reproduces a curved
+// stroke exactly without storing the curve, and a stroke drawn with a brush that
+// was later re-imported or re-tuned still draws as the ink the letterer
+// accepted. A `dyn` on a stroke would be a field nothing ever reads.
 export function normalizeInkStroke(src) {
   if (!src || typeof src !== 'object') return null;
   const pts = [];

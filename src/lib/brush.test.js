@@ -178,7 +178,15 @@ describe('smoothPath', () => {
   });
 });
 
-import { widthFactors, buildStroke, defaultBrushSettings, DYN_SOURCES } from './brush.js';
+import {
+  widthFactors,
+  buildStroke,
+  curveEval,
+  dynCurve,
+  defaultBrushSettings,
+  DYN_CURVE_MAX_POINTS,
+  DYN_SOURCES,
+} from './brush.js';
 
 const raw = (n, dx = 10, dt = 10, pressure = 0.5) =>
   Array.from({ length: n }, (_, i) => ({ x: i * dx, y: 0, pressure, t: i * dt }));
@@ -237,6 +245,163 @@ describe('widthFactors', () => {
 
   it('handles a single point without dividing by zero', () => {
     expect(widthFactors(raw(1), 'velocity', 100, 1)).toEqual([1]);
+  });
+});
+
+// The shape the imported corpus really uses: full size by 1% pressure, flat
+// after. Without the curve this pen draws as a plain linear one, which is the
+// visible loss phase 6.3 exists to close.
+const STEEP = [[0, 0], [0.01, 1], [1, 1]];
+
+describe('curveEval', () => {
+  it('is the identity when there is no usable curve', () => {
+    for (const c of [undefined, null, 'curve', [], [[0, 0]], [[0, 0], [1, 1], 'x']]) {
+      for (const t of [0, 0.25, 0.5, 1]) expect(curveEval(c, t)).toBe(t);
+    }
+    // And the identity line itself is, unsurprisingly, the identity.
+    expect(curveEval([[0, 0], [1, 1]], 0.37)).toBeCloseTo(0.37, 12);
+  });
+
+  it('interpolates linearly inside a segment', () => {
+    const c = [[0, 0], [0.5, 0.25], [1, 1]];
+    expect(curveEval(c, 0.25)).toBeCloseTo(0.125, 12);
+    expect(curveEval(c, 0.5)).toBeCloseTo(0.25, 12);
+    expect(curveEval(c, 0.75)).toBeCloseTo(0.625, 12);
+  });
+
+  it('holds the end values outside the curve rather than extrapolating', () => {
+    // A graph that starts at 0.2 and stops at 0.8 says nothing outside them.
+    const c = [[0.2, 0.3], [0.8, 0.9]];
+    expect(curveEval(c, 0)).toBe(0.3);
+    expect(curveEval(c, 0.1)).toBe(0.3);
+    expect(curveEval(c, 0.9)).toBe(0.9);
+    expect(curveEval(c, 1)).toBe(0.9);
+    // Inputs outside 0..1 clamp before the lookup, so nothing runs off the end.
+    expect(curveEval(c, -5)).toBe(0.3);
+    expect(curveEval(c, 42)).toBe(0.9);
+    expect(curveEval(c, NaN)).toBe(0.3);
+  });
+
+  it('reads a repeated x as a step rather than dividing by zero', () => {
+    const c = [[0, 0], [0.5, 0.2], [0.5, 0.8], [1, 1]];
+    expect(curveEval(c, 0.5)).toBe(0.2);
+    expect(curveEval(c, 0.6)).toBeCloseTo(0.84, 12);
+    expect(Number.isFinite(curveEval([[0.5, 0.1], [0.5, 0.9]], 0.5))).toBe(true);
+  });
+
+  it('takes the drastic corpus shape at its word', () => {
+    expect(curveEval(STEEP, 0)).toBe(0);
+    expect(curveEval(STEEP, 0.005)).toBeCloseTo(0.5, 12);
+    expect(curveEval(STEEP, 0.01)).toBe(1);
+    expect(curveEval(STEEP, 0.4)).toBe(1);
+  });
+
+  it('is pure and deterministic', () => {
+    const c = [[0, 0.2], [1, 0.9]];
+    const once = curveEval(c, 0.3);
+    expect(curveEval(c, 0.3)).toBe(once);
+    expect(c).toEqual([[0, 0.2], [1, 0.9]]);
+  });
+});
+
+describe('dynCurve', () => {
+  it('accepts a graph and clamps its points into range', () => {
+    expect(dynCurve([[0, 0], [1, 1]])).toEqual([[0, 0], [1, 1]]);
+    expect(dynCurve([[-1, 2], [5, -3]])).toEqual([[0, 1], [1, 0]]);
+    expect(dynCurve([['0.2', '0.4'], [0.9, 0.5]])).toEqual([[0.2, 0.4], [0.9, 0.5]]);
+  });
+
+  it('refuses a graph whole rather than dropping a point out of it', () => {
+    for (const bad of [
+      null,
+      'curve',
+      [],
+      [[0, 0]],
+      [[0, 0], [1, Infinity]],
+      [[0, 0], [1, 'wide']],
+      [[0, 0], 7],
+      // x going backwards has no single output for an input.
+      [[0, 0], [0.8, 0.5], [0.3, 0.9]],
+      // Past the node cap the array is damage, not a graph.
+      Array.from({ length: DYN_CURVE_MAX_POINTS + 1 }, (_, i) => [i / 40, 0.5]),
+    ]) {
+      expect(dynCurve(bad)).toBeNull();
+    }
+    expect(dynCurve(Array.from({ length: DYN_CURVE_MAX_POINTS }, (_, i) => [i / 40, 0.5])))
+      .toHaveLength(DYN_CURVE_MAX_POINTS);
+  });
+});
+
+describe('widthFactors with a response curve', () => {
+  // A pressure ramp from nothing to full, which is what a light-to-heavy
+  // gesture gives the engine.
+  const ramp = (n = 11) =>
+    Array.from({ length: n }, (_, i) => ({ x: i * 10, y: 0, pressure: i / (n - 1), t: i * 10 }));
+
+  it('brings a drastic curve to full width where a linear pen is still thin', () => {
+    const plain = widthFactors(ramp(), 'pressure', 100, 1);
+    const curved = widthFactors(ramp(), 'pressure', 100, 1, STEEP);
+    // At 10% pressure the linear pen is at a tenth of its width; the curve's is
+    // already at full size, which is the whole difference.
+    expect(plain[1]).toBeCloseTo(0.1, 6);
+    expect(curved[1]).toBe(1);
+    // Only the very first sample, at zero pressure, is still thin.
+    expect(curved[0]).toBeCloseTo(0.08, 6);
+    for (let i = 1; i < curved.length; i++) expect(curved[i]).toBe(1);
+  });
+
+  it('leaves an identity curve and a missing one identical', () => {
+    const want = widthFactors(ramp(), 'pressure', 70, 1);
+    expect(widthFactors(ramp(), 'pressure', 70, 1, [[0, 0], [1, 1]])).toEqual(want);
+    expect(widthFactors(ramp(), 'pressure', 70, 1, null)).toEqual(want);
+    expect(widthFactors(ramp(), 'pressure', 70, 1, [[0, 0], [1, 'x']])).toEqual(want);
+  });
+
+  it('composes with the strength slider rather than replacing it', () => {
+    // The curve says full width; amount 0 still means no dynamics at all.
+    expect(widthFactors(ramp(), 'pressure', 0, 1, STEEP)).toEqual(new Array(11).fill(1));
+    // Halfway up the slider a curve that says "thin" is only half applied.
+    const flat = [[0, 0], [1, 0]];
+    const half = widthFactors(ramp(2), 'pressure', 50, 1, flat);
+    for (const w of half) expect(w).toBeCloseTo(1 - 0.5 * (1 - 0.08), 6);
+  });
+
+  it('remaps velocity and random too, not just pressure', () => {
+    const flat = [[0, 0.5], [1, 0.5]];
+    for (const src of ['velocity', 'random']) {
+      for (const w of widthFactors(raw(8), src, 100, 3, flat)) {
+        expect(w).toBeCloseTo(0.5, 6);
+      }
+    }
+  });
+
+  it('never returns a factor outside 0..1 whatever the curve', () => {
+    for (const src of DYN_SOURCES) {
+      for (const c of [STEEP, [[0, 1], [1, 0]], [[0.3, 0], [0.4, 1]]]) {
+        for (const w of widthFactors(raw(8), src, 100, 2, c)) {
+          expect(w).toBeGreaterThanOrEqual(0);
+          expect(w).toBeLessThanOrEqual(1);
+        }
+      }
+    }
+  });
+
+  it('rides through buildStroke and survives the save', () => {
+    // The curve is a capture-time input: `buildStroke` bakes its answer into
+    // each point's width, so a saved project reproduces the stroke exactly
+    // without the curve having to travel with it.
+    const base = { ...defaultBrushSettings(), dyn: { src: 'pressure', amount: 100 } };
+    const gesture = ramp(6);
+    const plain = buildStroke(gesture, base);
+    const curved = buildStroke(gesture, { ...base, dyn: { ...base.dyn, curve: STEEP } });
+    expect(curved.pts.map((p) => p[2])).not.toEqual(plain.pts.map((p) => p[2]));
+    expect(curved.pts[1][2]).toBeGreaterThan(plain.pts[1][2]);
+    // Round trip through the data model unchanged, widths and all.
+    expect(normalizeInkStroke(curved)).toEqual(curved);
+    expect(normalizeInkStroke(curved).pts).toEqual(curved.pts);
+    // And no `dyn` rides along: there is nothing left for it to decide.
+    expect(curved.dyn).toBeUndefined();
+    expect(normalizeInkStroke(curved).dyn).toBeUndefined();
   });
 });
 

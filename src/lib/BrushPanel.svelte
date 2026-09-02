@@ -596,6 +596,18 @@
             <input class="num-s" type="number" min="0" max="100" step="1" value={s.dyn.amount} disabled={s.dyn.src === 'off'} aria-label="Amount, percent" onchange={(e) => num(s.dyn, 'amount', e.target.value, 0, 100)} />
           </div>
         </div>
+        {#if s.dyn.curve}
+          <div class="grp">
+            <span class="lbl">Response</span>
+            <svg class="curve" viewBox="0 0 100 44" preserveAspectRatio="none" role="img" aria-label="Imported response curve, {s.dyn.curve.length} points">
+              <!-- The straight line the engine draws without a curve, so the
+                   imported shape reads against something. -->
+              <line class="ident" x1="0" y1="44" x2="100" y2="0" vector-effect="non-scaling-stroke" />
+              <polyline points={s.dyn.curve.map(([x, y]) => `${x * 100},${(1 - y) * 44}`).join(' ')} vector-effect="non-scaling-stroke" />
+            </svg>
+          </div>
+          <p class="hint">This brush brought its own response curve from its .sut file, and it is applied as imported. Amount still scales it.</p>
+        {/if}
         {#if s.dyn.src === 'velocity'}
           <p class="hint">Velocity thins the middle of a fast stroke and leaves the ends thick.</p>
         {/if}
@@ -917,6 +929,33 @@
   .nest.disabled {
     opacity: 0.45;
     pointer-events: none;
+  }
+  /* An imported brush's response curve, shown and not edited. There is no graph
+     editor here and 6.3 did not add one, but a shape that changes how every
+     stroke thins should not be invisible - so the panel draws it small, with the
+     straight line it replaces underneath for scale. Input runs across, output
+     up, both 0 to 1, which is the way CSP's own graph reads. */
+  .curve {
+    width: 100%;
+    height: 44px;
+    border: 1px solid var(--line2);
+    border-radius: 4px;
+    /* No fill of its own. `--paper` would be a white card in the dark theme and
+       `--accent` is the text colour in it, so the graph would have drawn itself
+       in near-white on near-white; against the panel's own surface the line is
+       the text colour and reads in both themes. */
+    background: none;
+  }
+  .curve polyline {
+    fill: none;
+    stroke: var(--text);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+  }
+  .curve .ident {
+    stroke: var(--line2);
+    stroke-width: 1;
+    stroke-dasharray: 2 3;
   }
   .hint {
     font-size: 11px;

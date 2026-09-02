@@ -99,6 +99,21 @@ describe('picking a brush', () => {
     expect(after.color).toBe('#c81e1e');
   });
 
+  it("takes an imported brush's response curve along with its dynamics", () => {
+    const curve = [[0, 0], [0.01, 1], [1, 1]];
+    const before = { ...defaultBrushSettings(), dyn: { src: 'pressure', amount: 33 } };
+    const imported = entry({
+      settings: sanitiseBrushSettings({ dyn: { src: 'pressure', amount: 76, curve } }),
+    });
+    // The spread needs nothing new: `dyn` replaces `dyn`, curve and all.
+    expect(pickedSettings(before, imported).dyn).toEqual({ src: 'pressure', amount: 76, curve });
+    // And a brush whose graph was the straight line replaces the dynamics
+    // without leaving the previous brush's curve behind on the tool.
+    const withCurve = { ...defaultBrushSettings(), dyn: { src: 'pressure', amount: 76, curve } };
+    const plain = entry({ settings: sanitiseBrushSettings({ dyn: { src: 'velocity', amount: 40 } }) });
+    expect(pickedSettings(withCurve, plain).dyn).toEqual({ src: 'velocity', amount: 40 });
+  });
+
   it('leaves hand-set dynamics alone when the brush named none', () => {
     const hand = { src: 'random', amount: 12 };
     const before = { ...defaultBrushSettings(), dyn: hand };

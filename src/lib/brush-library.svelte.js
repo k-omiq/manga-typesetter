@@ -42,7 +42,7 @@
 // chapter close. Re-ask `brushTip(id)` next frame; a hit is a map lookup, and a
 // miss re-reads a file that is already in the OS page cache.
 import { fsx } from './fsx.js';
-import { defaultBrushSettings, DYN_SOURCES } from './brush.js';
+import { defaultBrushSettings, dynCurve, DYN_SOURCES } from './brush.js';
 
 // The version stamped into library.json. Bumped when the entry shape changes in
 // a way `sanitiseEntry` cannot absorb, which it has not yet had to be.
@@ -169,10 +169,22 @@ const pngFileFor = (id) => `${id}.png`;
 //
 // The amount is the strength slider, 0-100, already inverted out of CSP's
 // minimum-size percentage on the Rust side.
+//
+// The curve is the brush's own response graph, and it is optional in the same
+// all-or-nothing way the whole `dyn` is: `dynCurve` either hands back a usable
+// graph or null, and a null drops the key rather than storing a broken one. A
+// brush whose graph was the straight line sends none - the Rust side omits an
+// identity curve - and the engine's fallback is that same straight line, so the
+// two agree without either having to spell it out.
 function importedDyn(v) {
   if (!v || typeof v !== 'object') return null;
   if (typeof v.src !== 'string' || v.src === 'off' || !DYN_SOURCES.includes(v.src)) return null;
-  return { src: v.src, amount: num(v.amount, defaultBrushSettings().dyn.amount, 0, 100) };
+  const curve = dynCurve(v.curve);
+  return {
+    src: v.src,
+    amount: num(v.amount, defaultBrushSettings().dyn.amount, 0, 100),
+    ...(curve ? { curve } : null),
+  };
 }
 
 // The settings an import speaks for, and only those.

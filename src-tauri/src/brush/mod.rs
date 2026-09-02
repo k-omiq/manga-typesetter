@@ -532,7 +532,11 @@ mod tests {
             "abc".into(),
             "round".into(),
             &BrushSettings {
-                dynamics: Some(variant::SizeDynamics { src: effector::Source::Pressure, amount: 76.0 }),
+                dynamics: Some(variant::SizeDynamics {
+                    src: effector::Source::Pressure,
+                    amount: 76.0,
+                    curve: None,
+                }),
                 ..BrushSettings::default()
             },
         )
@@ -764,22 +768,44 @@ mod tests {
     fn every_corpus_brush_arrives_with_the_dynamics_its_file_was_authored_with() {
         let mut tally = std::collections::BTreeMap::new();
         let mut files_with = 0;
+        let (mut files_with_curve, mut widest_curve) = (0, 0usize);
         let (mut lowest, mut highest) = (f32::INFINITY, f32::NEG_INFINITY);
         for path in corpus() {
             let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
             let imported = import_file(&path).expect("the corpus imports clean");
             // Every brush out of one file shares that file's Variant row, so the
             // dynamics must be identical across them rather than per tip.
-            let first = imported[0].settings.dynamics;
+            let first = imported[0].settings.dynamics.clone();
             for b in &imported {
                 assert_eq!(b.settings.dynamics, first, "{name}: one file, two dynamics");
             }
-            if let Some(d) = first {
+            if let Some(d) = &first {
                 files_with += 1;
                 assert!((0.0..=100.0).contains(&d.amount), "{name}: amount {}", d.amount);
                 assert_ne!(d.src, effector::Source::Tilt, "{name}: the engine has no tilt");
                 lowest = lowest.min(d.amount);
                 highest = highest.max(d.amount);
+            }
+            // The response graph, checked against what `dynCurve` in
+            // `src/lib/brush.js` will accept: two to thirty-two nodes, both axes
+            // inside 0..1, `x` never going backwards. A graph that failed any of
+            // these would be dropped silently on the JS side and the brush would
+            // quietly draw as a linear pen.
+            if let Some(c) = first.as_ref().and_then(|d| d.curve.as_ref()) {
+                files_with_curve += 1;
+                widest_curve = widest_curve.max(c.len());
+                assert!((2..=32).contains(&c.len()), "{name}: {} nodes", c.len());
+                let mut prev = f32::NEG_INFINITY;
+                for [x, y] in c {
+                    assert!((0.0..=1.0).contains(x), "{name}: x {x}");
+                    assert!((0.0..=1.0).contains(y), "{name}: y {y}");
+                    assert!(*x >= prev, "{name}: x went backwards at {x}");
+                    prev = *x;
+                }
+                assert!(
+                    c.iter().any(|[x, y]| (x - y).abs() > 1e-6),
+                    "{name}: an identity graph should have been omitted"
+                );
             }
             *tally.entry(format!("{:?}", first.map(|d| d.src))).or_insert(0) += 1;
         }
@@ -795,6 +821,14 @@ mod tests {
         // 11 is a 90% minimum size - a pen that barely thins - and 100 is one
         // that thins all the way to the engine's floor.
         assert_eq!((lowest, highest), (11.0, 100.0), "the strengths the corpus spans");
-        println!("corpus dynamics: {tally:?}, amount {lowest}-{highest}");
+        // Every one of the 62 size-driven files carries a graph that is not the
+        // straight line - which is the whole reason phase 6.3 exists. Were this
+        // to drop, either the mapping stopped reading the primary source's graph
+        // or the identity filter grew too eager.
+        assert_eq!(files_with_curve, 62, "every size-driven corpus brush brings a response curve");
+        println!(
+            "corpus dynamics: {tally:?}, amount {lowest}-{highest}, \
+             {files_with_curve} curves, widest {widest_curve} nodes"
+        );
     }
 }

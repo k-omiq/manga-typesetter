@@ -704,6 +704,35 @@ describe('sanitiseBrushSettings', () => {
     }
   });
 
+  it('keeps the response curve a decoded Effector blob brought with it', () => {
+    const steep = [[0, 0], [0.01, 1], [1, 1]];
+    const s = sanitiseBrushSettings({ dyn: { src: 'pressure', amount: 76, curve: steep } });
+    expect(s.dyn).toEqual({ src: 'pressure', amount: 76, curve: steep });
+    // Points out of range clamp; strings that are numbers are read as numbers.
+    expect(sanitiseBrushSettings({ dyn: { src: 'pressure', curve: [[-1, 2], ['0.5', 0.5]] } }).dyn.curve)
+      .toEqual([[0, 1], [0.5, 0.5]]);
+  });
+
+  // The curve is all-or-nothing like the whole `dyn` is: a graph missing a node
+  // is a different pen, not a coarser one, so a broken graph drops and the brush
+  // draws on the straight line the engine has without it.
+  it('drops a broken response curve without losing the dynamics around it', () => {
+    for (const curve of [
+      undefined,
+      null,
+      'curve',
+      [],
+      [[0, 0]],
+      [[0, 0], [1, NaN]],
+      [[0, 0], [0.9, 0.5], [0.4, 1]],
+      Array.from({ length: 33 }, (_, i) => [i / 40, 0.5]),
+    ]) {
+      const s = sanitiseBrushSettings({ dyn: { src: 'pressure', amount: 76, curve } });
+      expect(s.dyn).toEqual({ src: 'pressure', amount: 76 });
+      expect('curve' in s.dyn).toBe(false);
+    }
+  });
+
   it('refuses a dynamics source this engine does not have, off included', () => {
     // `off` is the one the panel offers and an import may not send: a brush
     // with no dynamics omits the key rather than switching the letterer's off.
@@ -716,23 +745,28 @@ describe('sanitiseBrushSettings', () => {
   // brush that lost its dynamics the first time the app restarted - and one
   // gained there would be a brush that took the letterer's over on every boot.
   it('carries the dynamics through the index it writes and reads back', async () => {
+    // The response curve rides with them: a brush that lost its graph on the
+    // first restart would quietly become a linear pen, which is exactly the
+    // loss 6.3 set out to close.
+    const curve = [[0, 0], [0.01, 1], [1, 1]];
+    const want = { src: 'velocity', amount: 54, curve };
     h.result = {
       brushes: [
-        brush('ddd', { settings: { size: 40, dyn: { src: 'velocity', amount: 54 } } }),
+        brush('ddd', { settings: { size: 40, dyn: { src: 'velocity', amount: 54, curve } } }),
         brush('eee'),
       ],
       errors: [],
     };
     await importBrushes(['/x/one.sut']);
-    expect(getBrush('ddd').settings.dyn).toEqual({ src: 'velocity', amount: 54 });
+    expect(getBrush('ddd').settings.dyn).toEqual(want);
 
     const written = JSON.parse(fsx._tree.files.get(INDEX));
-    expect(written.brushes[0].settings.dyn).toEqual({ src: 'velocity', amount: 54 });
+    expect(written.brushes[0].settings.dyn).toEqual(want);
     expect('dyn' in written.brushes[1].settings).toBe(false);
 
     __resetBrushLibrary();
     await loadBrushLibrary({ force: true });
-    expect(getBrush('ddd').settings.dyn).toEqual({ src: 'velocity', amount: 54 });
+    expect(getBrush('ddd').settings.dyn).toEqual(want);
     expect('dyn' in getBrush('eee').settings).toBe(false);
   });
 });

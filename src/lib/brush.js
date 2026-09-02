@@ -229,9 +229,77 @@ export function defaultBrushSettings() {
 // stroke into beads wherever the source bottomed out.
 const MIN_W = 0.08;
 
+// The most nodes a response curve may carry. CSP's graph editor offers a
+// handful and the imported corpus tops out at fourteen, so past this an array
+// is damage rather than a graph and is refused whole. Two is the floor: one
+// node is a dot, and a line needs two ends.
+export const DYN_CURVE_MAX_POINTS = 32;
+
+// A response curve as the engine will use it, or null when there is not one to
+// use - which every brush without a graph has, and which reads as the straight
+// line through the origin.
+//
+// All-or-nothing, like the warp mesh and unlike a stroke's points: a graph
+// missing a node is not a coarser graph, it is a different pen, and there is no
+// honest way to guess where the missing node was. `x` is allowed to repeat (a
+// vertical step is a shape CSP's editor can draw) but never to go backwards,
+// because a curve that doubles back has no single output for an input.
+export function dynCurve(c) {
+  if (!Array.isArray(c) || c.length < 2 || c.length > DYN_CURVE_MAX_POINTS) return null;
+  const out = [];
+  let prev = -Infinity;
+  for (const p of c) {
+    if (!Array.isArray(p)) return null;
+    const x = +p[0];
+    const y = +p[1];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const cx = Math.min(1, Math.max(0, x));
+    if (cx < prev) return null;
+    prev = cx;
+    out.push([cx, Math.min(1, Math.max(0, y))]);
+  }
+  return out;
+}
+
+// The interpolation itself, on a curve `dynCurve` has already passed.
+function curveAt(c, x) {
+  if (x <= c[0][0]) return c[0][1];
+  const end = c[c.length - 1];
+  if (x >= end[0]) return end[1];
+  for (let i = 1; i < c.length; i++) {
+    const [x0, y0] = c[i - 1];
+    const [x1, y1] = c[i];
+    // A repeated x is a step: the node above wins, so the graph jumps rather
+    // than dividing by a zero-width segment.
+    if (x <= x1) return x1 > x0 ? y0 + ((y1 - y0) * (x - x0)) / (x1 - x0) : y1;
+  }
+  return end[1];
+}
+
+// What a source's raw input becomes after the brush's own response graph.
+//
+// CSP draws that graph beside every dynamic source - input across, output up,
+// both 0 to 1 - and it is the difference between "this pen thins with pressure"
+// and "this pen is at full width by 1% pressure and stays there", which is a
+// shape the imported corpus really uses. The engine's `amount` slider is a
+// straight fade of the whole effect and cannot say it.
+//
+// Piecewise linear between the nodes and FLAT outside them: a graph whose first
+// node sits at x = 0.2 says nothing about what happens below it, and holding its
+// first value is the only reading that does not invent one. An absent or
+// unusable curve is the identity, so a brush without a graph is untouched.
+//
+// Pure and deterministic: the same curve and the same input give the same
+// answer in the editor, in the export, and in a test.
+export function curveEval(curve, t) {
+  const x = Math.min(1, Math.max(0, Number(t) || 0));
+  const c = dynCurve(curve);
+  return c ? curveAt(c, x) : x;
+}
+
 // The width factor at every raw point. `raw` is the captured gesture:
 // [{ x, y, pressure, t }], t in ms from the start of the stroke.
-export function widthFactors(raw, source, amount, seed) {
+export function widthFactors(raw, source, amount, seed, curve) {
   const n = raw?.length ?? 0;
   if (!n) return [];
   const a = Math.min(100, Math.max(0, Number(amount) || 0)) / 100;
@@ -259,6 +327,16 @@ export function widthFactors(raw, source, amount, seed) {
     const top = Math.max(...speed);
     for (let i = 0; i < n; i++) base[i] = top > 0 ? 1 - speed[i] / top : 1;
   }
+  // The brush's own response graph remaps the source's raw input - pressure,
+  // normalised speed, the random draw - BEFORE the strength slider sees it.
+  // That is the order CSP composes them in: the graph says what this pen does
+  // with the input, and `amount` then says how much of that to apply. Doing it
+  // the other way round would let the slider flatten the shape it is meant to
+  // be scaling.
+  const c = dynCurve(curve);
+  if (c) {
+    for (let i = 0; i < n; i++) base[i] = curveAt(c, base[i]);
+  }
   // `amount` fades the whole effect back towards a constant full width, so the
   // slider reads as strength rather than as a hard switch.
   return base.map((b) => Math.min(1, Math.max(0, 1 - a * (1 - Math.max(MIN_W, b)))));
@@ -276,7 +354,12 @@ let seedCounter = 1;
 export function buildStroke(raw, settings) {
   if (!raw?.length) return null;
   const seed = seedCounter++;
-  const w = widthFactors(raw, settings.dyn?.src, settings.dyn?.amount, seed);
+  // The dynamics resolve HERE and are then baked into the points' third number,
+  // which is why no stroke carries a `dyn` of its own: source, strength and
+  // response curve are capture-time inputs, and a saved stroke reproduces
+  // exactly because its widths are already resolved. Re-reading them at draw
+  // time would let a later settings change silently rewrite accepted ink.
+  const w = widthFactors(raw, settings.dyn?.src, settings.dyn?.amount, seed, settings.dyn?.curve);
   let pts = raw.map((p, i) => [p.x, p.y, w[i] ?? 1]);
   pts = stabilisePath(pts, settings.stabilise);
   pts = smoothPath(pts, settings.postCorrect, settings.sharpAngles?.on ? settings.sharpAngles.deg : 0);
