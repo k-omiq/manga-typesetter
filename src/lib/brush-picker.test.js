@@ -73,17 +73,42 @@ describe('picking a brush', () => {
     expect(after.angle).toBe(330);
   });
 
-  it('leaves the letterer their colour, dynamics and correction', () => {
-    const before = {
-      ...defaultBrushSettings(),
-      color: '#c81e1e',
-      dyn: { src: 'pressure', amount: 33 },
-      postCorrect: 90,
-    };
+  it('leaves the letterer their colour and correction', () => {
+    const before = { ...defaultBrushSettings(), color: '#c81e1e', postCorrect: 90 };
     const after = pickedSettings(before, entry());
     expect(after.color).toBe('#c81e1e');
-    expect(after.dyn).toEqual({ src: 'pressure', amount: 33 });
     expect(after.postCorrect).toBe(90);
+  });
+
+  // The two halves of phase 6.2's contract, and the reason `sanitiseBrushSettings`
+  // may not default the key in. Both go through the real sanitiser, because the
+  // absence is only worth anything if it survives the trip an entry actually
+  // takes.
+  it("takes the dynamics of a brush whose Effector blob named a driver", () => {
+    const before = {
+      ...defaultBrushSettings(),
+      dyn: { src: 'pressure', amount: 33 },
+      color: '#c81e1e',
+    };
+    const imported = entry({
+      settings: sanitiseBrushSettings({ size: 96, dyn: { src: 'velocity', amount: 76 } }),
+    });
+    const after = pickedSettings(before, imported);
+    expect(after.dyn).toEqual({ src: 'velocity', amount: 76 });
+    // and it took nothing else it had no opinion about
+    expect(after.color).toBe('#c81e1e');
+  });
+
+  it('leaves hand-set dynamics alone when the brush named none', () => {
+    const hand = { src: 'random', amount: 12 };
+    const before = { ...defaultBrushSettings(), dyn: hand };
+    // The plain entry: settings sanitised from a `.sut` that said nothing.
+    const after = pickedSettings(before, entry());
+    expect('dyn' in entry().settings).toBe(false);
+    // The same object, not a defaulted copy of it.
+    expect(after.dyn).toBe(hand);
+    // The round tip has no settings at all, and must not switch them off either.
+    expect(pickedSettings(before, ROUND).dyn).toEqual(hand);
   });
 
   it('is the contract 2.3 wrote: a spread of the entry over the tool', () => {

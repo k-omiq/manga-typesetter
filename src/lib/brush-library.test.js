@@ -673,6 +673,68 @@ describe('sanitiseBrushSettings', () => {
     expect(sanitiseBrushSettings({ angle: -90 }).angle).toBe(270);
     expect(sanitiseBrushSettings({ flatness: 0 }).flatness).toBe(0.01);
   });
+
+  it('keeps the size dynamics a decoded Effector blob named', () => {
+    const s = sanitiseBrushSettings({ size: 96, dyn: { src: 'pressure', amount: 76 } });
+    expect(s.dyn).toEqual({ src: 'pressure', amount: 76 });
+    expect(sanitiseBrushSettings({ dyn: { src: 'velocity', amount: 0 } }).dyn).toEqual({
+      src: 'velocity',
+      amount: 0,
+    });
+    expect(sanitiseBrushSettings({ dyn: { src: 'random', amount: 100 } }).dyn.src).toBe('random');
+  });
+
+  it('clamps a dynamics amount and falls a junk one back to the engine default', () => {
+    expect(sanitiseBrushSettings({ dyn: { src: 'pressure', amount: 400 } }).dyn.amount).toBe(100);
+    expect(sanitiseBrushSettings({ dyn: { src: 'pressure', amount: -5 } }).dyn.amount).toBe(0);
+    expect(sanitiseBrushSettings({ dyn: { src: 'pressure', amount: 'hard' } }).dyn.amount).toBe(70);
+    expect(sanitiseBrushSettings({ dyn: { src: 'pressure' } }).dyn.amount).toBe(70);
+  });
+
+  // The whole point of the key being optional: absent must stay absent, because
+  // the picker spreads these settings over the tool's and a `dyn` that arrived
+  // by default would switch a letterer's own dynamics to a brush's.
+  it('leaves out the dynamics entirely when the brush named none', () => {
+    for (const src of [undefined, null, {}, { dyn: null }, { dyn: 'pressure' }, { dyn: {} }]) {
+      const s = sanitiseBrushSettings(src);
+      expect(s.dyn).toBeUndefined();
+      expect('dyn' in s).toBe(false);
+      // and the rest of the set still arrived
+      expect(s.size).toBe(24);
+    }
+  });
+
+  it('refuses a dynamics source this engine does not have, off included', () => {
+    // `off` is the one the panel offers and an import may not send: a brush
+    // with no dynamics omits the key rather than switching the letterer's off.
+    for (const src of ['off', 'tilt', 'Pressure', '', 7]) {
+      expect('dyn' in sanitiseBrushSettings({ dyn: { src, amount: 50 } })).toBe(false);
+    }
+  });
+
+  // `rowOf` re-sanitises on the way out, so a key dropped there would be a
+  // brush that lost its dynamics the first time the app restarted - and one
+  // gained there would be a brush that took the letterer's over on every boot.
+  it('carries the dynamics through the index it writes and reads back', async () => {
+    h.result = {
+      brushes: [
+        brush('ddd', { settings: { size: 40, dyn: { src: 'velocity', amount: 54 } } }),
+        brush('eee'),
+      ],
+      errors: [],
+    };
+    await importBrushes(['/x/one.sut']);
+    expect(getBrush('ddd').settings.dyn).toEqual({ src: 'velocity', amount: 54 });
+
+    const written = JSON.parse(fsx._tree.files.get(INDEX));
+    expect(written.brushes[0].settings.dyn).toEqual({ src: 'velocity', amount: 54 });
+    expect('dyn' in written.brushes[1].settings).toBe(false);
+
+    __resetBrushLibrary();
+    await loadBrushLibrary({ force: true });
+    expect(getBrush('ddd').settings.dyn).toEqual({ src: 'velocity', amount: 54 });
+    expect('dyn' in getBrush('eee').settings).toBe(false);
+  });
 });
 
 describe('brushDir', () => {

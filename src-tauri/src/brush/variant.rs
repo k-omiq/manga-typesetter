@@ -22,6 +22,8 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::Connection;
 use serde::Serialize;
 
+use super::effector::{decode_effector, EffectorDynamics, Source};
+
 /// Millimetres are resolution-independent, so a length stored in them only
 /// becomes pixels against a page resolution, and the file does not record one.
 /// 600 dpi is Clip Studio's default for a monochrome manga document, which is
@@ -35,9 +37,8 @@ pub const CSP_DPI: f64 = 600.0;
 /// is the conversion that cannot make a value wrong by a factor of 23.
 const UNIT_MM: i64 = 2;
 
-/// The columns [`read`] asks for. Selecting these by name rather than `select *`
-/// keeps the `Effector` blobs - which are variable-length binary this build does
-/// not decode - out of the query entirely.
+/// The numeric columns [`read`] asks for. Selecting these by name rather than
+/// `select *` keeps every `Effector` blob but the one below out of the query.
 const WANTED: &[&str] = &[
     "VariantID",
     "Opacity",
@@ -68,6 +69,17 @@ const WANTED: &[&str] = &[
     "BrushWaterEdgeAlphaPower",
 ];
 
+/// The one BLOB column read here: the dynamics that modulate `BrushSize`, in
+/// the format [`super::effector`] decodes. Every other `Effector` column names a
+/// parameter the engine does not have.
+const SIZE_EFFECTOR: &str = "BrushSizeEffector";
+
+/// The engine's floor on the width factor - `MIN_W` in `src/lib/brush.js`. A
+/// source that bottoms out still draws at 8% of the size rather than breaking
+/// the stroke into beads, and that floor is what the conversion below inverts
+/// through.
+const ENGINE_MIN_W: f64 = 0.08;
+
 /// A taper: how far into the stroke it runs and how thin it gets.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Taper {
@@ -87,11 +99,23 @@ pub struct SharpAngles {
     pub deg: f32,
 }
 
+/// What drives the tip's width along a stroke, and how hard.
+///
+/// `defaultBrushSettings().dyn` in `src/lib/brush.js`, field for field: `src` is
+/// one of that file's `DYN_SOURCES` (never `off` - a brush with no size dynamics
+/// omits the whole struct rather than switching the letterer's off) and `amount`
+/// is its 0-100 strength slider.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct SizeDynamics {
+    pub src: Source,
+    /// 0-100, the engine's strength slider.
+    pub amount: f32,
+}
+
 /// One imported brush's settings, in the units `src/lib/brush.js` expects.
 ///
 /// Field for field this is the subset of `defaultBrushSettings()` a `.sut` can
-/// answer for. What it cannot answer for - the size dynamics - lives in the
-/// undecoded `Effector` blobs and is left to the JS default.
+/// answer for.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrushSettings {
@@ -120,6 +144,15 @@ pub struct BrushSettings {
     /// Stabilisation window, 0-100.
     pub stabilise: f32,
     pub sharp_angles: SharpAngles,
+    /// The size dynamics, out of the `BrushSizeEffector` blob.
+    ///
+    /// The one OPTIONAL setting, and the reason it is optional is the picker's
+    /// contract: `pickedSettings` spreads these settings over the tool's, so a
+    /// key that is absent leaves the letterer's own value alone. A brush whose
+    /// blob is missing, undecodable, or names no source the engine has must not
+    /// stomp hand-set dynamics, so it sends no key at all rather than a default.
+    #[serde(rename = "dyn", skip_serializing_if = "Option::is_none")]
+    pub dynamics: Option<SizeDynamics>,
 }
 
 impl Default for BrushSettings {
@@ -142,8 +175,44 @@ impl Default for BrushSettings {
             water_edge_power: 0.5,
             stabilise: 12.0,
             sharp_angles: SharpAngles { on: false, deg: 45.0 },
+            // NOT `defaultBrushSettings().dyn`: the default here is "the file
+            // said nothing", which the JS side reads as "keep what you have".
+            dynamics: None,
         }
     }
+}
+
+/// The engine's size dynamics for a decoded `BrushSizeEffector`, or `None` when
+/// the brush drives its size off nothing the engine has.
+///
+/// Two numbers cross here, and neither is the other's unit:
+///
+/// * CSP stores a MINIMUM - "at zero pressure the tip is 30% of its size".
+/// * The engine has a STRENGTH - `widthFactors` fades the source's whole effect
+///   back towards full width, so `amount` of 0 is no dynamics and 100 is all of
+///   them, and the thinnest the stroke gets is `1 - amount/100 * (1 - MIN_W)`.
+///
+/// So the strength is the minimum inverted through that line: setting the two
+/// equal would make a brush authored at a 30% minimum draw at 70% of its size,
+/// which is a visibly different pen. It is rounded to a whole percent because
+/// that is the step the panel's slider offers - the letterer must be able to
+/// land back on the imported value by hand.
+///
+/// A minimum of 0 asks for a strength of 108.7, past the slider, so it clamps to
+/// 100 and the stroke bottoms out at the engine's own `MIN_W` instead of at
+/// nothing. A NEGATIVE minimum - which only the signed parameters (hue,
+/// saturation, value) ever store, never a size in the corpus - is read as 0 for
+/// the same reason: the engine's width factor only ever scales a stamp down.
+///
+/// [`EffectorDynamics::curve`] is decoded and available on both the pressure and
+/// the velocity graph, and is deliberately NOT consumed: the engine has no
+/// response curve to hang it on, and inventing one here would be a new engine
+/// capability smuggled in as an import detail.
+fn size_dynamics(d: &EffectorDynamics) -> Option<SizeDynamics> {
+    let src = d.primary()?;
+    let minimum = f64::from(d.minimum(src)).clamp(0.0, 100.0);
+    let amount = ((100.0 - minimum) / (1.0 - ENGINE_MIN_W)).round().clamp(0.0, 100.0);
+    Some(SizeDynamics { src, amount: amount as f32 })
 }
 
 /// What the outer database says about a brush: its name, its settings, and
@@ -159,18 +228,24 @@ pub struct BrushMeta {
     pub has_pattern_image: bool,
 }
 
-/// One `Variant` row, as the numbers this module reads out of it.
+/// One `Variant` row, as the numbers this module reads out of it, plus the one
+/// blob it reads.
 ///
 /// Every wanted column is numeric in every file seen, and SQLite converts
 /// integers to `f64` losslessly at this magnitude, so one map covers them all.
 /// A column that holds something else is dropped rather than coerced.
-struct Row(HashMap<&'static str, f64>);
+struct Row {
+    nums: HashMap<&'static str, f64>,
+    /// `BrushSizeEffector`, undecoded. Absent when the file has no such column,
+    /// the row holds `NULL`, or the value is not a blob.
+    size_effector: Option<Vec<u8>>,
+}
 
 impl Row {
     fn num(&self, key: &str) -> Option<f64> {
         // A NaN or infinity would survive every clamp below and then fail the
         // whole IPC reply at serialisation, so it is dropped like a non-number.
-        self.0.get(key).copied().filter(|v| v.is_finite())
+        self.nums.get(key).copied().filter(|v| v.is_finite())
     }
 
     fn int(&self, key: &str) -> Option<i64> {
@@ -200,23 +275,36 @@ fn table_columns(con: &Connection, table: &str) -> HashSet<String> {
 fn variant_rows(con: &Connection) -> Vec<Row> {
     let have = table_columns(con, "Variant");
     let cols: Vec<&'static str> = WANTED.iter().copied().filter(|c| have.contains(*c)).collect();
-    if cols.is_empty() {
+    // The blob rides in the same select, at a known index past the numbers, so
+    // a file that predates the column costs nothing and one that has it needs no
+    // second query.
+    let blob = have.contains(SIZE_EFFECTOR);
+    if cols.is_empty() && !blob {
         return Vec::new();
     }
-    // The names come from `WANTED`, never from the file, so the only thing the
-    // quoting guards against is a future column name that needs it.
-    let list = cols.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(",");
+    // The names come from `WANTED` and `SIZE_EFFECTOR`, never from the file, so
+    // the only thing the quoting guards against is a future column name that
+    // needs it.
+    let mut list: Vec<String> = cols.iter().map(|c| format!("\"{c}\"")).collect();
+    if blob {
+        list.push(format!("\"{SIZE_EFFECTOR}\""));
+    }
+    let list = list.join(",");
     let Ok(mut stmt) = con.prepare(&format!("select {list} from Variant")) else {
         return Vec::new();
     };
     let Ok(rows) = stmt.query_map([], |r| {
-        let mut m = HashMap::with_capacity(cols.len());
+        let mut nums = HashMap::with_capacity(cols.len());
         for (i, c) in cols.iter().enumerate() {
             if let Ok(Some(v)) = r.get::<_, Option<f64>>(i) {
-                m.insert(*c, v);
+                nums.insert(*c, v);
             }
         }
-        Ok(Row(m))
+        // A column holding something that is not a blob is dropped exactly the
+        // way a numeric column holding text is: the decoder never sees it.
+        let size_effector =
+            blob.then(|| r.get::<_, Option<Vec<u8>>>(cols.len()).ok().flatten()).flatten();
+        Ok(Row { nums, size_effector })
     }) else {
         return Vec::new();
     };
@@ -372,12 +460,44 @@ fn normalise(r: &Row) -> BrushSettings {
             on: r.on("BrushSharpenCorner").unwrap_or(d.sharp_angles.on),
             deg: d.sharp_angles.deg,
         },
+        // A blob that is not the structure `decode_effector` knows comes back
+        // as `None` and is treated exactly like a missing column: the key is
+        // omitted and the letterer keeps their own dynamics. There is no
+        // guessing rung here - a half-read Effector would silently change how
+        // every stroke thins.
+        dynamics: r
+            .size_effector
+            .as_deref()
+            .and_then(decode_effector)
+            .as_ref()
+            .and_then(size_dynamics),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An `Effector` blob as the SQL blob literal `db` wants: the 44-byte header
+    /// and nothing after it, which is what a brush whose response curves are the
+    /// straight line stores. `minimums` is per [`Source::ALL`].
+    fn effector(available: i32, enabled: i32, minimums: [i32; 4]) -> String {
+        let mut bytes = 44u32.to_be_bytes().to_vec();
+        for w in [available, enabled, minimums[0], minimums[1], minimums[2], minimums[3], 0, 0, 0, 100] {
+            bytes.extend_from_slice(&w.to_be_bytes());
+        }
+        hex(&bytes)
+    }
+
+    /// Any bytes as a SQLite blob literal.
+    fn hex(bytes: &[u8]) -> String {
+        let mut out = String::from("x'");
+        for b in bytes {
+            out.push_str(&format!("{b:02x}"));
+        }
+        out.push('\'');
+        out
+    }
 
     /// A one-row `Variant` table holding exactly the named columns.
     fn db(cols: &[(&str, &str)]) -> Connection {
@@ -525,6 +645,110 @@ mod tests {
         let meta = read(&db(&[("BrushSize", "'wide'"), ("BrushHardness", "60")]));
         assert_eq!(meta.settings.size, BrushSettings::default().size);
         assert_eq!(meta.settings.hardness, 60.0);
+    }
+
+    /// The one source bit CSP's size parameter offers on top of the four.
+    const OFFERED: i32 = 0x1F0;
+
+    #[test]
+    fn the_size_effector_becomes_the_engines_own_dynamics() {
+        let s = read(&db(&[
+            ("BrushSize", "40"),
+            ("BrushSizeEffector", &effector(OFFERED, 0x10, [30, 0, 0, 0])),
+        ]))
+        .settings;
+        // 30% minimum size inverted through the engine's strength slider.
+        assert_eq!(s.dynamics, Some(SizeDynamics { src: Source::Pressure, amount: 76.0 }));
+        // And the plain columns beside it are untouched by any of this.
+        assert_eq!(s.size, 40.0);
+    }
+
+    #[test]
+    fn the_minimum_size_is_inverted_into_the_engines_strength_slider() {
+        // The engine thins a stroke to `1 - amount/100 * (1 - MIN_W)` of its
+        // size, so every row here is checked by walking that line BACK to the
+        // minimum the file asked for. A mapping that set the two equal would
+        // fail every one of them.
+        for (minimum, amount) in [(0, 100.0), (10, 98.0), (30, 76.0), (50, 54.0), (100, 0.0)] {
+            let s = read(&db(&[(
+                "BrushSizeEffector",
+                &effector(OFFERED, 0x10, [minimum, 0, 0, 0]),
+            )]))
+            .settings;
+            let d = s.dynamics.expect("pressure is switched on");
+            assert_eq!(d.amount, amount, "minimum {minimum}%");
+            let thinnest = 1.0 - f64::from(d.amount) / 100.0 * (1.0 - ENGINE_MIN_W);
+            // Within half a slider step of what CSP stored, except at 0 where
+            // the engine's own floor stops it short and says so.
+            let want = if minimum == 0 { ENGINE_MIN_W } else { f64::from(minimum) / 100.0 };
+            assert!((thinnest - want).abs() < 0.005, "minimum {minimum}% landed at {thinnest}");
+        }
+    }
+
+    #[test]
+    fn the_source_the_engine_gets_follows_the_decoders_precedence() {
+        let dynamics = |enabled, minimums| {
+            read(&db(&[("BrushSizeEffector", &effector(OFFERED, enabled, minimums))]))
+                .settings
+                .dynamics
+        };
+        // Velocity alone, and its own minimum - not pressure's.
+        assert_eq!(
+            dynamics(0x40, [90, 0, 50, 0]),
+            Some(SizeDynamics { src: Source::Velocity, amount: 54.0 })
+        );
+        // Pressure and velocity together: pressure carries the stroke.
+        assert_eq!(dynamics(0x50, [30, 0, 50, 0]).map(|d| d.src), Some(Source::Pressure));
+        // Random alone is still a driver.
+        assert_eq!(
+            dynamics(0x80, [0, 0, 0, 20]),
+            Some(SizeDynamics { src: Source::Random, amount: 87.0 })
+        );
+        // A negative minimum is a signed parameter's, never a size's; read as
+        // zero because the engine's width factor only scales a stamp down.
+        assert_eq!(dynamics(0x80, [0, 0, 0, -100]).map(|d| d.amount), Some(100.0));
+    }
+
+    #[test]
+    fn a_brush_that_says_nothing_about_dynamics_sends_no_key_at_all() {
+        // No column: the letterer's hand-set dynamics stand.
+        assert_eq!(read(&db(&[("BrushSize", "40")])).settings.dynamics, None);
+        // The column, but NULL in this row.
+        assert_eq!(read(&db(&[("BrushSizeEffector", "null")])).settings.dynamics, None);
+        // A blob that decodes and switches nothing on: the two corpus brushes
+        // with no size dynamics at all.
+        assert_eq!(
+            read(&db(&[("BrushSizeEffector", &effector(OFFERED, 0, [50, 0, 0, 0]))]))
+                .settings
+                .dynamics,
+            None
+        );
+        // Tilt only. It decodes, but the engine has no tilt and a pointer event
+        // does not carry one, so it must not be mis-driven off pressure.
+        assert_eq!(
+            read(&db(&[("BrushSizeEffector", &effector(OFFERED, 0x20, [0, 40, 0, 0]))]))
+                .settings
+                .dynamics,
+            None
+        );
+        // Bytes that are not the structure at all, and a column holding text.
+        assert_eq!(read(&db(&[("BrushSizeEffector", &hex(&[0; 44]))])).settings.dynamics, None);
+        assert_eq!(read(&db(&[("BrushSizeEffector", "'off'")])).settings.dynamics, None);
+    }
+
+    #[test]
+    fn the_dynamics_key_is_absent_from_the_json_rather_than_null() {
+        // The picker spreads these settings over the tool's, so an absent key is
+        // the difference between "keep your dynamics" and "switch them off".
+        let none = serde_json::to_value(BrushSettings::default()).unwrap();
+        assert!(none.get("dyn").is_none(), "a brush with no dynamics carries no dyn key");
+        let some = serde_json::to_value(BrushSettings {
+            dynamics: Some(SizeDynamics { src: Source::Velocity, amount: 76.0 }),
+            ..BrushSettings::default()
+        })
+        .unwrap();
+        assert_eq!(some["dyn"]["src"], "velocity", "the name `src/lib/brush.js` reads");
+        assert_eq!(some["dyn"]["amount"], 76.0);
     }
 
     #[test]

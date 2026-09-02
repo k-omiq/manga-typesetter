@@ -51,9 +51,15 @@ export function filterBrushes(list, query) {
 //
 // THE CONTRACT (2.3, `sanitiseBrushSettings`): an imported brush speaks for the
 // tip and the marks it makes, and for nothing else. Its `settings` deliberately
-// carry no `color`, no `dyn`, and no `postCorrect`, so this spread leaves the
-// letterer's ink colour, size dynamics and correction exactly where they set
-// them and replaces only what the `.sut` had an opinion about.
+// carry no `color` and no `postCorrect`, so this spread leaves the letterer's
+// ink colour and correction exactly where they set them and replaces only what
+// the `.sut` had an opinion about.
+//
+// `dyn` was on that list until phase 6.1 decoded the `Effector` blobs, and it is
+// the reason this stayed a spread rather than a merge: a brush that names a size
+// driver now carries `dyn` and REPLACES the tool's, and one whose blob said
+// nothing still carries no such key, so the letterer's own dynamics survive
+// untouched. Neither case needs anything here - absence is the fallback.
 //
 // The built-in round tip has no settings of its own: picking it swaps the tip
 // and changes nothing else, which is how a letterer gets back to a plain pen

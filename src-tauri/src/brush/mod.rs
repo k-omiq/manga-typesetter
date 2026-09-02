@@ -523,6 +523,24 @@ mod tests {
                 "waterEdgeWidth",
             ]
         );
+        // `dyn` is the ONE key that may be missing, and the round tip's settings
+        // are the case where it is: the picker spreads what arrives over the
+        // tool's settings, so an absent key leaves the letterer's dynamics and a
+        // present one replaces them. It must never arrive as `null`.
+        assert!(!set.contains(&"dyn"), "no decoded dynamics, no key");
+        let with = round_brush(
+            "abc".into(),
+            "round".into(),
+            &BrushSettings {
+                dynamics: Some(variant::SizeDynamics { src: effector::Source::Pressure, amount: 76.0 }),
+                ..BrushSettings::default()
+            },
+        )
+        .unwrap();
+        let d = &serde_json::to_value(with).unwrap()["settings"]["dyn"];
+        assert_eq!(d["src"], "pressure");
+        assert_eq!(d["amount"], 76.0);
+
         assert_eq!(b["settings"]["taperIn"]["on"], true);
         assert_eq!(b["settings"]["taperIn"]["len"], 20.0);
         assert_eq!(b["settings"]["taperIn"]["ratio"], 60.0);
@@ -727,11 +745,56 @@ mod tests {
         assert_eq!(pixels, 124, "124 tips at pixel source, as phase 2.1 measured");
         assert_eq!(round, 1, "the one BrushUsePatternImage = 0 brush");
         assert_eq!(brushes, 125);
+
         println!(
             "corpus: {} files, {brushes} brushes ({pixels} pixels, {round} round), \
              {} MB of PNG, widest tip {widest} px",
             files.len(),
             png_bytes / 1_000_000
         );
+    }
+
+    /// The end of the size-dynamics path: the `Effector` blob in the file, the
+    /// decode, the mapping, and the settings a brush arrives with. Phase 6.1
+    /// measured the corpus's size drivers straight off the blobs; this asserts
+    /// the same tally survives the import, which is the only place it could go
+    /// wrong silently - `read` picks ONE `Variant` row per file, and picking the
+    /// wrong one would hand over another parameter's dynamics.
+    #[test]
+    fn every_corpus_brush_arrives_with_the_dynamics_its_file_was_authored_with() {
+        let mut tally = std::collections::BTreeMap::new();
+        let mut files_with = 0;
+        let (mut lowest, mut highest) = (f32::INFINITY, f32::NEG_INFINITY);
+        for path in corpus() {
+            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let imported = import_file(&path).expect("the corpus imports clean");
+            // Every brush out of one file shares that file's Variant row, so the
+            // dynamics must be identical across them rather than per tip.
+            let first = imported[0].settings.dynamics;
+            for b in &imported {
+                assert_eq!(b.settings.dynamics, first, "{name}: one file, two dynamics");
+            }
+            if let Some(d) = first {
+                files_with += 1;
+                assert!((0.0..=100.0).contains(&d.amount), "{name}: amount {}", d.amount);
+                assert_ne!(d.src, effector::Source::Tilt, "{name}: the engine has no tilt");
+                lowest = lowest.min(d.amount);
+                highest = highest.max(d.amount);
+            }
+            *tally.entry(format!("{:?}", first.map(|d| d.src))).or_insert(0) += 1;
+        }
+        assert_eq!(tally.values().sum::<i32>(), 64, "one reading per corpus file");
+        assert_eq!(tally.get("Some(Pressure)"), Some(&61), "pressure drives 61 of the 64 files");
+        assert_eq!(tally.get("Some(Velocity)"), Some(&1), "and velocity drives one");
+        // Exactly two, and `effector.rs` found exactly two none-driven size
+        // blobs in the whole corpus - so these two are the brushes CSP really
+        // authored without size dynamics, and no file quietly lost its own to a
+        // blob that failed to decode or a row that was never read.
+        assert_eq!(tally.get("None"), Some(&2), "two brushes have no size dynamics at all");
+        assert_eq!(files_with, 62);
+        // 11 is a 90% minimum size - a pen that barely thins - and 100 is one
+        // that thins all the way to the engine's floor.
+        assert_eq!((lowest, highest), (11.0, 100.0), "the strengths the corpus spans");
+        println!("corpus dynamics: {tally:?}, amount {lowest}-{highest}");
     }
 }

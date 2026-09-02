@@ -42,7 +42,7 @@
 // chapter close. Re-ask `brushTip(id)` next frame; a hit is a map lookup, and a
 // miss re-reads a file that is already in the OS page cache.
 import { fsx } from './fsx.js';
-import { defaultBrushSettings } from './brush.js';
+import { defaultBrushSettings, DYN_SOURCES } from './brush.js';
 
 // The version stamped into library.json. Bumped when the entry shape changes in
 // a way `sanitiseEntry` cannot absorb, which it has not yet had to be.
@@ -160,16 +160,37 @@ const validId = (id) =>
 // already guarantees is a plain name inside the folder.
 const pngFileFor = (id) => `${id}.png`;
 
+// The size dynamics off an import, or null when the file had none to give.
+//
+// `off` is a source the panel offers and an import may NOT send: a `.sut` that
+// says nothing about dynamics omits the key entirely (see below), so a `src` of
+// `off` arriving here is junk rather than an opinion, and honouring it would
+// switch the letterer's dynamics off in the name of a brush that never asked.
+//
+// The amount is the strength slider, 0-100, already inverted out of CSP's
+// minimum-size percentage on the Rust side.
+function importedDyn(v) {
+  if (!v || typeof v !== 'object') return null;
+  if (typeof v.src !== 'string' || v.src === 'off' || !DYN_SOURCES.includes(v.src)) return null;
+  return { src: v.src, amount: num(v.amount, defaultBrushSettings().dyn.amount, 0, 100) };
+}
+
 // The settings an import speaks for, and only those.
 //
 // Deliberately NOT the whole of `defaultBrushSettings()`: a `.sut` says nothing
-// about the ink's colour, nothing about the size dynamics (those live in the
-// undecoded `Effector` blobs), and nothing about which brush is selected. Those
-// keys are absent here so that applying a brush to the tool - 2.5's job - is a
-// plain spread that leaves the letterer's colour and dynamics where they set
-// them:
+// about the ink's colour and nothing about which brush is selected. Those keys
+// are absent here so that applying a brush to the tool - 2.5's job - is a plain
+// spread that leaves the letterer's colour and correction where they set them:
 //
 //   brushTool.settings = { ...brushTool.settings, ...entry.settings, brush: id }
+//
+// `dyn` is the ONE key that is conditional, and it is the same rule read the
+// other way. Phase 2.3 left it out because the `Effector` blobs that hold the
+// size dynamics were undecoded; phase 6.1 decoded them, so a brush that names a
+// driver now sends one and the spread applies it. A brush whose blob was
+// missing, undecodable or drove size off nothing still sends NO key, and the
+// spread then leaves hand-set dynamics exactly where they were. Absent and
+// present are the whole contract - this must never emit `dyn: undefined`.
 //
 // Missing or junk values fall back per key to `defaultBrushSettings()`, so a
 // column the parser could not read leaves the engine exactly where it was.
@@ -181,7 +202,9 @@ export function sanitiseBrushSettings(src) {
     len: num(t?.len, dt.len, 0, 500),
     ratio: num(t?.ratio, dt.ratio, 0, 100),
   });
+  const dyn = importedDyn(s.dyn);
   return {
+    ...(dyn ? { dyn } : null),
     size: num(s.size, d.size, 0.5, 2000),
     opacity: num(s.opacity, d.opacity, 0, 1),
     spacing: num(s.spacing, d.spacing, 1, 200),
