@@ -8,7 +8,6 @@
   const rawWidth = $derived(app.rawZoom === 0 ? '100%' : 100 * app.rawZoom + '%');
   const rawLabel = $derived(app.rawZoom === 0 ? 'Fit' : Math.round(app.rawZoom * 100) + '%');
 
-  // Sidebar scroll container element.
   let scrollEl = $state(null);
 
   // Preserve placeholder proportions using aspect-ratio.

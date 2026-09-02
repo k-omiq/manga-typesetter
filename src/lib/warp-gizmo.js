@@ -21,7 +21,7 @@
 // the rotation is already applied to it, and the zoom is one multiply at the
 // point of drawing.
 
-import { identityMesh, isIdentityMesh, resampleMesh } from './warp.js';
+import { identityMesh, isIdentityMesh, resampleMesh, meshMap } from './warp.js';
 import { WARP_MIN_GRID, WARP_MAX_GRID } from './data.js';
 import { cloneStyle, markUnsaved } from './store.svelte.js';
 import { record } from './editor/history.svelte.js';
@@ -30,6 +30,12 @@ import { record } from './editor/history.svelte.js';
 // is a target for a pointer, so it is the same size at every zoom. The mesh
 // hairline is the same idea - one device pixel, whatever the page is scaled to.
 export const HANDLE_R = 5;
+
+// The finest grid the gizmo puts handles on. 9x9 = 81 dots is already more
+// than can be shown without them touching; a mesh finer than this - which the
+// liquify tool routinely makes - draws as hairlines only, and is reshaped with
+// the liquify tool or reset, not dragged dot by dot.
+export const HANDLE_GRID_MAX = 8;
 
 // The keyboard's step, PAGE px - the unit the mesh is stored in, so a nudge
 // moves a control point by the same amount at every zoom and a letterer can say
@@ -109,31 +115,55 @@ export function handlePoints(warp, w, h) {
   return out;
 }
 
-// The hairline mesh, as `[x1, y1, x2, y2]` segments: every grid row left to
-// right and every grid column top to bottom. Only the segments BETWEEN
-// neighbouring control points - the deformed cell edges are straight lines
-// between handles, which is what the piecewise-affine painter actually draws,
-// so the wireframe is not an approximation of the warp, it is the warp's own
-// cell boundaries.
-export function meshSegments(warp, w, h) {
+// How closely the wireframe follows a curved cell edge: one sample about every
+// this many page px along it, between one and MESH_LINE_MAX per cell. A 100px
+// cell on a balloon gets eight straight pieces, which reads as a curve at any
+// zoom the editor offers; a liquify mesh's 12px cells get one, because its
+// nodes are already closer together than a sample would be.
+export const MESH_LINE_STEP = 12;
+export const MESH_LINE_MAX = 8;
+
+const samplesPerCell = (cell) =>
+  Math.max(1, Math.min(MESH_LINE_MAX, Math.round((Number(cell) || 0) / MESH_LINE_STEP)));
+
+// The hairline mesh, as polylines: every grid row left to right, then every
+// grid column top to bottom, each a list of `[x, y]` that starts and ends on
+// control points and passes through every control point on its way. Between
+// the points a line follows the map the painter draws through - straight for a
+// one-cell mesh (an affine or projective map keeps lines straight), sampled
+// along the bicubic surface for a grid - so the wireframe is not an
+// approximation of the warp, it is the warp's own cell boundaries.
+export function meshLines(warp, w, h) {
   const cols = gridN(warp?.cols);
   const rows = gridN(warp?.rows);
+  const W = Math.max(0, num(w));
+  const H = Math.max(0, num(h));
   const pts = gizmoPts(warp, w, h);
+  const map = meshMap(pts, cols, rows, W, H);
+  const curve = map?.kind === 'smooth' ? map.at : null;
+  const kx = curve ? samplesPerCell(W / cols) : 1;
+  const ky = curve ? samplesPerCell(H / rows) : 1;
   const at = (i, j) => pts[j * (cols + 1) + i];
   const out = [];
   for (let j = 0; j <= rows; j++) {
+    const line = [];
+    const y = (H * j) / rows;
     for (let i = 0; i < cols; i++) {
-      const a = at(i, j);
-      const b = at(i + 1, j);
-      out.push([a[0], a[1], b[0], b[1]]);
+      line.push(at(i, j));
+      for (let s = 1; s < kx; s++) line.push(curve((W * (i + s / kx)) / cols, y));
     }
+    line.push(at(cols, j));
+    out.push(line);
   }
   for (let i = 0; i <= cols; i++) {
+    const line = [];
+    const x = (W * i) / cols;
     for (let j = 0; j < rows; j++) {
-      const a = at(i, j);
-      const b = at(i, j + 1);
-      out.push([a[0], a[1], b[0], b[1]]);
+      line.push(at(i, j));
+      for (let s = 1; s < ky; s++) line.push(curve(x, (H * (j + s / ky)) / rows));
     }
+    line.push(at(i, rows));
+    out.push(line);
   }
   return out;
 }

@@ -1,233 +1,162 @@
 <script>
   // The brush tool's panel. It replaces the Inspector's body while the brush is
-  // armed, the way CSP's Tool Property replaces itself per tool: what is on
-  // screen is the options for what you are doing, not for what is selected.
+  // armed: what is on screen is the options for what you are doing, not for
+  // what is selected.
   //
-  // Collapsible sections rather than sub-tabs. Fourteen controls that are mostly
-  // set once do not want tab-hunting, and four tabs truncated to "DYNA..." at
-  // the panel's width - see the spec for the discarded attempt.
+  // Six icon tabs. The board first, because drawing is what the tool is for;
+  // then the brush itself, the three groups of settings that are mostly set
+  // once, and the finish a placed layer starts with. Icons rather than words so
+  // six fit the panel's width without a label ever truncating.
+  import { app, page, byId, toast, addInkBox, setBoxInk, visibleCenterInView } from './store.svelte.js';
   import {
     brushTool,
+    BRUSH_TABS,
+    setBrushTab,
     setBrushMode,
-    setLiquifyMode,
-    LIQUIFY_RADIUS_MIN,
-    LIQUIFY_RADIUS_MAX,
+    openBrushManager,
   } from './brush-tool.svelte.js';
-  import { LIQUIFY_MODES } from './liquify.js';
-  import { DYN_SOURCES } from './brush.js';
-  import { drawInk } from './text-paint.js';
+  import {
+    board,
+    boardPlacement,
+    boardEditStrokes,
+    loadBoardFromBox,
+    cancelBoardEdit,
+    resetBoard,
+    undoBoard,
+    redoBoard,
+    clearBoard,
+  } from './brush-board.svelte.js';
+  import { DYN_SOURCES, TIP_ORDERS } from './brush.js';
+  import { drawInk, inkActive } from './text-paint.js';
+  import { normalizeStroke, normalizeShadow } from './data.js';
   import {
     BUILTIN_BRUSH,
     brushLibrary,
-    brushTip,
-    importBrushes,
     installedBrushes,
     loadBrushLibrary,
-    removeBrush,
     resolveBrush,
   } from './brush-library.svelte.js';
   import { settleTips } from './brush-tips.js';
-  import { filterBrushes, importSentence, pickedSettings, tipDims } from './brush-picker.js';
-  import { isTauri } from './importer.js';
-  import { toast } from './store.svelte.js';
+  import { filterBrushes, pickedSettings, tipDims } from './brush-picker.js';
+  import { tipCell } from './brush-tip-cell.js';
+  import { brushTabIcons } from './tab-icons.js';
+  import BrushBoard from './BrushBoard.svelte';
 
   const s = $derived(brushTool.settings);
+  const fin = $derived(brushTool.finish);
+  const tab = $derived(brushTool.tab);
+  const mode = $derived(brushTool.mode ?? 'draw');
 
-  // The library is app-wide and loaded once. Idempotent, so a panel opened and
-  // closed all afternoon costs one read - and it has to happen here, because a
-  // letterer can open this panel before any chapter has asked for a tip.
   loadBrushLibrary();
 
-  // Which sections are open. Session state on the module would outlive the
-  // panel; per-instance is right, because closing the panel is closing the tool.
-  let open = $state({ shape: false, dyn: false, fix: false });
+  const TAB_LABEL = {
+    board: 'Board',
+    brush: 'Brush',
+    shape: 'Shape',
+    dynamics: 'Dynamics',
+    correction: 'Correction',
+    finish: 'Finish',
+  };
+
+  // ---- the finish ------------------------------------------------------
+  // One outline and one shadow here, on or off: the panel is the starting
+  // point for a placed layer, and the Inspector's Stroke and Shadow tabs take
+  // over from there with as many of each as the letterer wants.
+  function flipOutline() {
+    fin.strokes = fin.strokes.length ? [] : [normalizeStroke({ color: '#ffffff', width: 4 })];
+  }
+  function flipShadow() {
+    fin.shadows = fin.shadows.length
+      ? []
+      : [normalizeShadow({ x: 3, y: 3, blur: 4, color: '#000000', opacity: 0.5 })];
+  }
+
+  function onTabKey(e, id) {
+    const i = BRUSH_TABS.indexOf(id);
+    let n = null;
+    if (e.key === 'ArrowLeft') n = (i + BRUSH_TABS.length - 1) % BRUSH_TABS.length;
+    else if (e.key === 'ArrowRight') n = (i + 1) % BRUSH_TABS.length;
+    else if (e.key === 'Home') n = 0;
+    else if (e.key === 'End') n = BRUSH_TABS.length - 1;
+    if (n == null) return;
+    e.preventDefault();
+    setBrushTab(BRUSH_TABS[n]);
+    document.getElementById(`brush-tab-${BRUSH_TABS[n]}`)?.focus();
+  }
+
+  // ---- the board --------------------------------------------------------
+
+  let zoom = $state(1);
+  const ZOOMS = [1, 2, 3];
+  const MODE_LABEL = { draw: 'Draw', erase: 'Erase' };
+
+  const selectedBox = $derived(app.selectedId ? byId(app.selectedId) : null);
+  const selectedHasInk = $derived(!!selectedBox && inkActive(selectedBox.style?.ink));
+  const editingThis = $derived(
+    !!board.editing && !!selectedBox && board.editing.boxId === selectedBox.id,
+  );
+
+  function place() {
+    const pl = boardPlacement();
+    if (!pl) return;
+    const { x, y } = visibleCenterInView();
+    const id = addInkBox({ ...pl, finish: $state.snapshot(fin) }, x, y);
+    if (!id) {
+      toast('Nothing to place on - open a chapter first');
+      return;
+    }
+    resetBoard();
+    toast('Placed on the page as a new layer');
+  }
+
+  function editSelected() {
+    const b = selectedBox;
+    if (!b || !selectedHasInk) return;
+    loadBoardFromBox(page().id, b.id, $state.snapshot(b.style.ink.strokes), {
+      strokes: $state.snapshot(b.style.strokes),
+      shadows: $state.snapshot(b.style.shadows),
+    });
+    setBrushMode('draw');
+  }
+
+  function applyEdit() {
+    const e = board.editing;
+    const strokes = boardEditStrokes();
+    if (!e || !strokes) return;
+    if (!setBoxInk(e.pageId, e.boxId, strokes)) {
+      toast('That box is gone - place the strokes as a new layer instead');
+      cancelBoardEdit();
+      return;
+    }
+    resetBoard();
+    toast('Applied to the box');
+  }
+
+  function cancelEdit() {
+    cancelBoardEdit();
+    resetBoard();
+  }
 
   // ---- the picker -------------------------------------------------------
 
-  // The round tip stands in the grid as a brush like any other, and always
-  // first: it is the one tip that is always there, and it is how a letterer
-  // gets back to a plain pen after trying an imported one.
   const ROUND = { id: BUILTIN_BRUSH, name: 'Round', builtin: true };
-
   let query = $state('');
-  let importing = $state(false);
-  // Removal is two-step, the way the Inspector's preset delete is: the first
-  // press arms it and the arming wears off on its own, so a parked click on a
-  // panel nobody is looking at cannot uninstall a brush.
-  let rmArm = $state('');
-  let rmArmT;
-
   const shown = $derived(filterBrushes([ROUND, ...installedBrushes], query));
-  // What `s.brush` means right now: an installed entry, the round tip, or a
-  // brush this install does not have. The last one is why the row under the
-  // grid can say `missing` - removing the brush you are drawing with does not
-  // silently rewrite the tool, it says what happened.
   const current = $derived(resolveBrush(s.brush));
   const currentName = $derived(
     current.name ?? (current.missing ? `Missing brush ${current.id.slice(0, 6)}` : ROUND.name),
   );
 
-  function armRemove(id) {
-    rmArm = id;
-    clearTimeout(rmArmT);
-    rmArmT = setTimeout(() => (rmArm = ''), 2500);
-  }
-  function disarmRemove() {
-    rmArm = '';
-    clearTimeout(rmArmT);
-  }
-  $effect(() => () => clearTimeout(rmArmT));
-
-  // The 2.3 selection contract, in one line - see `pickedSettings`.
-  //
   // Snapshots rather than the live proxies: an entry's `settings` belong to the
-  // installed library, and spreading the proxy would hand the tool the SAME
-  // nested `taperIn` object the library row holds - a taper dragged in the
-  // panel afterwards would rewrite the brush's own stored settings the next
-  // time the index was written.
+  // library, and spreading the proxy would hand the tool the same nested
+  // `taperIn` the library row holds.
   function pick(entry) {
-    disarmRemove();
-    brushTool.settings = pickedSettings(
-      $state.snapshot(brushTool.settings),
-      $state.snapshot(entry),
-    );
-  }
-
-  async function onRemove(entry) {
-    if (rmArm !== entry.id) {
-      armRemove(entry.id);
-      return;
-    }
-    disarmRemove();
-    toast((await removeBrush(entry.id)) ? 'Brush removed' : 'That brush could not be removed');
-  }
-
-  async function onImport() {
-    if (importing) return;
-    if (brushLibrary.readOnly) {
-      toast(brushLibrary.error);
-      return;
-    }
-    if (!isTauri()) {
-      toast('Importing brushes needs the desktop app');
-      return;
-    }
-    importing = true;
-    try {
-      const { open: pickFiles } = await import('@tauri-apps/plugin-dialog');
-      const picked = await pickFiles({
-        multiple: true,
-        filters: [{ name: 'Brushes', extensions: ['sut', 'abr'] }],
-      });
-      const paths = picked == null ? [] : Array.isArray(picked) ? picked : [picked];
-      if (!paths.length) return;
-      toast(importSentence(await importBrushes(paths)));
-    } catch (e) {
-      toast(`Couldn't import brushes: ${e?.message ?? e}`);
-    } finally {
-      importing = false;
-    }
-  }
-
-  // ---- the tip cells ----------------------------------------------------
-
-  // The backing size of one cell's canvas, in CSS px. The grid's cells are
-  // about 64 px wide at the panel's default width and stretch with it; the
-  // canvas is drawn at this size and scaled by CSS, which is what every other
-  // thumbnail in this app does.
-  const CELL = 64;
-  // Ink, not the stroke colour: the cell is a tip on paper, and a white brush
-  // painted on white paper would show an empty square.
-  const INK = [34, 33, 30];
-
-  // A tip PNG is 8-bit greyscale with the ink at 255 and an opaque alpha, which
-  // is white-on-white until it is turned into coverage. Same transform the
-  // painter's `buildTinted` runs, at cell size.
-  function inkify(ctx, w, h) {
-    const px = ctx.getImageData(0, 0, w, h);
-    const d = px.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const cov = (d[i] * d[i + 3]) / 255;
-      d[i] = INK[0];
-      d[i + 1] = INK[1];
-      d[i + 2] = INK[2];
-      d[i + 3] = cov;
-    }
-    ctx.putImageData(px, 0, 0);
-  }
-
-  async function paintCell(node, id, gone) {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const W = Math.max(1, Math.round(CELL * dpr));
-    node.width = W;
-    node.height = W;
-    const ctx = node.getContext('2d');
-    if (!ctx) return;
-    if (id === BUILTIN_BRUSH) {
-      ctx.fillStyle = `rgb(${INK[0]},${INK[1]},${INK[2]})`;
-      ctx.beginPath();
-      ctx.arc(W / 2, W / 2, W * 0.3, 0, Math.PI * 2);
-      ctx.fill();
-      return;
-    }
-    // One frame's worth of tip - see THE TIP LIFETIME CONTRACT. It is read,
-    // drawn, and let go of; the cache decides how long the bitmap itself lives.
-    const tip = await brushTip(id);
-    // A cell that has since been scrolled out of the grid, or a panel that has
-    // closed: its canvas has already given its pixels back.
-    if (gone() || !tip?.image) return;
-    const iw = Number(tip.image.width) || tip.width;
-    const ih = Number(tip.image.height) || tip.height;
-    if (!(iw > 0 && ih > 0)) return;
-    const pad = Math.round(3 * dpr);
-    const k = Math.min((W - pad * 2) / iw, (W - pad * 2) / ih);
-    const w = Math.max(1, Math.round(iw * k));
-    const h = Math.max(1, Math.round(ih * k));
-    // Down to cell size first, then converted: the conversion is a pass over
-    // every pixel, and the corpus's biggest tip is 27 megapixels.
-    const scratch = document.createElement('canvas');
-    scratch.width = w;
-    scratch.height = h;
-    try {
-      const sctx = scratch.getContext('2d', { willReadFrequently: true });
-      if (!sctx) return;
-      sctx.imageSmoothingQuality = 'high';
-      sctx.drawImage(tip.image, 0, 0, w, h);
-      inkify(sctx, w, h);
-      if (gone()) return;
-      ctx.drawImage(scratch, Math.round((W - w) / 2), Math.round((W - h) / 2));
-    } catch {
-      /* a tip that will not decode leaves an empty cell; the name still names it */
-    } finally {
-      scratch.width = 0;
-      scratch.height = 0;
-    }
-  }
-
-  // Keyed by brush id in the grid, so a cell's node never changes brush: create
-  // and destroy is the whole lifetime. Destroy hands the pixels back, because a
-  // library of a hundred brushes is a hundred canvases.
-  function tipCell(node, id) {
-    let dead = false;
-    paintCell(node, id, () => dead).catch(() => {});
-    return {
-      destroy() {
-        dead = true;
-        node.width = 0;
-        node.height = 0;
-      },
-    };
+    brushTool.settings = pickedSettings($state.snapshot(brushTool.settings), $state.snapshot(entry));
   }
 
   // ---- the live preview -------------------------------------------------
 
-  // The preview: one sample stroke drawn with the live settings, by the painter
-  // that draws the real thing. A number on a slider does not tell a letterer
-  // what a taper does; this does.
   let prevEl = $state(null);
-  // The decoded tip the preview is drawing with, and the token that says which
-  // settle is still the current one. Plain `let`, not `$state`: the effect
-  // below writes them and must not re-run because it did.
   let prevTips = null;
   let prevSeq = 0;
   const PREV_W = 288;
@@ -250,6 +179,8 @@
         spacing: s.spacing, hardness: s.hardness, angle: s.angle,
         angleJitter: s.angleJitter, flatness: s.flatness, antialias: s.antialias,
         waterEdge: s.waterEdge, waterEdgeWidth: s.waterEdgeWidth, waterEdgePower: s.waterEdgePower,
+        waterEdgeDark: s.waterEdgeDark, waterEdgeBlur: s.waterEdgeBlur,
+        followDir: s.followDir, ribbon: s.ribbon, darkenTips: s.darkenTips,
         taperIn: { ...s.taperIn }, taperOut: { ...s.taperOut }, seed: 1, pts: sample,
       }],
     }, undefined, tips);
@@ -257,19 +188,12 @@
 
   $effect(() => {
     const el = prevEl;
-    // No preview on screen - erase and liquify have no stroke to show - so the
-    // decoded tip goes back too. THE TIP LIFETIME CONTRACT: a panel that is not
-    // drawing must not be the last thing holding a bitmap alive.
     if (!el) {
       prevTips = null;
       prevSeq++;
       return;
     }
-    // Read every setting so the effect re-runs when any of them moves.
     const live = JSON.stringify($state.snapshot(s));
-    // Paint now with whatever is already decoded - usually the tip the last
-    // frame settled - and re-ask, because the cache may have dropped it. Same
-    // two-step TextBox's ink canvas uses, and for the same reason.
     paintPreview(el, prevTips);
     const id = s.brush;
     if (!id || id === BUILTIN_BRUSH) {
@@ -290,11 +214,6 @@
     );
     void live;
   });
-  // The preview's pixels go back whichever way its canvas goes: the panel
-  // closing, or the mode switching off draw and taking this section with it. On
-  // that second path `prevEl` is already null by the time the component's own
-  // teardown runs, so the release belongs on the NODE rather than on the
-  // binding - the shape `tipCell` above already has.
   function prevCanvas(node) {
     return {
       destroy() {
@@ -312,379 +231,370 @@
     obj[key] = Math.min(hi, Math.max(lo, Number(v) || 0));
   };
   const DYN_LABEL = { off: 'Off', pressure: 'Pressure', velocity: 'Velocity', random: 'Random' };
-
-  // ---- the three modes --------------------------------------------------
-  //
-  // What is on screen is the options for what you are DOING, which is this
-  // panel's whole idea - so a mode that cannot use a control does not show it
-  // greyed, it does not show it. Erase and liquify keep only what they read:
-  // erase takes whole strokes out with a circle of `size / 2`, and liquify has
-  // three numbers of its own and nothing to do with a tip at all. The brush
-  // picker, the preview, opacity, the shape and the dynamics all describe ink
-  // being laid down, and neither of those two lays any.
-  const MODE_LABEL = { draw: 'Draw', erase: 'Erase', liquify: 'Liquify' };
-  const LIQ_LABEL = { push: 'Push', expand: 'Expand', pinch: 'Pinch', twirl: 'Twirl' };
-  const LIQ_HINT = {
-    push: 'Drags the ink along with the pointer.',
-    expand: 'Pushes the ink outwards from the circle’s centre.',
-    pinch: 'Pulls the ink inwards towards the circle’s centre.',
-    twirl: 'Turns the ink about the circle’s centre, keeping its distance.',
-  };
-  const mode = $derived(brushTool.mode ?? 'draw');
+  const TIP_ORDER_LABEL = { repeat: 'Repeat', reverse: 'Reverse', once: 'Once', random: 'Random' };
 </script>
 
-<div class="insp-pane">
-  <!-- The mode control. First in the panel because it decides what the rest of
-       the panel is: the tool is one brush with three things it can do to the
-       selected box's ink. -->
+{#snippet slider(label, obj, key, lo, hi, max, unit, hint)}
   <div class="grp">
-    <span class="lbl">Mode</span>
-    <div class="seg">
-      {#each ['draw', 'erase', 'liquify'] as m (m)}
-        <button type="button" class:on={mode === m} aria-pressed={mode === m} onclick={() => setBrushMode(m)}>{MODE_LABEL[m]}</button>
-      {/each}
+    <span class="lbl">{label}</span>
+    <div class="slider-row">
+      <input type="range" min={lo} max={max ?? hi} step="1" value={obj[key]} title={hint} aria-label={label} oninput={(e) => num(obj, key, e.target.value, lo, hi)} />
+      <input class="num-s" type="number" min={lo} max={hi} step="1" value={obj[key]} aria-label="{label}, {unit}" onchange={(e) => num(obj, key, e.target.value, lo, hi)} />
     </div>
   </div>
+{/snippet}
 
-  {#if mode === 'liquify'}
-    <!-- Liquify bends strokes that are already drawn, so it shares nothing
-         with the brush below: no tip, no opacity, no taper. Its three controls
-         are all there is. -->
+{#snippet pctSlider(label, obj, key, lo, hint)}
+  <div class="grp">
+    <span class="lbl">{label}</span>
+    <div class="slider-row">
+      <input type="range" min={lo} max="100" step="1" value={Math.round(obj[key] * 100)} title={hint} aria-label={label} oninput={(e) => (obj[key] = Math.min(1, Math.max(lo / 100, Number(e.target.value) / 100)))} />
+      <input class="num-s" type="number" min={lo} max="100" step="1" value={Math.round(obj[key] * 100)} aria-label="{label}, percent" onchange={(e) => (obj[key] = Math.min(1, Math.max(lo / 100, Number(e.target.value) / 100)))} />
+    </div>
+  </div>
+{/snippet}
+
+{#snippet toggle(label, obj, key)}
+  {@render flip(label, !!obj[key], () => (obj[key] = !obj[key]))}
+{/snippet}
+
+{#snippet flip(label, on, fn)}
+  <div class="switch-row">
+    <button type="button" class="switch" class:on role="switch" aria-checked={on} aria-label={label} onclick={fn}><span class="knob"></span></button>
+    <span class="lbl2">{label}</span>
+  </div>
+{/snippet}
+
+{#snippet colour(label, obj, key)}
+  <div class="grp">
+    <span class="lbl">{label}</span>
+    <div class="colour-row">
+      <span class="swatch"><input type="color" bind:value={obj[key]} aria-label={label} /></span>
+      <span class="hex">{obj[key]}</span>
+    </div>
+  </div>
+{/snippet}
+
+<div class="brush-tabs" role="tablist" aria-label="Brush options">
+  {#each BRUSH_TABS as id (id)}
+    <button
+      type="button"
+      role="tab"
+      id="brush-tab-{id}"
+      class="brush-tab"
+      class:on={tab === id}
+      aria-selected={tab === id}
+      aria-label={TAB_LABEL[id]}
+      aria-controls="brush-tabpanel"
+      tabindex={tab === id ? 0 : -1}
+      title={TAB_LABEL[id]}
+      onclick={() => setBrushTab(id)}
+      onkeydown={(e) => onTabKey(e, id)}
+    >
+      {@html brushTabIcons[id]}
+    </button>
+  {/each}
+</div>
+
+<div class="insp-pane" role="tabpanel" id="brush-tabpanel" aria-labelledby="brush-tab-{tab}">
+  {#if tab !== 'board'}
+    <canvas class="bpv" bind:this={prevEl} use:prevCanvas style="width:{PREV_W}px;height:{PREV_H}px" aria-label="Brush preview"></canvas>
+  {/if}
+
+  {#if tab === 'board'}
     <div class="grp">
-      <span class="lbl">Tool</span>
+      <span class="lbl">Mode</span>
       <div class="seg">
-        {#each LIQUIFY_MODES as m (m)}
-          <button
-            type="button"
-            class:on={s.liquifyMode === m}
-            aria-pressed={s.liquifyMode === m}
-            title={LIQ_HINT[m]}
-            onclick={() => setLiquifyMode(m)}
-          >{LIQ_LABEL[m]}</button>
+        {#each ['draw', 'erase'] as m (m)}
+          <button type="button" class:on={mode === m} aria-pressed={mode === m} onclick={() => setBrushMode(m)}>{MODE_LABEL[m]}</button>
         {/each}
       </div>
     </div>
-    <div class="grp">
-      <span class="lbl">Radius</span>
-      <div class="slider-row">
-        <input type="range" min={LIQUIFY_RADIUS_MIN} max={LIQUIFY_RADIUS_MAX} step="1" value={s.liquifyRadius} title="How far the tool reaches, in page px" aria-label="Liquify radius" oninput={(e) => num(s, 'liquifyRadius', e.target.value, LIQUIFY_RADIUS_MIN, LIQUIFY_RADIUS_MAX)} />
-        <input class="num-s" type="number" min={LIQUIFY_RADIUS_MIN} max={LIQUIFY_RADIUS_MAX} step="1" value={s.liquifyRadius} aria-label="Liquify radius, page px" onchange={(e) => num(s, 'liquifyRadius', e.target.value, LIQUIFY_RADIUS_MIN, LIQUIFY_RADIUS_MAX)} />
-      </div>
-    </div>
-    <div class="grp">
-      <span class="lbl">Strength</span>
-      <div class="slider-row">
-        <input type="range" min="0" max="100" step="1" value={s.liquifyStrength} title="How far the ink moves at the centre of the circle" aria-label="Liquify strength" oninput={(e) => num(s, 'liquifyStrength', e.target.value, 0, 100)} />
-        <input class="num-s" type="number" min="0" max="100" step="1" value={s.liquifyStrength} aria-label="Liquify strength, percent" onchange={(e) => num(s, 'liquifyStrength', e.target.value, 0, 100)} />
-      </div>
-    </div>
-    <p class="hint">{LIQ_HINT[s.liquifyMode] ?? ''} The circle over the box is what it reaches; the falloff is smooth to nothing at its rim.</p>
-  {:else}
-  {#if mode === 'draw'}
-  <canvas class="bpv" bind:this={prevEl} use:prevCanvas style="width:{PREV_W}px;height:{PREV_H}px" aria-label="Brush preview"></canvas>
 
-  <div class="picker-head">
-    <input
-      class="find"
-      type="text"
-      placeholder="Find a brush"
-      aria-label="Find a brush"
-      bind:value={query}
-      disabled={!installedBrushes.length}
-    />
-    <button
-      type="button"
-      class="icobtn"
-      aria-label="Import brushes"
-      title={brushLibrary.readOnly ? brushLibrary.error : 'Import .sut or .abr brushes'}
-      disabled={importing || brushLibrary.readOnly}
-      onclick={onImport}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-        <path d="M12 15V4" /><path d="M8 8l4-4 4 4" /><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
-      </svg>
-    </button>
-  </div>
+    {@render slider('Size', s, 'size', 1, 2000, 400, 'page px', mode === 'erase' ? 'The eraser takes out any stroke its circle touches' : undefined)}
 
-  {#if !installedBrushes.length}
-    <!-- The empty state teaches the feature rather than reporting a void. The
-         round tip is not shown as a cell here: with nothing to choose between,
-         a grid of one is a control that does nothing. -->
-    <div class="tip-grid empty">
-      <div class="emptymsg">
-        <strong>No brushes yet</strong>
-        <span>Import <code>.sut</code> or <code>.abr</code> files. The round tip works meanwhile.</span>
+    <div class="boardbar">
+      <div class="seg zoom" aria-label="Board zoom">
+        {#each ZOOMS as z (z)}
+          <button type="button" class:on={zoom === z} aria-pressed={zoom === z} onclick={() => (zoom = z)}>{z}×</button>
+        {/each}
       </div>
+      <button type="button" class="icobtn" title="Undo (⌘Z on the board)" aria-label="Undo board" disabled={!board.canUndo} onclick={undoBoard}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5" /><path d="M4 9h10a6 6 0 0 1 0 12h-3" /></svg>
+      </button>
+      <button type="button" class="icobtn" title="Redo (⇧⌘Z on the board)" aria-label="Redo board" disabled={!board.canRedo} onclick={redoBoard}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5" /><path d="M20 9H10a6 6 0 0 0 0 12h3" /></svg>
+      </button>
+      <button type="button" class="icobtn" title="Clear the board" aria-label="Clear board" disabled={!board.strokes.length} onclick={clearBoard}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16" /><path d="M9 7V4h6v3" /><path d="M6 7l1 13h10l1-13" /></svg>
+      </button>
     </div>
-    <button type="button" class="addbtn" disabled={importing || brushLibrary.readOnly} onclick={onImport}>
-      Import brushes…
-    </button>
-  {:else if !shown.length}
-    <div class="tip-grid empty">
-      <div class="emptymsg">
-        <span>No brush is called “{query}”.</span>
+
+    <BrushBoard {zoom} />
+
+    {#if board.editing}
+      <p class="hint">{editingThis ? 'Editing the selected layer\'s ink.' : 'Editing a placed layer\'s ink (not the selected box).'} Apply writes it back to that layer; Cancel leaves it as it was.</p>
+      <div class="actions">
+        <button type="button" class="act primary" onclick={applyEdit}>Apply to layer</button>
+        <button type="button" class="act" onclick={cancelEdit}>Cancel</button>
+        {#if selectedHasInk && !editingThis}
+          <button type="button" class="act" title="Drop this edit and bring the selected layer's strokes to the board" onclick={editSelected}>Edit selected</button>
+        {/if}
       </div>
+    {:else}
+      <div class="actions">
+        <button type="button" class="act primary" disabled={!board.strokes.length || !app.pages.length} title="Add the board's strokes to the page as a new layer" onclick={place}>Place on page</button>
+        {#if selectedHasInk && !editingThis}
+          <button type="button" class="act" title="Bring the selected layer's strokes back to the board" onclick={editSelected}>Edit selected</button>
+        {/if}
+      </div>
+      {#if !board.strokes.length}
+        <p class="hint">Draw on the board, then place it on the page as its own layer. Right-click a brush to edit it.</p>
+      {/if}
+    {/if}
+  {/if}
+
+  {#if tab === 'brush'}
+    <div class="picker-head">
+      <input class="find" type="text" placeholder="Find a brush" aria-label="Find a brush" bind:value={query} disabled={!installedBrushes.length} />
+      <button type="button" class="icobtn" aria-label="Manage brushes" title="Brush library - import, edit, remove" onclick={() => openBrushManager()}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16" /><path d="M4 12h16" /><path d="M4 18h10" /></svg>
+      </button>
     </div>
-  {:else}
-    <div class="tip-grid">
-      {#each shown as b (b.id)}
-        <div class="cell" class:armed={rmArm === b.id}>
+
+    {#if !installedBrushes.length}
+      <div class="tip-grid empty">
+        <div class="emptymsg">
+          <strong>No brushes yet</strong>
+          <span>Import <code>.sut</code> or <code>.abr</code> files from the library. The round tip works meanwhile.</span>
+        </div>
+      </div>
+      <button type="button" class="addbtn" onclick={() => openBrushManager()}>Open the brush library…</button>
+    {:else if !shown.length}
+      <div class="tip-grid empty">
+        <div class="emptymsg"><span>No brush is called “{query}”.</span></div>
+      </div>
+    {:else}
+      <div class="tip-grid">
+        {#each shown as b (b.id)}
           <button
             type="button"
             class="tip"
             class:on={s.brush === b.id}
             aria-pressed={s.brush === b.id}
-            title={b.source === 'thumbnail' ? `${b.name} - preview quality` : b.name}
+            title={b.builtin ? b.name : `${b.name}${b.source === 'thumbnail' ? ' - preview quality' : ''} (right-click to edit)`}
             aria-label={b.name}
             onclick={() => pick(b)}
             oncontextmenu={(e) => {
               if (b.builtin) return;
               e.preventDefault();
-              armRemove(b.id);
+              openBrushManager(b.id);
             }}
           >
             <canvas class="tipc" use:tipCell={b.id} aria-hidden="true"></canvas>
           </button>
-          {#if !b.builtin && !brushLibrary.readOnly}
-            <!-- Outside the cell button rather than inside it, because a button
-                 cannot hold a button. Two-step: the first press arms. -->
-            <button
-              type="button"
-              class="rm"
-              class:arm={rmArm === b.id}
-              title={rmArm === b.id ? `Click again to remove "${b.name}"` : `Remove "${b.name}"`}
-              aria-label={rmArm === b.id ? `Remove ${b.name}, click again to confirm` : `Remove ${b.name}`}
-              onclick={() => onRemove(b)}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
-                <path d="M18 6L6 18M6 6l12 12" />
-              </svg>
-            </button>
-          {/if}
-        </div>
-      {/each}
-    </div>
-  {/if}
-
-  <div class="tip-name">
-    <span class="nm" title={currentName}>{currentName}</span>
-    {#if current.missing}
-      <!-- The stroke keeps the id it was drawn with; importing the `.sut` again
-           brings the real tip back. See `resolveBrush`. -->
-      <span class="chip" title="This brush is not installed here. Strokes drawn with it use the round tip.">missing</span>
-    {:else if current.source === 'thumbnail'}
-      <span class="chip" title="The pixels could not be read, so this is CSP's own preview of the tip.">preview quality</span>
-    {/if}
-    <span class="dim">{tipDims(current)}</span>
-  </div>
-
-  {#if brushLibrary.error}
-    <p class="hint warn">{brushLibrary.error}</p>
-  {/if}
-
-  <div class="insp-rule"></div>
-  {/if}
-
-  <!-- Size is the one control the eraser shares with the brush: it rubs out
-       whole strokes with a circle half this wide. -->
-  <div class="grp">
-    <span class="lbl">Size</span>
-    <div class="slider-row">
-      <input type="range" min="1" max="400" step="1" value={s.size} aria-label="Size" oninput={(e) => num(s, 'size', e.target.value, 1, 2000)} />
-      <input class="num-s" type="number" min="1" max="2000" step="1" value={s.size} aria-label="Size, page px" onchange={(e) => num(s, 'size', e.target.value, 1, 2000)} />
-    </div>
-  </div>
-
-  {#if mode === 'erase'}
-    <p class="hint">The eraser takes out any stroke it touches, whole. There are no pixels to cut in a vector stroke.</p>
-  {/if}
-
-  {#if mode === 'draw'}
-  <div class="grp">
-    <span class="lbl">Opacity</span>
-    <div class="slider-row">
-      <input type="range" min="0" max="100" step="1" value={Math.round(s.opacity * 100)} aria-label="Opacity" oninput={(e) => (s.opacity = Math.min(1, Math.max(0, Number(e.target.value) / 100)))} />
-      <input class="num-s" type="number" min="0" max="100" step="1" value={Math.round(s.opacity * 100)} aria-label="Opacity, percent" onchange={(e) => (s.opacity = Math.min(1, Math.max(0, Number(e.target.value) / 100)))} />
-    </div>
-  </div>
-
-  <div class="switch-row">
-    <button type="button" class="switch" class:on={s.antialias} role="switch" aria-checked={s.antialias} aria-label="Anti-alias" onclick={() => (s.antialias = !s.antialias)}><span class="knob"></span></button>
-    <span class="lbl2">Anti-alias</span>
-  </div>
-
-  <div class="subs">
-    <div class="insp-sub" class:closed={!open.shape}>
-      <button class="insp-sub-head" onclick={() => (open.shape = !open.shape)}>Shape
-        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6" /></svg>
-      </button>
-      <div class="insp-sub-body">
-        <div class="grp">
-          <span class="lbl">Spacing</span>
-          <div class="slider-row">
-            <input type="range" min="1" max="100" step="1" value={s.spacing} title="How far the tip moves between stamps, as a percentage of its size" aria-label="Spacing" oninput={(e) => num(s, 'spacing', e.target.value, 1, 200)} />
-            <input class="num-s" type="number" min="1" max="200" step="1" value={s.spacing} aria-label="Spacing, percent" onchange={(e) => num(s, 'spacing', e.target.value, 1, 200)} />
-          </div>
-        </div>
-        <div class="grp">
-          <span class="lbl">Angle</span>
-          <div class="slider-row">
-            <input type="range" min="0" max="359" step="1" value={s.angle} aria-label="Angle" oninput={(e) => num(s, 'angle', e.target.value, 0, 359)} />
-            <input class="num-s" type="number" min="0" max="359" step="1" value={s.angle} aria-label="Angle, degrees" onchange={(e) => num(s, 'angle', e.target.value, 0, 359)} />
-          </div>
-        </div>
-        <div class="grp">
-          <span class="lbl">Hardness</span>
-          <div class="slider-row">
-            <input type="range" min="0" max="100" step="1" value={s.hardness} title="100 is a flat disc; lower softens the edge" aria-label="Hardness" oninput={(e) => num(s, 'hardness', e.target.value, 0, 100)} />
-            <input class="num-s" type="number" min="0" max="100" step="1" value={s.hardness} aria-label="Hardness, percent" onchange={(e) => num(s, 'hardness', e.target.value, 0, 100)} />
-          </div>
-        </div>
-        <div class="grp">
-          <span class="lbl">Flatness</span>
-          <div class="slider-row">
-            <input type="range" min="1" max="100" step="1" value={Math.round(s.flatness * 100)} title="Squashes the tip across its angle" aria-label="Flatness" oninput={(e) => (s.flatness = Math.min(1, Math.max(0.01, Number(e.target.value) / 100)))} />
-            <input class="num-s" type="number" min="1" max="100" step="1" value={Math.round(s.flatness * 100)} aria-label="Flatness, percent" onchange={(e) => (s.flatness = Math.min(1, Math.max(0.01, Number(e.target.value) / 100)))} />
-          </div>
-        </div>
-        <div class="switch-row">
-          <button type="button" class="switch" class:on={s.waterEdge} role="switch" aria-checked={s.waterEdge} aria-label="Watercolour edge" onclick={() => (s.waterEdge = !s.waterEdge)}><span class="knob"></span></button>
-          <span class="lbl2">Watercolour edge</span>
-        </div>
-        <!-- Hidden rather than greyed, unlike the taper's numbers: with the
-             edge off these two say nothing at all, and Shape is already the
-             longest section in the panel. -->
-        {#if s.waterEdge}
-          <div class="nest">
-            <div class="grp">
-              <span class="lbl">Band</span>
-              <div class="slider-row">
-                <input type="range" min="1" max="20" step="1" value={s.waterEdgeWidth} title="How far in from the stroke's edge the rim darkens, in page px" aria-label="Watercolour edge band" oninput={(e) => num(s, 'waterEdgeWidth', e.target.value, 1, 20)} />
-                <input class="num-s" type="number" min="1" max="20" step="1" value={s.waterEdgeWidth} aria-label="Watercolour edge band, page px" onchange={(e) => num(s, 'waterEdgeWidth', e.target.value, 1, 20)} />
-              </div>
-            </div>
-            <div class="grp">
-              <span class="lbl">Strength</span>
-              <div class="slider-row">
-                <input type="range" min="0" max="100" step="1" value={Math.round(s.waterEdgePower * 100)} title="How much denser the rim goes than the ink inside it" aria-label="Watercolour edge strength" oninput={(e) => (s.waterEdgePower = Math.min(1, Math.max(0, Number(e.target.value) / 100)))} />
-                <input class="num-s" type="number" min="0" max="100" step="1" value={Math.round(s.waterEdgePower * 100)} aria-label="Watercolour edge strength, percent" onchange={(e) => (s.waterEdgePower = Math.min(1, Math.max(0, Number(e.target.value) / 100)))} />
-              </div>
-            </div>
-          </div>
-        {/if}
+        {/each}
       </div>
-    </div>
+    {/if}
 
-    <div class="insp-sub" class:closed={!open.dyn}>
-      <button class="insp-sub-head" onclick={() => (open.dyn = !open.dyn)}>Dynamics
-        <span class="sbadge">{DYN_LABEL[s.dyn.src]}</span>
-        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6" /></svg>
-      </button>
-      <div class="insp-sub-body">
-        <div class="grp">
-          <span class="lbl">Size follows</span>
-          <div class="seg">
-            {#each DYN_SOURCES as src (src)}
-              <button type="button" class:on={s.dyn.src === src} onclick={() => (s.dyn.src = src)}>{DYN_LABEL[src]}</button>
-            {/each}
-          </div>
+    <div class="tip-name">
+      <span class="nm" title={currentName}>{currentName}</span>
+      {#if current.missing}
+        <span class="chip" title="This brush is not installed here. Strokes drawn with it use the round tip.">missing</span>
+      {:else if current.source === 'thumbnail'}
+        <span class="chip" title="The pixels could not be read, so this is CSP's own preview of the tip.">preview quality</span>
+      {/if}
+      <span class="dim">{tipDims(current)}</span>
+    </div>
+    {#if brushLibrary.error}
+      <p class="hint warn">{brushLibrary.error}</p>
+    {/if}
+
+    <div class="insp-rule"></div>
+    {@render slider('Size', s, 'size', 1, 2000, 400, 'page px')}
+    {@render pctSlider('Opacity', s, 'opacity', 0)}
+    {@render colour('Ink colour', s, 'color')}
+    {@render toggle('Anti-alias', s, 'antialias')}
+  {/if}
+
+  {#if tab === 'finish'}
+    {@render flip('Outline', fin.strokes.length > 0, flipOutline)}
+    {#if fin.strokes[0]}
+      <div class="nest">
+        {@render colour('Outline colour', fin.strokes[0], 'color')}
+        {@render slider('Width', fin.strokes[0], 'width', 1, 40, null, 'page px', 'The visible band around the ink')}
+        {@render pctSlider('Opacity', fin.strokes[0], 'opacity', 0)}
+      </div>
+    {/if}
+    <div class="insp-rule"></div>
+    {@render flip('Shadow', fin.shadows.length > 0, flipShadow)}
+    {#if fin.shadows[0]}
+      <div class="nest">
+        {@render colour('Shadow colour', fin.shadows[0], 'color')}
+        {@render slider('Offset X', fin.shadows[0], 'x', -50, 50, null, 'page px')}
+        {@render slider('Offset Y', fin.shadows[0], 'y', -50, 50, null, 'page px')}
+        {@render slider('Blur', fin.shadows[0], 'blur', 0, 50, null, 'page px')}
+        {@render pctSlider('Opacity', fin.shadows[0], 'opacity', 0)}
+      </div>
+    {/if}
+    <p class="hint">
+      {#if board.editing}
+        The board is showing the edited layer's own outline and shadow; change those in the Inspector's Effects tab. These are for the next layer placed.
+      {:else}
+        Drawn around the whole of the ink once each stroke is down, and given to the layer when it is placed. From then on the Inspector's Effects tab edits them.
+      {/if}
+    </p>
+  {/if}
+
+  {#if tab === 'shape'}
+    {@render slider('Spacing', s, 'spacing', 1, 200, 100, 'percent', 'How far the tip moves between stamps, as a percentage of its size')}
+    {@render slider('Angle', s, 'angle', 0, 359, null, 'degrees')}
+    {@render slider('Hardness', s, 'hardness', 0, 100, null, 'percent', '100 is a flat disc; lower softens the edge')}
+    {@render pctSlider('Flatness', s, 'flatness', 1, 'Squashes the tip across its angle')}
+    <div class="insp-rule"></div>
+    {@render toggle('Follow stroke', s, 'followDir')}
+    <p class="hint">The tip turns to face the way the stroke is going, with the angle above added. CSP's "Direction of line".</p>
+    {@render toggle('Ribbon', s, 'ribbon')}
+    <p class="hint">The tip is laid along the stroke as one continuous band instead of stamped. What a dry-brush or edged pen needs to streak.</p>
+    {@render toggle('Darken overlaps', s, 'darkenTips')}
+    <p class="hint">Where stamps overlap the darker wins, so a textured tip keeps its grain instead of clotting solid.</p>
+    {#if s.tips?.length > 1}
+      <div class="grp">
+        <span class="lbl">{s.tips.length} tips, order</span>
+        <div class="seg">
+          {#each TIP_ORDERS as o (o)}
+            <button type="button" class:on={s.tipOrder === o} aria-pressed={s.tipOrder === o} onclick={() => (s.tipOrder = o)}>{TIP_ORDER_LABEL[o]}</button>
+          {/each}
         </div>
-        <div class="grp">
-          <span class="lbl">Amount</span>
-          <div class="slider-row">
-            <input type="range" min="0" max="100" step="1" value={s.dyn.amount} disabled={s.dyn.src === 'off'} aria-label="Amount" oninput={(e) => num(s.dyn, 'amount', e.target.value, 0, 100)} />
-            <input class="num-s" type="number" min="0" max="100" step="1" value={s.dyn.amount} disabled={s.dyn.src === 'off'} aria-label="Amount, percent" onchange={(e) => num(s.dyn, 'amount', e.target.value, 0, 100)} />
-          </div>
-        </div>
-        {#if s.dyn.curve}
-          <div class="grp">
-            <span class="lbl">Response</span>
-            <svg class="curve" viewBox="0 0 100 44" preserveAspectRatio="none" role="img" aria-label="Imported response curve, {s.dyn.curve.length} points">
-              <!-- The straight line the engine draws without a curve, so the
-                   imported shape reads against something. -->
-              <line class="ident" x1="0" y1="44" x2="100" y2="0" vector-effect="non-scaling-stroke" />
-              <polyline points={s.dyn.curve.map(([x, y]) => `${x * 100},${(1 - y) * 44}`).join(' ')} vector-effect="non-scaling-stroke" />
-            </svg>
-          </div>
-          <p class="hint">This brush brought its own response curve from its .sut file, and it is applied as imported. Amount still scales it.</p>
-        {/if}
-        {#if s.dyn.src === 'velocity'}
-          <p class="hint">Velocity thins the middle of a fast stroke and leaves the ends thick.</p>
-        {/if}
-        <div class="insp-rule"></div>
-        {#each [['taperIn', 'Taper in'], ['taperOut', 'Taper out']] as [key, label] (key)}
-          <div class="switch-row">
-            <button type="button" class="switch" class:on={s[key].on} role="switch" aria-checked={s[key].on} aria-label={label} onclick={() => (s[key].on = !s[key].on)}><span class="knob"></span></button>
-            <span class="lbl2">{label}</span>
-          </div>
-          <div class="nest" class:disabled={!s[key].on}>
-            <div class="grp">
-              <span class="lbl">Length</span>
-              <div class="slider-row">
-                <input type="range" min="0" max="200" step="1" value={s[key].len} disabled={!s[key].on} aria-label="{label} length" oninput={(e) => num(s[key], 'len', e.target.value, 0, 500)} />
-                <input class="num-s" type="number" min="0" max="500" step="1" value={s[key].len} disabled={!s[key].on} aria-label="{label} length, page px" onchange={(e) => num(s[key], 'len', e.target.value, 0, 500)} />
-              </div>
-            </div>
-            <div class="grp">
-              <span class="lbl">Sharpness</span>
-              <div class="slider-row">
-                <input type="range" min="0" max="100" step="1" value={s[key].ratio} disabled={!s[key].on} aria-label="{label} sharpness" oninput={(e) => num(s[key], 'ratio', e.target.value, 0, 100)} />
-                <input class="num-s" type="number" min="0" max="100" step="1" value={s[key].ratio} disabled={!s[key].on} aria-label="{label} sharpness, percent" onchange={(e) => num(s[key], 'ratio', e.target.value, 0, 100)} />
-              </div>
-            </div>
-          </div>
+      </div>
+      <p class="hint">This brush came with several tip images and cycles through them along the stroke. CSP's "Repeat method".</p>
+    {/if}
+    <div class="insp-rule"></div>
+    {@render toggle('Watercolour edge', s, 'waterEdge')}
+    {#if s.waterEdge}
+      <div class="nest">
+        {@render slider('Width', s, 'waterEdgeWidth', 1, 20, null, 'page px', "How far past the stroke's edge the rim reaches")}
+        {@render pctSlider('Opacity', s, 'waterEdgePower', 0, 'How solid the rim is')}
+        {@render pctSlider('Darkness', s, 'waterEdgeDark', 0, 'How far the rim goes from the ink colour towards black')}
+        {@render slider('Blur', s, 'waterEdgeBlur', 0, 20, null, 'page px', 'Softens the rim')}
+      </div>
+      <p class="hint">Drawn outside the stroke, as CSP draws it. With anti-alias off it is solid.</p>
+    {/if}
+  {/if}
+
+  {#if tab === 'dynamics'}
+    {#if brushTool.pen}
+      <p class="hint">
+        Last input: {brushTool.pen.type}, pressure {brushTool.pen.pressure.toFixed(2)}.
+        {#if brushTool.pen.type !== 'pen'}A pen that shows as "{brushTool.pen.type}" is not sending pressure; velocity and random still work.{/if}
+      </p>
+    {/if}
+    <div class="grp">
+      <span class="lbl">Size follows</span>
+      <div class="seg">
+        {#each DYN_SOURCES as src (src)}
+          <button type="button" class:on={s.dyn.src === src} aria-pressed={s.dyn.src === src} onclick={() => (s.dyn.src = src)}>{DYN_LABEL[src]}</button>
         {/each}
       </div>
     </div>
-
-    <div class="insp-sub" class:closed={!open.fix}>
-      <button class="insp-sub-head" onclick={() => (open.fix = !open.fix)}>Correction
-        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6" /></svg>
-      </button>
-      <div class="insp-sub-body">
-        <div class="grp">
-          <span class="lbl">Stabilisation</span>
-          <div class="slider-row">
-            <input type="range" min="0" max="100" step="1" value={s.stabilise} aria-label="Stabilisation" oninput={(e) => num(s, 'stabilise', e.target.value, 0, 100)} />
-            <input class="num-s" type="number" min="0" max="100" step="1" value={s.stabilise} aria-label="Stabilisation, percent" onchange={(e) => num(s, 'stabilise', e.target.value, 0, 100)} />
-          </div>
-        </div>
-        {#if s.stabilise > 40}
-          <p class="hint">Above 40 the stroke visibly trails the cursor. That is the trade for a steady curve.</p>
-        {/if}
-        <div class="insp-rule"></div>
-        <div class="grp">
-          <span class="lbl">Post-correction</span>
-          <div class="slider-row">
-            <input type="range" min="0" max="100" step="1" value={s.postCorrect} title="Smooths the finished stroke once the pointer lifts" aria-label="Post-correction" oninput={(e) => num(s, 'postCorrect', e.target.value, 0, 100)} />
-            <input class="num-s" type="number" min="0" max="100" step="1" value={s.postCorrect} aria-label="Post-correction, percent" onchange={(e) => num(s, 'postCorrect', e.target.value, 0, 100)} />
-          </div>
-        </div>
-        <div class="switch-row">
-          <button type="button" class="switch" class:on={s.sharpAngles.on} role="switch" aria-checked={s.sharpAngles.on} aria-label="Sharp angles" onclick={() => (s.sharpAngles.on = !s.sharpAngles.on)}><span class="knob"></span></button>
-          <span class="lbl2">Sharp angles</span>
-        </div>
-        <div class="nest" class:disabled={!s.sharpAngles.on}>
-          <div class="grp">
-            <span class="lbl">Threshold</span>
-            <div class="slider-row">
-              <input type="range" min="5" max="170" step="1" value={s.sharpAngles.deg} disabled={!s.sharpAngles.on} title="A turn sharper than this is left alone by post-correction" aria-label="Sharp angle threshold" oninput={(e) => num(s.sharpAngles, 'deg', e.target.value, 5, 170)} />
-              <input class="num-s" type="number" min="5" max="170" step="1" value={s.sharpAngles.deg} disabled={!s.sharpAngles.on} aria-label="Sharp angle threshold, degrees" onchange={(e) => num(s.sharpAngles, 'deg', e.target.value, 5, 170)} />
-            </div>
-          </div>
-        </div>
-      </div>
+    <div class="nest" class:disabled={s.dyn.src === 'off'}>
+      {@render slider('Amount', s.dyn, 'amount', 0, 100, null, 'percent')}
     </div>
-  </div>
+    {#if s.dyn.curve}
+      <div class="grp">
+        <span class="lbl">Response</span>
+        <svg class="curve" viewBox="0 0 100 44" preserveAspectRatio="none" role="img" aria-label="Imported response curve, {s.dyn.curve.length} points">
+          <line class="ident" x1="0" y1="44" x2="100" y2="0" vector-effect="non-scaling-stroke" />
+          <polyline points={s.dyn.curve.map(([x, y]) => `${x * 100},${(1 - y) * 44}`).join(' ')} vector-effect="non-scaling-stroke" />
+        </svg>
+      </div>
+      <p class="hint">This brush brought its own response curve from its .sut file. Amount still scales it.</p>
+    {:else if s.dyn.src === 'velocity'}
+      <p class="hint">Velocity thins the middle of a fast stroke and leaves the ends thick.</p>
+    {/if}
+    <div class="insp-rule"></div>
+    {#each [['taperIn', 'Taper in'], ['taperOut', 'Taper out']] as [key, label] (key)}
+      {@render toggle(label, s[key], 'on')}
+      <div class="nest" class:disabled={!s[key].on}>
+        <div class="grp">
+          <span class="lbl">Length is</span>
+          <div class="seg">
+            <button type="button" class:on={s[key].mode !== 'pct'} aria-pressed={s[key].mode !== 'pct'} onclick={() => (s[key].mode = 'px')}>Page px</button>
+            <button type="button" class:on={s[key].mode === 'pct'} aria-pressed={s[key].mode === 'pct'} onclick={() => (s[key].mode = 'pct')}>% of size</button>
+          </div>
+        </div>
+        {@render slider('Length', s[key], 'len', 0, 500, 200, s[key].mode === 'pct' ? 'percent of size' : 'page px')}
+        {@render slider('Sharpness', s[key], 'ratio', 0, 100, null, 'percent')}
+      </div>
+    {/each}
+    {@render toggle('Taper by speed', s, 'taperBySpeed')}
+    <p class="hint">A stroke that starts or ends slowly tapers less. CSP's "Starting and ending by speed".</p>
   {/if}
+
+  {#if tab === 'correction'}
+    {@render slider('Stabilisation', s, 'stabilise', 0, 100, null, 'percent')}
+    {#if s.stabilise > 40}
+      <p class="hint">Above 40 the stroke visibly trails the cursor. That is the trade for a steady curve.</p>
+    {/if}
+    <div class="insp-rule"></div>
+    {@render slider('Post-correction', s, 'postCorrect', 0, 100, null, 'percent', 'Smooths the finished stroke once the pointer lifts')}
+    {#if s.postCorrect > 50}
+      <p class="hint">Above 50 a wavy pass is pulled towards a straight line, as CSP does.</p>
+    {/if}
+    {@render toggle('Adjust by speed', s, 'postBySpeed')}
+    <p class="hint">The faster the hand moved through a stretch, the harder that stretch is smoothed.</p>
+    {@render toggle('Sharp angles', s.sharpAngles, 'on')}
+    <div class="nest" class:disabled={!s.sharpAngles.on}>
+      {@render slider('Threshold', s.sharpAngles, 'deg', 5, 170, null, 'degrees', 'A turn sharper than this is left alone by post-correction')}
+    </div>
   {/if}
 </div>
 
 <style>
-  /* The preview: ink on paper, because that is what it is. The width is the
-     panel's default content width, and it gives it back rather than pushing a
-     scrollbar when the panel is gripped narrower - the drawing scales, which is
-     what a preview is for. */
+  /* The tab strip: the Inspector's own, icons only. Sticky for the same reason
+     - a panel gripped down to a few rows must still reach its tabs. */
+  .brush-tabs {
+    position: sticky;
+    top: -12px;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(32px, 1fr));
+    gap: 4px;
+    margin: -12px -12px 2px;
+    padding: 12px 12px 8px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  .brush-tab {
+    display: grid;
+    place-items: center;
+    height: 36px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--t2);
+    cursor: pointer;
+    min-width: 0;
+  }
+  .brush-tab :global(svg) {
+    width: 19px;
+    height: 19px;
+  }
+  .brush-tab:hover {
+    color: var(--text);
+    background: var(--surface);
+  }
+  .brush-tab.on {
+    color: var(--accent-fg);
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .brush-tab:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
   .bpv {
     display: block;
     max-width: 100%;
@@ -693,30 +603,20 @@
     border-radius: 7px;
     background: var(--paper);
   }
-  /* Search and Import share one row: the field takes the width and the button
-     is a square at the end of it, so the grid below starts at the same place
-     whether there are twelve brushes or none. */
-  .picker-head {
+
+  /* Zoom on the left, the three board verbs on the right. */
+  .boardbar {
     display: flex;
+    align-items: center;
     gap: 6px;
   }
-  .find {
-    flex: 1 1 auto;
-    min-width: 0;
-    height: 28px;
-    border: 1px solid var(--line2);
-    border-radius: 6px;
-    background: var(--surface);
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
+  .boardbar .zoom {
+    margin-right: auto;
+  }
+  .boardbar .zoom button {
     padding: 0 9px;
-  }
-  .find::placeholder {
-    color: var(--t3);
-  }
-  .find:disabled {
-    opacity: 0.45;
+    flex: 0 0 auto;
+    font-size: 12px;
   }
   .icobtn {
     flex: 0 0 auto;
@@ -741,8 +641,57 @@
     opacity: 0.45;
     cursor: default;
   }
-  /* The picker's frame: four columns, scrolling past about two and a half rows
-     rather than pushing the size slider off the panel. */
+
+  .actions {
+    display: flex;
+    gap: 6px;
+  }
+  .act {
+    flex: 1 1 auto;
+    height: 30px;
+    border: 1px solid var(--line2);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .act.primary {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-color: var(--accent);
+  }
+  .act:hover:not(:disabled) {
+    filter: brightness(1.06);
+  }
+  .act:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .picker-head {
+    display: flex;
+    gap: 6px;
+  }
+  .find {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 28px;
+    border: 1px solid var(--line2);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    padding: 0 9px;
+  }
+  .find::placeholder {
+    color: var(--t3);
+  }
+  .find:disabled {
+    opacity: 0.45;
+  }
   .tip-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -757,22 +706,16 @@
   .tip-grid.empty {
     grid-template-columns: 1fr;
     place-items: center;
-    min-height: 132px;
+    min-height: 120px;
     max-height: none;
     overflow: visible;
   }
-  .cell {
-    position: relative;
-    aspect-ratio: 1;
-    min-width: 0;
-  }
-  /* A tip is ink on paper in BOTH themes. Inverting it in the dark theme would
-     show a letterer a brush that is not the one they are about to draw with. */
+  /* A tip is ink on paper in BOTH themes. */
   .tip {
     display: grid;
     place-items: center;
-    width: 100%;
-    height: 100%;
+    aspect-ratio: 1;
+    min-width: 0;
     padding: 3px;
     border: 1px solid transparent;
     border-radius: 5px;
@@ -791,42 +734,6 @@
     border-color: var(--accent);
     box-shadow: 0 0 0 1px var(--accent);
   }
-  /* Hidden until the cell is pointed at or focused, and always visible once
-     armed - the grid is for choosing a brush, not for deleting one. */
-  .rm {
-    position: absolute;
-    top: 2px;
-    right: 2px;
-    width: 15px;
-    height: 15px;
-    display: none;
-    place-items: center;
-    padding: 0;
-    border: 1px solid var(--line2);
-    border-radius: 4px;
-    background: var(--surface);
-    color: var(--t3);
-    cursor: pointer;
-  }
-  .rm svg {
-    width: 9px;
-    height: 9px;
-  }
-  .cell:hover .rm,
-  .cell:focus-within .rm,
-  .cell.armed .rm {
-    display: grid;
-  }
-  .rm:hover,
-  .rm.arm {
-    border-color: var(--warn);
-    color: var(--warn);
-  }
-  .cell.armed .tip {
-    border-color: var(--warn);
-  }
-  /* The name of the brush that is selected, its true pixel size, and what is
-     wrong with it if anything. */
   .tip-name {
     display: flex;
     align-items: center;
@@ -836,8 +743,6 @@
     min-width: 0;
   }
   .tip-name .nm {
-    /* min-width beats flexbox's min-width:auto, or a long nowrap name
-       refuses to shrink and shoves the size label out of the panel */
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -858,8 +763,6 @@
     font-size: 9.5px;
     letter-spacing: 0.08em;
   }
-  /* The empty state's own import button. The icon in the head does the same
-     thing, but a panel with nothing in it should say what to do in words. */
   .addbtn {
     height: 28px;
     border: 1px dashed var(--line2);
@@ -870,13 +773,8 @@
     font-size: 12px;
     cursor: pointer;
   }
-  .addbtn:hover:not(:disabled) {
+  .addbtn:hover {
     color: var(--text);
-    border-color: var(--line2);
-  }
-  .addbtn:disabled {
-    opacity: 0.45;
-    cursor: default;
   }
   .emptymsg {
     display: flex;
@@ -901,24 +799,16 @@
     font-size: 10.5px;
     color: var(--t2);
   }
-  .subs {
+  .colour-row {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    align-items: center;
+    gap: 8px;
   }
-  /* The active dynamics source, readable without opening the section. */
-  .sbadge {
-    font-size: 10px;
-    letter-spacing: 0.3px;
-    text-transform: none;
-    color: var(--t3);
-    border: 1px solid var(--line2);
-    border-radius: 4px;
-    padding: 0 5px;
-    font-weight: 500;
+  .colour-row .hex {
+    font-size: 12px;
+    color: var(--t2);
+    font-variant-numeric: tabular-nums;
   }
-  /* A group of controls under a switch, indented so the switch reads as owning
-     them. Same idea as the Inspector's disabled sub-bodies. */
   .nest {
     display: flex;
     flex-direction: column;
@@ -930,20 +820,11 @@
     opacity: 0.45;
     pointer-events: none;
   }
-  /* An imported brush's response curve, shown and not edited. There is no graph
-     editor here and 6.3 did not add one, but a shape that changes how every
-     stroke thins should not be invisible - so the panel draws it small, with the
-     straight line it replaces underneath for scale. Input runs across, output
-     up, both 0 to 1, which is the way CSP's own graph reads. */
   .curve {
     width: 100%;
     height: 44px;
     border: 1px solid var(--line2);
     border-radius: 4px;
-    /* No fill of its own. `--paper` would be a white card in the dark theme and
-       `--accent` is the text colour in it, so the graph would have drawn itself
-       in near-white on near-white; against the panel's own surface the line is
-       the text colour and reads in both themes. */
     background: none;
   }
   .curve polyline {
@@ -962,5 +843,8 @@
     line-height: 1.45;
     color: var(--t3);
     margin: 0;
+  }
+  .hint.warn {
+    color: var(--warn);
   }
 </style>

@@ -38,10 +38,93 @@ export const BOX_PAD = 2;
 // BOX_PAD, i.e. the top - a middle- or bottom-aligned box exported pixels the
 // app agreed with and engine data it did not, and the words jumped upward the
 // moment Photoshop re-rendered the layer.
-export function blockYFor(style, boxH, blockH) {
-  if (style?.valign === 'middle') return (boxH - blockH) / 2;
+//
+// `inkShift` is the correction `inkShiftY` below works out, and it applies to
+// the middle alignment only: a centred block is centred on its INK, which is the
+// thing the reader sees centred in the bubble. Top and bottom stay anchored by
+// their line boxes - a top-aligned block is aligned to an edge, and nudging it
+// by its own ascender would move it off that edge.
+export function blockYFor(style, boxH, blockH, inkShift = 0) {
+  if (style?.valign === 'middle') return (boxH - blockH) / 2 + (Number(inkShift) || 0);
   if (style?.valign === 'bottom') return boxH - BOX_PAD - blockH;
   return BOX_PAD;
+}
+
+// ---- where the glyphs sit inside a line box ----
+//
+// A line box is `size * lineHeight` tall, and the browser puts the font's
+// content area - its ascent plus its descent, which is NOT the font size - in
+// the middle of it, with half the leading above and half below. The baseline is
+// therefore `halfLeading + ascent` below the top of the line box, and that is
+// the number the raster exporter has to draw at if the PNG is to be the picture
+// on the canvas. It used to draw the em SQUARE centred instead (`textBaseline:
+// 'top'` at `(lineH - size) / 2`), which lands the baseline `(ascent + descent -
+// size) / 2` lower than the editor's - 2px for Arial at 40px, and 5px or more
+// for the comic faces whose vertical metrics run to 1.3 of the size.
+//
+// The metrics are the font's own, read off `measureText` - Chrome's
+// `fontBoundingBoxAscent`/`Descent` are the same ascent and descent its layout
+// engine builds line boxes from. A stand-in of 0.8/0.2 of the size where there
+// is no canvas or the browser predates the property, so the function is total.
+export function fontMetrics(style, sizePx) {
+  const size = sizePx > 0 ? sizePx : 0;
+  const fallback = { ascent: size * 0.8, descent: size * 0.2 };
+  if (!_ctx || !(size > 0)) return fallback;
+  _ctx.font = fontShorthand(style, size, familyFor(style));
+  const m = _ctx.measureText('Hg');
+  const a = m.fontBoundingBoxAscent;
+  const d = m.fontBoundingBoxDescent;
+  return a >= 0 && d >= 0 ? { ascent: a, descent: d } : fallback;
+}
+
+// The baseline's offset from the top of its line box, as the browser lays it.
+export function baselineInLine(style, sizePx) {
+  const lineH = sizePx * (style?.lineHeight > 0 ? style.lineHeight : 1);
+  const { ascent, descent } = fontMetrics(style, sizePx);
+  return (lineH - (ascent + descent)) / 2 + ascent;
+}
+
+// How far a middle-aligned block has to move so that its INK is centred rather
+// than its line boxes. Positive is down.
+//
+// The block is `lines * lineH` tall and the box centres that rectangle, but the
+// rectangle is not what the reader sees: an all-caps line has nothing below the
+// baseline and a whole descender's worth of empty line box under it, so its
+// letters sit high; a last line ending in "Jumpy" hangs its tails into the
+// leading, so the block sits low. Measured across Chrome's system faces at 40px
+// the drift is under 2px for capitals and 2 to 7px - five to seventeen percent
+// of the size - once descenders are involved, and the comic faces this app is
+// used with have wilder ascent/descent than any of those. TyperTools, the
+// Photoshop plugin every scanlation group has used, sidesteps all of it by
+// reading the rendered layer's pixel bounds and centring THOSE on the bubble;
+// this is the same rule, computed from the glyph metrics instead of from pixels
+// so that the editor, the exporter and the PSD writer can each apply it before
+// anything is drawn.
+//
+// Every line is looked at rather than just the first and the last, because at a
+// tight leading a tall glyph on the second line can outreach a line of dots on
+// the first. Zero where there is nothing to measure: no canvas (the node test
+// runner, where every metric is a stand-in and a shift written into a document
+// from one would be a lie), or a block with no ink in it.
+export function inkShiftY(lines, style, sizePx) {
+  if (!_ctx || !Array.isArray(lines) || lines.length === 0 || !(sizePx > 0)) return 0;
+  const lineH = sizePx * (style?.lineHeight > 0 ? style.lineHeight : 1);
+  const base = baselineInLine(style, sizePx);
+  _ctx.font = fontShorthand(style, sizePx, familyFor(style));
+  let top = Infinity;
+  let bottom = -Infinity;
+  for (let i = 0; i < lines.length; i++) {
+    const s = String(lines[i] ?? '').replace(/\s+$/, '');
+    if (!s) continue;
+    const m = _ctx.measureText(s);
+    const asc = m.actualBoundingBoxAscent;
+    const desc = m.actualBoundingBoxDescent;
+    if (!(asc >= 0) || !(desc >= 0)) return 0; // no ink metrics in this browser
+    top = Math.min(top, i * lineH + base - asc);
+    bottom = Math.max(bottom, i * lineH + base + desc);
+  }
+  if (!(bottom > top)) return 0;
+  return (lines.length * lineH) / 2 - (top + bottom) / 2;
 }
 
 // ---- typesetting engine switch (beta) ----

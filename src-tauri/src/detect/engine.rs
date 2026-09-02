@@ -8,11 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "macos")]
-use ort::ep::ExecutionProvider;
 use ort::session::Session;
 use tauri::async_runtime::Mutex as AsyncMutex;
 
+use super::accel;
 use super::analyze::{analyze, decode_image, AnalyzeResponse};
 use super::ocr::OcrEngine;
 use super::panels;
@@ -65,6 +64,8 @@ struct Sessions {
     detector: Option<TextDetector>,
     panels: Option<Session>,
     ocr: Option<OcrEngine>,
+    /// Execution provider the text detector landed on, once it has loaded.
+    device: Option<&'static str>,
 }
 
 struct Inner {
@@ -89,6 +90,16 @@ impl DetectEngine {
 
     pub fn models_dir(&self) -> &Path {
         &self.0.models_dir
+    }
+
+    /// Execution provider detection runs on: the one the loaded weights use,
+    /// or, before any model has loaded, the one a load would pick right now.
+    pub fn device(&self) -> &'static str {
+        let (s, _) = self.lock_sessions();
+        match s.device {
+            Some(device) => device,
+            None => accel::probe(),
+        }
     }
 
     /// Acquires the session lock, resetting poisoned state if a previous caller panicked.
@@ -137,10 +148,10 @@ impl DetectEngine {
         }
 
         if s.detector.is_none() {
-            s.detector = Some(
-                TextDetector::load(&dir.join(TEXT_DETECTOR.rel))
-                    .map_err(|e| format!("failed to load the text detector: {e}"))?,
-            );
+            let detector = TextDetector::load(&dir.join(TEXT_DETECTOR.rel))
+                .map_err(|e| format!("failed to load the text detector: {e}"))?;
+            s.device = Some(detector.device());
+            s.detector = Some(detector);
         }
         if s.panels.is_none() {
             // Panel detection failure degrades to spatial sort rather than aborting.
@@ -156,7 +167,7 @@ impl DetectEngine {
             );
         }
 
-        let Sessions { detector, panels, ocr } = &mut *s;
+        let Sessions { detector, panels, ocr, .. } = &mut *s;
         let detector = detector.as_mut().expect("loaded above");
         analyze(
             &img,
@@ -441,16 +452,15 @@ pub struct Health {
     pub engine: String,
 }
 
-/// Reports engine status and execution provider availability (CoreML vs CPU).
+/// Reports engine status and the execution provider detection runs on.
 #[tauri::command]
-pub async fn detect_health() -> Result<Health, String> {
-    #[cfg(target_os = "macos")]
-    let device = match ort::ep::CoreML::default().is_available() {
-        Ok(true) => "coreml",
-        _ => "cpu",
-    };
-    #[cfg(not(target_os = "macos"))]
-    let device = "cpu";
+pub async fn detect_health(state: tauri::State<'_, DetectEngine>) -> Result<Health, String> {
+    let engine = state.inner().clone();
+    // Probing registers a provider, which on CUDA/WebGPU means bringing a
+    // device up; keep that off the async runtime.
+    let device = tauri::async_runtime::spawn_blocking(move || engine.device())
+        .await
+        .map_err(|e| format!("health probe failed: {e}"))?;
     Ok(Health {
         status: "ok".into(),
         device: device.into(),
@@ -576,13 +586,6 @@ mod tests {
             Some(v) => std::env::set_var("MT_DOWNLOAD_DEADLINE", v),
             None => std::env::remove_var("MT_DOWNLOAD_DEADLINE"),
         }
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn this_build_reports_coreml_as_its_device() {
-        // Verifies CoreML EP availability on macOS.
-        assert!(ort::ep::CoreML::default().is_available().unwrap_or(false));
     }
 
     #[test]

@@ -41,17 +41,19 @@ pub struct TextBlockOut {
 /// Loaded comic_text_detector ONNX session.
 pub struct TextDetector {
     session: Session,
+    device: &'static str,
 }
 
 impl TextDetector {
-    /// Loads ONNX model, preferring CoreML on macOS with CPU fallback.
+    /// Loads the ONNX model on the best provider this machine offers (see `accel`).
     pub fn load(model_path: &std::path::Path) -> ort::Result<TextDetector> {
-        #[cfg_attr(target_os = "macos", allow(unused_mut))]
-        let mut builder = Session::builder()?;
-        #[cfg(target_os = "macos")]
-        let mut builder = builder.with_execution_providers([ort::ep::CoreML::default().build()])?;
-        let session = builder.commit_from_file(model_path)?;
-        Ok(TextDetector { session })
+        let (session, device) = super::accel::open(model_path, false)?;
+        Ok(TextDetector { session, device })
+    }
+
+    /// Name of the execution provider the model loaded on.
+    pub fn device(&self) -> &'static str {
+        self.device
     }
 
     /// Detects text blocks and page-sized mask on an image.

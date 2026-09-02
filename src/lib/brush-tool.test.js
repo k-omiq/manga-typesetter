@@ -2,15 +2,11 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   brushTool,
   setBrushMode,
-  setLiquifyMode,
   brushArmed,
-  liquifySettings,
   defaultBrushToolSettings,
-  LIQUIFY_DEFAULTS,
-  LIQUIFY_RADIUS_MIN,
-  LIQUIFY_RADIUS_MAX,
+  BRUSH_MODES,
 } from './brush-tool.svelte.js';
-import { LIQUIFY_MODES } from './liquify.js';
+import { defaultBrushSettings } from './brush.js';
 import { TOOLS } from './store.svelte.js';
 
 describe('brush tool state', () => {
@@ -41,66 +37,50 @@ describe('brush tool state', () => {
     expect(brushTool.settings.dyn.src).toBe('velocity');
   });
 
-  it('arms liquify as a third mode of the same tool', () => {
-    expect(setBrushMode('liquify')).toBe(true);
-    expect(brushTool.mode).toBe('liquify');
-    expect(brushArmed()).toBe(true);
-    // Draw and erase are untouched by the new mode.
-    expect(setBrushMode('erase')).toBe(true);
-    expect(brushTool.mode).toBe('erase');
+  it('has draw and erase and nothing else: liquify is an effect on the box', () => {
+    expect(BRUSH_MODES).toEqual(['draw', 'erase']);
+    expect(setBrushMode('liquify')).toBe(false);
+    expect(brushTool.mode).toBe(null);
   });
 
-  it('starts liquify on push, at a usable radius and half strength', () => {
-    expect(brushTool.settings.liquifyMode).toBe('push');
-    expect(brushTool.settings.liquifyRadius).toBe(LIQUIFY_DEFAULTS.liquifyRadius);
-    expect(brushTool.settings.liquifyStrength).toBe(LIQUIFY_DEFAULTS.liquifyStrength);
-    expect(LIQUIFY_DEFAULTS.liquifyRadius).toBeGreaterThanOrEqual(LIQUIFY_RADIUS_MIN);
-    expect(LIQUIFY_DEFAULTS.liquifyRadius).toBeLessThanOrEqual(LIQUIFY_RADIUS_MAX);
+  it('carries nothing but a brush\'s own settings', () => {
+    expect(Object.keys(defaultBrushToolSettings()).sort()).toEqual(Object.keys(defaultBrushSettings()).sort());
+  });
+});
+
+describe('the panel tab and the manager', () => {
+  it('starts on the board and only accepts its own tabs', async () => {
+    const { BRUSH_TABS, setBrushTab } = await import('./brush-tool.svelte.js');
+    expect(BRUSH_TABS[0]).toBe('board');
+    expect(brushTool.tab).toBe('board');
+    expect(setBrushTab('dynamics')).toBe(true);
+    expect(brushTool.tab).toBe('dynamics');
+    expect(setBrushTab('nope')).toBe(false);
+    expect(brushTool.tab).toBe('dynamics');
+    setBrushTab('board');
   });
 
-  it('takes every field the engine offers and refuses anything else', () => {
-    for (const m of LIQUIFY_MODES) {
-      expect(setLiquifyMode(m)).toBe(true);
-      expect(brushTool.settings.liquifyMode).toBe(m);
-    }
-    expect(setLiquifyMode('smudge')).toBe(false);
-    expect(setLiquifyMode(null)).toBe(false);
-    expect(brushTool.settings.liquifyMode).toBe(LIQUIFY_MODES[LIQUIFY_MODES.length - 1]);
+  it('opens the manager on a brush, or on the plain list, and closes clean', async () => {
+    const { openBrushManager, closeBrushManager } = await import('./brush-tool.svelte.js');
+    openBrushManager('abc');
+    expect(brushTool.manager).toBe(true);
+    expect(brushTool.editBrushId).toBe('abc');
+    closeBrushManager();
+    expect(brushTool.manager).toBe(false);
+    expect(brushTool.editBrushId).toBeNull();
+    openBrushManager();
+    expect(brushTool.editBrushId).toBeNull();
+    openBrushManager('');
+    expect(brushTool.editBrushId).toBeNull();
+    closeBrushManager();
   });
+});
 
-  it('hands the gesture settings inside the ranges the panel offers', () => {
-    // The panel clamps as it writes; this is the second door, for a settings
-    // object that came from somewhere else - a picked brush, an older session.
-    expect(liquifySettings({ liquifyMode: 'twirl', liquifyRadius: 900, liquifyStrength: 400 })).toEqual({
-      mode: 'twirl',
-      radius: LIQUIFY_RADIUS_MAX,
-      strength: 100,
-    });
-    expect(liquifySettings({ liquifyRadius: -20, liquifyStrength: -1 })).toEqual({
-      mode: 'push',
-      radius: LIQUIFY_RADIUS_MIN,
-      strength: 0,
-    });
-  });
-
-  it('falls back to the defaults for anything unreadable, including no settings at all', () => {
-    const want = { mode: 'push', radius: LIQUIFY_DEFAULTS.liquifyRadius, strength: LIQUIFY_DEFAULTS.liquifyStrength };
-    expect(liquifySettings({ liquifyMode: 'nope', liquifyRadius: 'x', liquifyStrength: NaN })).toEqual(want);
-    expect(liquifySettings({})).toEqual(want);
-    expect(liquifySettings(null)).toEqual(want);
-  });
-
-  it('reads the live settings when it is asked for nothing in particular', () => {
-    brushTool.settings.liquifyMode = 'pinch';
-    brushTool.settings.liquifyRadius = 77;
-    brushTool.settings.liquifyStrength = 12;
-    expect(liquifySettings()).toEqual({ mode: 'pinch', radius: 77, strength: 12 });
-  });
-
-  it('keeps the liquify three out of what a stroke is drawn with', () => {
-    // `buildStroke` names the keys it copies, so these never reach a stored
-    // stroke - but they must not collide with a brush setting either.
-    const brushKeys = Object.keys(defaultBrushToolSettings()).filter((k) => k.startsWith('liquify'));
-    expect(brushKeys.sort()).toEqual(['liquifyMode', 'liquifyRadius', 'liquifyStrength']);
+describe('the finish', () => {
+  it('is carried for the next placed layer, empty, and apart from the brush', async () => {
+    const { BRUSH_TABS } = await import('./brush-tool.svelte.js');
+    expect(BRUSH_TABS).toContain('finish');
+    expect(brushTool.finish).toEqual({ strokes: [], shadows: [] });
+    expect('strokes' in brushTool.settings).toBe(false);
   });
 });

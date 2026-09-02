@@ -1,12 +1,14 @@
 <script>
-  // New chapter dialog. One dialog, three sources - picked files, PSDs, or a
-  // chapter package - chosen at the top, so there is one place a chapter comes
-  // into being from and the project / number / title fields are shared.
+  // New chapter dialog. One dialog, two sources - picked files or a chapter
+  // package - chosen at the top, so there is one place a chapter comes into
+  // being from and the project / number / title fields are shared.
+  //
+  // PSD import (chapterPagesFromPsdFiles / pickPsdFiles in psd.js) is parked
+  // for now: the code stays, the dialog no longer offers it.
   import { untrack } from 'svelte';
-  import { library, createProject, createChapter, createChapterFromPages } from '../library.svelte.js';
+  import { library, createProject, createChapter } from '../library.svelte.js';
   import { goEditor } from '../route.svelte.js';
   import { pickImageFiles, pickJsonFile, readTranslations } from '../importer.js';
-  import { chapterPagesFromPsdFiles, pickPsdFiles } from '../psd.js';
   import { pickPackageFile, inspectPackage, importChapterPackage } from '../package-flow.js';
   import { toast } from '../store.svelte.js';
   import { plural, relativeTime } from '../format.js';
@@ -14,7 +16,7 @@
   // In-flight creation blocks dismissal.
   let { open = $bindable(), busy = $bindable(false), projectId = null } = $props();
 
-  // Where the pages come from: 'files' | 'psd' | 'package'.
+  // Where the pages come from: 'files' | 'package'.
   let source = $state('files');
 
   let target = $state('');
@@ -23,7 +25,6 @@
   let title = $state('');
   let files = $state([]);
   let cleaned = $state([]);
-  let psdFiles = $state([]);
   let translations = $state(null); // { name, pages } from a picked JSON
   // The parsed chapter package and its description, or null before one is picked.
   let pkg = $state(null);
@@ -31,12 +32,9 @@
   let pkgName = $state('');
   let reading = $state(false);
   let error = $state('');
-  // Chapter workflow mode.
   let workflow = $state('typeset');
-  // Project layout selection.
   let newProjectLayout = $state('pages');
 
-  const isPsd = $derived(source === 'psd');
   const isPackage = $derived(source === 'package');
 
   function nextNumberFor(id) {
@@ -55,7 +53,6 @@
       title = '';
       files = [];
       cleaned = [];
-      psdFiles = [];
       translations = null;
       pkg = null;
       pkgSummary = null;
@@ -95,12 +92,6 @@
       if (picked) cleaned = [...picked];
     });
 
-  const pickPsds = () =>
-    picking(PICKER, async () => {
-      const picked = await pickPsdFiles();
-      if (picked) psdFiles = [...picked];
-    });
-
   // Reading a package prefills the fields it knows - number, title, and for a
   // new project its name and layout - all of which stay editable.
   async function pickPackage() {
@@ -138,10 +129,6 @@
 
   // Preview positional page count.
   const summary = $derived.by(() => {
-    if (isPsd) {
-      if (!psdFiles.length) return [];
-      return [{ text: `${plural(psdFiles.length, 'PSD')} - one page each.`, warn: false }];
-    }
     if (isPackage) {
       const sm = pkgSummary;
       if (!sm) return [];
@@ -230,15 +217,14 @@
       error = 'Choose a package file first.';
       return;
     }
-    if (!isPackage && (isPsd ? !psdFiles.length : !files.length)) {
-      error = isPsd ? 'Pick at least one PSD.' : 'Pick at least one raw page.';
+    if (!isPackage && !files.length) {
+      error = 'Pick at least one raw page.';
       return;
     }
     if (target === '__new__' && !newProjectName.trim()) {
       error = 'Name the new project.';
       return;
     }
-    // Default chapter number to 1.
     const n = number === null || number === undefined || number === '' ? 1 : Number(number);
     if (!Number.isFinite(n) || n < 0) {
       error = 'Enter a valid chapter number.';
@@ -263,16 +249,6 @@
         if (r.fontsFailed) parts.push(`${plural(r.fontsFailed, 'font')} could not be installed`);
         if (r.tagsAdded) parts.push(`${plural(r.tagsAdded, 'tag')} added`);
         note = parts.join(' · ');
-      } else if (isPsd) {
-        const { pages, lossless, cleanedOnly, problems } = await chapterPagesFromPsdFiles(psdFiles);
-        if (!pages.length) {
-          throw new Error(problems.join(' · ') || 'No pages could be read from those files');
-        }
-        chapter = await createChapterFromPages({ projectId: pid, number: n, title, pages });
-        note = `${plural(pages.length, 'page')} from PSD (${lossless} lossless)`;
-        if (problems.length) note += ` · skipped ${problems.length}`;
-        // PSD reconstruction uses raster layers.
-        if (cleanedOnly) note += ` · ${cleanedOnly} with no separate raw`;
       } else {
         chapter = await createChapter({
           projectId: pid,
@@ -316,7 +292,6 @@
         <span>Source</span>
         <div class="seg">
           <button class:on={source === 'files'} onclick={() => (source = 'files')} disabled={busy}>Pages</button>
-          <button class:on={source === 'psd'} onclick={() => (source = 'psd')} disabled={busy}>PSD</button>
           <button class:on={source === 'package'} onclick={() => (source = 'package')} disabled={busy}>Package</button>
         </div>
       </div>
@@ -367,17 +342,6 @@
 
       {#if isPackage}
         <!-- everything a package carries is described in the notes below -->
-      {:else if isPsd}
-        <div class="field">
-          <span>PSD files</span>
-          <button class="soft-btn" onclick={pickPsds} disabled={busy}>
-            {psdFiles.length ? `${psdFiles.length} selected - change` : 'Choose files…'}
-          </button>
-        </div>
-        <div class="pair-note warn">
-          A PSD holds rasters, not the files they came from, so these pages are written as new
-          PNGs. Every other page in your library keeps its original bytes.
-        </div>
       {:else}
 
         <div class="field">
@@ -425,7 +389,7 @@
       <div class="modal-foot">
         <button class="soft-btn" onclick={() => (open = false)} disabled={busy}>Cancel</button>
         <button class="accent-btn narrow" onclick={submit} disabled={busy}>
-          {busy ? (isPsd || isPackage ? 'Importing…' : 'Copying…') : 'Create'}
+          {busy ? (isPackage ? 'Importing…' : 'Copying…') : 'Create'}
         </button>
       </div>
     </div>

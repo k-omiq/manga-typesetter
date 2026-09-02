@@ -178,7 +178,12 @@ const pngFileFor = (id) => `${id}.png`;
 // two agree without either having to spell it out.
 function importedDyn(v) {
   if (!v || typeof v !== 'object') return null;
-  if (typeof v.src !== 'string' || v.src === 'off' || !DYN_SOURCES.includes(v.src)) return null;
+  if (typeof v.src !== 'string' || !DYN_SOURCES.includes(v.src)) return null;
+  // `off` is kept as a setting, not dropped: the Rust side never sends it (a
+  // brush with no driver omits the key), so an `off` here is the manager's -
+  // a letterer switching this brush's dynamics off on purpose, which has to
+  // beat the tool's own when the brush is picked.
+  if (v.src === 'off') return { src: 'off', amount: num(v.amount, defaultBrushSettings().dyn.amount, 0, 100) };
   const curve = dynCurve(v.curve);
   return {
     src: v.src,
@@ -213,6 +218,7 @@ export function sanitiseBrushSettings(src) {
     on: typeof t?.on === 'boolean' ? t.on : dt.on,
     len: num(t?.len, dt.len, 0, 500),
     ratio: num(t?.ratio, dt.ratio, 0, 100),
+    mode: t?.mode === 'pct' ? 'pct' : 'px',
   });
   const dyn = importedDyn(s.dyn);
   return {
@@ -223,14 +229,34 @@ export function sanitiseBrushSettings(src) {
     hardness: num(s.hardness, d.hardness, 0, 100),
     angle: ((num(s.angle, d.angle, -1e7, 1e7) % 360) + 360) % 360,
     angleJitter: num(s.angleJitter, d.angleJitter, 0, 100),
+    followDir: s.followDir === true,
+    ribbon: s.ribbon === true,
+    darkenTips: s.darkenTips === true,
+    // The cycle rides along only when the file had one. Picking any brush
+    // sets `brush: id` after the spread, so an absent key here reads as "this
+    // brush has one tip" and no stale cycle survives the pick.
+    ...(Array.isArray(s.tips) && s.tips.filter(validId).length > 1
+      ? { tips: s.tips.filter(validId) }
+      : { tips: [] }),
+    tipOrder: ['repeat', 'reverse', 'once', 'random'].includes(s.tipOrder) ? s.tipOrder : 'repeat',
     flatness: num(s.flatness, d.flatness, 0.01, 1),
     antialias: s.antialias !== false,
     taperIn: taper(s.taperIn, d.taperIn),
     taperOut: taper(s.taperOut, d.taperOut),
+    taperBySpeed: s.taperBySpeed === true,
     waterEdge: s.waterEdge === true,
     waterEdgeWidth: num(s.waterEdgeWidth, d.waterEdgeWidth, 1, 20),
     waterEdgePower: num(s.waterEdgePower, d.waterEdgePower, 0, 1),
+    waterEdgeDark: num(s.waterEdgeDark, d.waterEdgeDark, 0, 1),
+    waterEdgeBlur: num(s.waterEdgeBlur, d.waterEdgeBlur, 0, 20),
     stabilise: num(s.stabilise, d.stabilise, 0, 100),
+    // Post correction is conditional the way `dyn` is: a `.sut` that names a
+    // strength sends one and the pick applies it, an index row from before it
+    // was read sends no key and leaves the letterer's own slider alone.
+    ...(Number.isFinite(+s.postCorrect) && s.postCorrect !== null
+      ? { postCorrect: num(s.postCorrect, d.postCorrect, 0, 100) }
+      : null),
+    postBySpeed: s.postBySpeed === true,
     sharpAngles: {
       on: s.sharpAngles?.on === true,
       deg: num(s.sharpAngles?.deg, d.sharpAngles.deg, 1, 179),
@@ -744,6 +770,39 @@ export async function removeBrush(id) {
     } catch {
       /* the entry is already gone; the file is inert either way */
     }
+    return true;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Editing
+// ---------------------------------------------------------------------------
+
+// Rename a brush and/or replace the settings it applies when picked. `patch`
+// may carry `name` and `settings`; anything else is ignored, and the settings
+// go through the same sanitiser an import's do, so a hand-typed number lands
+// clamped. True when the brush was there and the index was written.
+//
+// Strokes already drawn with the brush are untouched: their widths were baked
+// at capture time (see `normalizeInkStroke`), which is the whole point.
+export async function updateBrush(id, patch) {
+  if (!inTauri()) return false;
+  await loadBrushLibrary();
+  if (brushLibrary.readOnly) return false;
+  const p = patch && typeof patch === 'object' ? patch : {};
+  return serialise(async () => {
+    const i = installedBrushes.findIndex((b) => b.id === id);
+    if (i === -1) return false;
+    const next = installedBrushes.map(rowOf);
+    const cur = next[i];
+    const name = typeof p.name === 'string' && p.name.trim() ? p.name.trim() : cur.name;
+    const settings =
+      p.settings && typeof p.settings === 'object'
+        ? sanitiseBrushSettings({ ...cur.settings, ...p.settings })
+        : cur.settings;
+    next[i] = { ...cur, name, settings };
+    await fsx.writeTextFileAtomic(await indexPath(), indexJson(next));
+    replaceAll(next);
     return true;
   });
 }

@@ -15,7 +15,7 @@ import { renderBoxLayer, pageSpace, settleNoise } from './exporter.js';
 import { settleBoxTips } from './brush-tips.js';
 import { fontCssFor, fontNameFor } from './store.svelte.js';
 import { resolveFace, postScriptNameFor } from './fonts.js';
-import { applyCase, canMeasure, layoutLines, BOX_PAD, blockYFor, balloonWidthsFor } from './measure.js';
+import { applyCase, canMeasure, layoutLines, BOX_PAD, blockYFor, balloonWidthsFor, inkShiftY } from './measure.js';
 import { normalizeFit } from './data.js';
 import { strokeBands, clipActive, inkActive } from './text-paint.js';
 import { warpActive } from './warp.js';
@@ -521,8 +521,11 @@ export function textLayerFor(p, box, rendered) {
   // the line count is the only thing needed to size the block: `content` is the
   // shaped text with the app's own breaks already in it.
   const lineH = (s.lineHeight || 1.1) * s.size;
-  const blockH = content.split('\n').length * lineH;
-  const blockY = blockYFor(s, box.h, blockH);
+  const shapedLines = content.split('\n');
+  const blockH = shapedLines.length * lineH;
+  // With the same ink-centring the exporter and the editor apply, so the anchor
+  // describes the block the cached pixels actually show.
+  const blockY = blockYFor(s, box.h, blockH, inkShiftY(shapedLines, s, s.size));
   const ox = box.x + BOX_PAD;
   const oy = box.y + blockY;
   const tx = cx + (ox - cx) * cos - (oy - cy) * sin;

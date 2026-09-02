@@ -67,6 +67,8 @@ import {
   setBoxText,
   deleteBox,
   duplicateBox,
+  addInkBox,
+  setBoxInk,
   nudgeBox,
   lineByN,
   isPlaced,
@@ -92,11 +94,19 @@ import {
   cloneStyle,
   rememberStyle,
   resetBoxRotation,
+  rememberSizeFor,
+  inheritedStyleFor,
+  placeableDetectedLines,
+  placeDetectedOnPage,
 } from './store.svelte.js';
 import { defaultStyle, normalizeStyle, GRADIENT_MAX_STOPS } from './data.js';
 import { setPref } from './prefs.svelte.js';
 import { loadTags, lineTags, setLineTags } from './tags.svelte.js';
 import { initHistory, resetHistory, undo, redo } from './editor/history.svelte.js';
+
+beforeEach(() => {
+  app.lastSizeByTag = {};
+});
 
 const pageWith = (boxes) => ({
   id: 1,
@@ -3603,5 +3613,300 @@ describe('the style the next placed box follows', () => {
     const id = addEmptyBox(500, 500);
     expect(byId(id).style.size).toBe(32);
     expect(byId(id).style.autoHeight).toBe(true);
+  });
+});
+
+describe('a box born from the brush board', () => {
+  const ink = (x0 = 0, x1 = 50) => ({
+    w: 60,
+    h: 20,
+    strokes: [{ brush: 'round', size: 10, pts: [[x0 + 5, 10, 1], [x1 + 5, 10, 1]] }],
+  });
+  beforeEach(() => {
+    app.chapterRef = null;
+    app.chapterMode = 'typeset';
+    loadProjectPages([{ id: 1, w: 800, h: 1200, lines: [], boxes: [] }]);
+    initHistory();
+    resetHistory();
+  });
+
+  it('makes a selected free box sized to the ink, centred where asked, ink on', () => {
+    const id = addInkBox(ink(), 400, 600);
+    const b = byId(id);
+    expect(app.selectedId).toBe(id);
+    expect([b.w, b.h]).toEqual([60, 20]);
+    expect([b.x, b.y]).toEqual([370, 590]);
+    expect(b.lineN).toBeLessThan(0);
+    expect(b.text).toBeNull();
+    expect(boxText(b)).toBe('');
+    expect(b.style.ink.on).toBe(true);
+    expect(b.style.ink.strokes).toHaveLength(1);
+    expect(b.style.ink.strokes[0].pts[0]).toEqual([5, 10, 1]);
+    expect(lineByN(page(), b.lineN).type).toBe('sfx');
+  });
+
+  it('clamps onto the page', () => {
+    const b = byId(addInkBox(ink(), -500, 5000));
+    expect([b.x, b.y]).toEqual([0, 1180]);
+  });
+
+  it('is one undo step that takes the box and its line together', () => {
+    const id = addInkBox(ink(), 400, 600);
+    const n = byId(id).lineN;
+    undo();
+    expect(byId(id)).toBeUndefined();
+    expect(lineByN(page(), n)).toBeUndefined();
+    redo();
+    expect(byId(id)).toBeDefined();
+    expect(lineByN(page(), n)).toBeDefined();
+  });
+
+  it('wears the finish it was placed with, and none otherwise', () => {
+    // Not the text default's white outline: the strokes and shadows wrap the
+    // ink, so an ink box gets exactly what the board was showing.
+    const plain = byId(addInkBox(ink(), 400, 600));
+    expect(plain.style.strokes).toEqual([]);
+    expect(plain.style.shadows).toEqual([]);
+    const finish = { strokes: [{ color: '#ff0000', width: 5 }, { width: 0 }], shadows: [{ x: 2, y: 3 }] };
+    const b = byId(addInkBox({ ...ink(), finish }, 400, 600));
+    expect(b.style.strokes).toEqual([{ color: '#ff0000', width: 5, opacity: 1 }]);
+    expect(b.style.shadows).toHaveLength(1);
+    expect(b.style.shadows[0]).toMatchObject({ x: 2, y: 3 });
+  });
+
+  it('refuses an empty placement and a translate chapter', () => {
+    expect(addInkBox({ w: 10, h: 10, strokes: [] }, 1, 1)).toBeNull();
+    app.chapterMode = 'translate';
+    expect(addInkBox(ink(), 1, 1)).toBeNull();
+    expect(page().boxes).toHaveLength(0);
+  });
+});
+
+describe('setBoxInk', () => {
+  beforeEach(() => {
+    app.chapterRef = null;
+    app.chapterMode = 'typeset';
+    loadProjectPages([{ id: 1, w: 800, h: 1200, lines: [], boxes: [] }]);
+    initHistory();
+    resetHistory();
+  });
+
+  it('replaces the ink as one style step, leaving the geometry alone', () => {
+    const id = addInkBox({ w: 60, h: 20, strokes: [{ brush: 'round', size: 10, pts: [[5, 10, 1], [55, 10, 1]] }] }, 400, 600);
+    const geom = { x: byId(id).x, y: byId(id).y, w: byId(id).w, h: byId(id).h };
+    expect(setBoxInk(1, id, [{ brush: 'round', size: 4, pts: [[1, 1, 1], [2, 2, 1]] }, { pts: [] }])).toBe(true);
+    const b = byId(id);
+    expect(b.style.ink.strokes).toHaveLength(1);
+    expect(b.style.ink.strokes[0].size).toBe(4);
+    expect({ x: b.x, y: b.y, w: b.w, h: b.h }).toEqual(geom);
+    undo();
+    expect(byId(id).style.ink.strokes[0].size).toBe(10);
+  });
+
+  it('applying the same ink again records nothing', () => {
+    const k = { brush: 'round', size: 10, pts: [[5, 10, 1], [55, 10, 1]] };
+    const id = addInkBox({ w: 60, h: 20, strokes: [k] }, 400, 600);
+    const dirty = app.unsaved;
+    expect(setBoxInk(1, id, [k])).toBe(true);
+    // One undo takes the placement away, not a no-op style entry first.
+    undo();
+    expect(byId(id)).toBeUndefined();
+    void dirty;
+  });
+
+  it('a list of empty strokes places nothing and leaves no line behind', () => {
+    const lines = page().lines.length;
+    expect(addInkBox({ w: 10, h: 10, strokes: [{ pts: [] }, null] }, 1, 1)).toBeNull();
+    expect(page().boxes).toHaveLength(0);
+    expect(page().lines).toHaveLength(lines);
+    expect(addInkBox({ w: undefined, h: 'x', strokes: [{ brush: 'round', size: 4, pts: [[1, 1, 1]] }] }, 1, 1)).not.toBeNull();
+    const b = page().boxes[0];
+    expect([b.w, b.h]).toEqual([1, 1]);
+  });
+
+  it('no strokes switches the ink off, and an unknown box is refused', () => {
+    const id = addInkBox({ w: 60, h: 20, strokes: [{ brush: 'round', size: 10, pts: [[5, 10, 1], [55, 10, 1]] }] }, 400, 600);
+    expect(setBoxInk(1, id, [])).toBe(true);
+    expect(byId(id).style.ink.on).toBe(false);
+    expect(setBoxInk(1, 'nope', [])).toBe(false);
+    expect(setBoxInk(99, id, [])).toBe(false);
+  });
+});
+
+// ===========================================================================
+// Font size remembered per primary tag
+// ===========================================================================
+describe('font size remembered per tag', () => {
+  const chapter = () => [
+    {
+      id: 1,
+      w: 800,
+      h: 1200,
+      lines: [
+        { n: 1, type: 'dialogue', jp: 'one', en: '' },
+        { n: 2, type: 'sfx', jp: 'two', en: '', tags: ['sfx'] },
+        { n: 3, type: 'dialogue', jp: 'three', en: '' },
+        { n: 4, type: 'sfx', jp: 'four', en: '', tags: ['sfx'] },
+      ],
+      boxes: [],
+    },
+  ];
+
+  beforeEach(() => {
+    app.chapterRef = null;
+    loadProjectPages(chapter());
+    app.lastStyle = defaultStyle();
+    app.lastSizeByTag = {};
+  });
+
+  it('remembers size per tag: untagged takes untagged size, sfx takes sfx size', () => {
+    activateLine(1);
+    placeActiveAt(100, 100);
+    const b1 = page().boxes.find((b) => b.lineN === 1);
+    b1.style.size = 30;
+    rememberStyle(b1);
+
+    activateLine(2);
+    placeActiveAt(200, 200);
+    const b2 = page().boxes.find((b) => b.lineN === 2);
+    b2.style.size = 60;
+    rememberStyle(b2);
+
+    activateLine(3);
+    placeActiveAt(300, 300);
+    const b3 = page().boxes.find((b) => b.lineN === 3);
+    expect(b3.style.size).toBe(30);
+
+    activateLine(4);
+    placeActiveAt(400, 400);
+    const b4 = page().boxes.find((b) => b.lineN === 4);
+    expect(b4.style.size).toBe(60);
+  });
+
+  it('a tag with no memory yet falls back to app.lastStyle.size', () => {
+    app.lastStyle.size = 42;
+    activateLine(2);
+    placeActiveAt(100, 100);
+    const b = page().boxes.find((b) => b.lineN === 2);
+    expect(b.style.size).toBe(42);
+  });
+
+  it('addEmptyBox uses the untagged size', () => {
+    app.lastSizeByTag[''] = 55;
+    const id = addEmptyBox(100, 100);
+    expect(byId(id).style.size).toBe(55);
+  });
+
+  it('restyleForBulk calls rememberSizeFor only when bulk mask includes size', () => {
+    activateLine(1);
+    placeActiveAt(100, 100);
+    const b1 = page().boxes[0];
+
+    initHistory();
+    resetHistory();
+    openBulk();
+    toggleBulkTarget(b1.id);
+
+    setBulkProp('color', true);
+    app.bulk.style.color = '#123456';
+    app.bulk.style.size = 77;
+    applyBulk();
+    expect(app.lastSizeByTag['']).toBeUndefined();
+
+    openBulk();
+    toggleBulkTarget(b1.id);
+    setBulkProp('size', true);
+    app.bulk.style.size = 77;
+    applyBulk();
+    expect(app.lastSizeByTag['']).toBe(77);
+    closeBulk();
+  });
+});
+
+// ===========================================================================
+// Place every detected bubble on a page in one go
+// ===========================================================================
+describe('placeDetectedOnPage', () => {
+  const withDetect = (lines, boxes) => [
+    {
+      id: 1,
+      w: 1000,
+      h: 2000,
+      lines,
+      boxes: [],
+      detect: { panels: [], boxes },
+    },
+  ];
+
+  beforeEach(() => {
+    app.chapterRef = null;
+    initHistory();
+    resetHistory();
+  });
+
+  it('places two detected lines, centres boxes on their rects, sets activeLineN to null, and undoes/redoes', () => {
+    loadProjectPages(
+      withDetect(
+        [
+          { n: 1, jp: 'あ', en: '', type: 'dialogue' },
+          { n: 2, jp: 'い', en: '', type: 'dialogue' },
+        ],
+        [
+          { n: 1, box: [100, 100, 500, 300], vertical: false, font_size: 20 },
+          { n: 2, box: [200, 400, 600, 800], vertical: false, font_size: 20 },
+        ],
+      ),
+    );
+
+    const placedCount = placeDetectedOnPage();
+    expect(placedCount).toBe(2);
+    expect(page().boxes.length).toBe(2);
+
+    const b1 = page().boxes.find((b) => b.lineN === 1);
+    const b2 = page().boxes.find((b) => b.lineN === 2);
+    expect([b1.x + b1.w / 2, b1.y + b1.h / 2]).toEqual([300, 200]);
+    expect([b2.x + b2.w / 2, b2.y + b2.h / 2]).toEqual([400, 600]);
+
+    expect(page().activeLineN).toBeNull();
+
+    undo();
+    expect(page().boxes.length).toBe(0);
+    expect(page().lines[0].placed).toBe(false);
+    expect(page().lines[1].placed).toBe(false);
+    expect(page().activeLineN).toBe(1);
+
+    redo();
+    expect(page().boxes.length).toBe(2);
+    expect(page().lines[0].placed).toBe(true);
+    expect(page().lines[1].placed).toBe(true);
+    expect(page().activeLineN).toBeNull();
+  });
+
+  it('skips a line already placed, leaves a line without geometry unplaced, and counts it in toast', () => {
+    loadProjectPages(
+      withDetect(
+        [
+          { n: 1, jp: 'あ', en: '', type: 'dialogue', placed: true },
+          { n: 2, jp: 'い', en: '', type: 'dialogue' },
+          { n: 3, jp: 'う', en: '', type: 'dialogue' },
+        ],
+        [
+          { n: 1, box: [100, 100, 500, 300], vertical: false, font_size: 20 },
+          { n: 2, box: [200, 400, 600, 800], vertical: false, font_size: 20 },
+        ],
+      ),
+    );
+    page().boxes.push({ id: 'b_prev', lineN: 1, text: null, x: 100, y: 100, w: 100, h: 50 });
+    page().activeLineN = 2;
+
+    expect(placeableDetectedLines(page()).map((l) => l.n)).toEqual([2]);
+
+    const count = placeDetectedOnPage();
+    expect(count).toBe(1);
+    expect(page().boxes.length).toBe(2);
+
+    expect(page().activeLineN).toBe(3);
+    expect(page().lines.find((l) => l.n === 3).placed).toBeFalsy();
+    expect(app.toast?.msg).toContain('1 left with no detected bubble');
   });
 });

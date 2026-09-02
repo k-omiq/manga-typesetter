@@ -12,11 +12,23 @@
 // the identity mesh - the one that changes nothing - is exactly the grid laid
 // out over the box rect.
 //
-// Rendering is piecewise affine, not a homography: each cell is split into two
-// triangles and each triangle is drawn under the affine map its three corners
-// define. That is the only mapping in this file. Hit-testing (`warpPoint`) and
-// grid resampling (`resampleMesh`) go through the same triangles, so what the
-// gizmo says a point does is what the painter actually does to it.
+// Rendering is always one technique - a grid of cells, each split into two
+// triangles, each triangle drawn under the affine map its three corners define
+// - and the MAPPING those cells are laid on is what differs by grid size,
+// exactly as CSP's two tools differ:
+//
+//   - one cell (Free Transform): the projective map that carries the box rect
+//     onto the four dragged corners, so a corner drag reads as perspective and
+//     not as a crease along the diagonal;
+//   - a grid (Mesh Transform): a bicubic surface through the control points,
+//     so the picture bends smoothly between the dots instead of folding at
+//     every cell edge.
+//
+// `meshMap` is the one place that choice is made. The painter draws whichever
+// map it is handed by evaluating it on a virtual grid fine enough for the
+// affine pieces to be under a pixel; hit-testing (`warpPoint`), grid
+// resampling (`resampleMesh`) and the gizmo's wireframe evaluate the same map
+// exactly. So what the gizmo says a point does is what the painter does to it.
 //
 // Nothing here clamps `cols`/`rows` to the 1..8 the panel offers: that is the
 // sanitiser's job in data.js, which this module deliberately does not import so
@@ -164,22 +176,19 @@ export function affineFromTriangle(src, dst) {
   return [a, b, c, d, e, f];
 }
 
-// Where the box-local point (x, y) ends up once the mesh has been applied: find
-// the cell it falls in, pick the half of that cell the diagonal puts it on, and
-// run it through that triangle's affine. Returns a fresh `[x, y]`.
-//
-// This is the READ side of the warp - hit-testing a click against a deformed
-// box, placing a gizmo label, asking where a stroke's point went - and it is
-// deliberately the same mapping `cellTriangles` hands the painter, so the two
-// can never disagree about a pixel.
+// The plain reading of a mesh: find the cell (x, y) falls in, pick the half of
+// that cell the diagonal puts it on, and run it through that triangle's affine.
+// This is exactly what `cellTriangles` hands a painter, and it is the map for
+// the two cases where nothing smoother is honest: a one-cell parallelogram
+// (where the affine map is already exact) and a one-cell quad no projective
+// map fits (crossed or dented, where a crease is the truthful picture).
 //
 // OUTSIDE THE GRID: a point beyond the box rect is resolved against the nearest
 // cell, which extends that cell's affine outwards. The result is continuous
 // with the inside and, for a warp that only moves things a little, sensible;
 // it is not a claim that content far outside the box lands anywhere in
-// particular. A box with no area, or a point that is not a number, comes back
-// unchanged.
-export function warpPoint(pts, cols, rows, w, h, x, y) {
+// particular.
+export function affineWarpPoint(pts, cols, rows, w, h, x, y) {
   const px = +x;
   const py = +y;
   const W = Number(w);
@@ -235,9 +244,9 @@ export function warpPoint(pts, cols, rows, w, h, x, y) {
 // (or make the step undoable, which they do: one history step per change).
 //
 // Sampling goes through `warpPoint`, so the resample reads the mesh exactly as
-// the painter draws it. On a cell EDGE that is plain linear interpolation
-// between the two neighbouring control points; across a cell's interior it
-// follows the triangle the diagonal puts the point in.
+// the painter draws it: a four-corner perspective stepped up to 3x3 puts its
+// new interior handles ON the perspective picture, and a smooth 3x3 stepped up
+// to 6x6 puts them on the surface the user already sees.
 export function resampleMesh(oldPts, oldCols, oldRows, newCols, newRows, w, h) {
   return identityMesh(newCols, newRows, w, h).map(([x, y]) =>
     warpPoint(oldPts, oldCols, oldRows, w, h, x, y),
@@ -263,11 +272,9 @@ export function resampleMesh(oldPts, oldCols, oldRows, newCols, newRows, w, h) {
 // piecewise error to fall under a pixel. So there is one drawing technique in
 // the app, and this is only where the corners of its cells come from.
 //
-// `warpPoint` deliberately stays piecewise affine, including for a 1x1 mesh:
-// it is the reviewed READ side (hit-tests, resampling) and its answers are
-// already stated in terms of the triangles. Inside one cell the two disagree
-// by at most the crease this exists to remove - sub-pixel for anything a
-// gizmo drag produces, and never at a control point, where both are exact.
+// `warpPoint` reads a 1x1 mesh through the same homography (see `meshMap`), so
+// resampling a perspective onto a finer grid lands the new handles on the
+// picture the painter draws, not beside it.
 
 // Whether a quad is a parallelogram, which is the same question as "is the
 // affine map already exact here": TL + BR and TR + BL are the two diagonals'
@@ -389,6 +396,163 @@ export function applyHomography(h, x, y) {
   const w = h[6] * X + h[7] * Y + h[8];
   if (!Number.isFinite(w) || Math.abs(w) < 1e-12) return [NaN, NaN];
   return [(h[0] * X + h[1] * Y + h[2]) / w, (h[3] * X + h[4] * Y + h[5]) / w];
+}
+
+// ===== The bicubic surface, for a grid =====
+//
+// A grid's control points are dots the user dragged; between them the picture
+// has to go SOMEWHERE, and two triangles per cell is the wrong answer for a
+// mesh coarse enough to drag by hand: every cell edge and every diagonal is a
+// fold, and one pulled interior handle shears the glyphs around it into flat
+// shards. What a mesh transform draws instead is a smooth surface through the
+// dots. This is the uniform Catmull-Rom spline, as a tensor product, which
+//
+//   - passes through every control point exactly (the basis is (0, 1, 0, 0)
+//     at a node, so a node reads back its own point to the bit);
+//   - reproduces the identity grid, and any affine deformation of it, exactly
+//     (the basis sums to 1 and its first moment to t, so linear data comes out
+//     linear - a parallelogram drag through a 3x3 draws as a parallelogram);
+//   - is continuous in the first derivative across cell edges, which is what
+//     "no fold" means.
+//
+// Beyond the lattice on either axis, the neighbour a boundary cell needs is
+// made by extending the last two nodes in a straight line, and a point outside
+// the grid altogether continues along the surface's own tangent at the edge.
+// Both are the linear rule, for the reason `affineWarpPoint` extends its
+// outermost cell: the band of overhang around the box - ink past the rect, a
+// descender - has to move with the edge it hangs off, not curl away on a cubic
+// nobody dragged.
+
+// The Catmull-Rom blend of four points at `t` in 0..1, where `p1` is t == 0 and
+// `p2` is t == 1.
+function catmullRom(p0, p1, p2, p3, t) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const w0 = -0.5 * t3 + t2 - 0.5 * t;
+  const w1 = 1.5 * t3 - 2.5 * t2 + 1;
+  const w2 = -1.5 * t3 + 2 * t2 + 0.5 * t;
+  const w3 = 0.5 * t3 - 0.5 * t2;
+  return [
+    w0 * p0[0] + w1 * p1[0] + w2 * p2[0] + w3 * p3[0],
+    w0 * p0[1] + w1 * p1[1] + w2 * p2[1] + w3 * p3[1],
+  ];
+}
+
+// One axis of the surface: the spline through the nodes `get(0)..get(n)`, read
+// at `s` in CELL units (node k sits at s == k). `get` is asked for k == -1 and
+// k == n + 1 and must answer with the row extended linearly. Outside 0..n the
+// curve continues straight along its tangent at the end node.
+function spline1(get, n, s) {
+  let i = Math.floor(s);
+  let t = s - i;
+  let ext = 0;
+  if (i < 0) {
+    ext = s;
+    i = 0;
+    t = 0;
+  } else if (i >= n) {
+    ext = s - n;
+    i = n - 1;
+    t = 1;
+  }
+  const p0 = get(i - 1);
+  const p1 = get(i);
+  const p2 = get(i + 1);
+  const p3 = get(i + 2);
+  if (ext === 0) return catmullRom(p0, p1, p2, p3, t);
+  // The end node and the spline's tangent there: (p2 - p0) / 2 at t == 0 and
+  // (p3 - p1) / 2 at t == 1, which with the extended neighbour is exactly the
+  // last cell's own edge vector.
+  const at = t === 0 ? p1 : p2;
+  const a = t === 0 ? p0 : p1;
+  const b = t === 0 ? p2 : p3;
+  return [at[0] + ext * 0.5 * (b[0] - a[0]), at[1] + ext * 0.5 * (b[1] - a[1])];
+}
+
+// Control point (i, j), or the linear extension of the lattice for an index
+// one past its edge on either axis.
+function nodeAt(pts, cols, rows, i, j) {
+  if (i < 0 || i > cols) {
+    const e = i < 0 ? 0 : cols;
+    const d = i < 0 ? 1 : -1;
+    const a = nodeAt(pts, cols, rows, e, j);
+    const b = nodeAt(pts, cols, rows, e + d, j);
+    return [2 * a[0] - b[0], 2 * a[1] - b[1]];
+  }
+  if (j < 0 || j > rows) {
+    const e = j < 0 ? 0 : rows;
+    const d = j < 0 ? 1 : -1;
+    const a = nodeAt(pts, cols, rows, i, e);
+    const b = nodeAt(pts, cols, rows, i, e + d);
+    return [2 * a[0] - b[0], 2 * a[1] - b[1]];
+  }
+  return pt(pts[idx(i, j, cols)]);
+}
+
+// A coordinate in cell units, snapped to the node it is within floating-point
+// dust of: `(w * i) / cols` back through `* cols / w` is not always `i`, and a
+// node has to read back its own point exactly.
+const cellUnits = (v, n, size) => {
+  const s = (v * n) / size;
+  const k = Math.round(s);
+  return Math.abs(s - k) < 1e-9 ? k : s;
+};
+
+// Where (x, y) goes under the surface: the spline along each of the four rows
+// the point's cell borders, then the spline across those four answers.
+function smoothPoint(pts, cols, rows, w, h, x, y) {
+  const su = cellUnits(x, cols, w);
+  const sv = cellUnits(y, rows, h);
+  if (Number.isInteger(su) && Number.isInteger(sv) && su >= 0 && su <= cols && sv >= 0 && sv <= rows) {
+    return pt(pts[idx(su, sv, cols)]);
+  }
+  return spline1((j) => spline1((i) => nodeAt(pts, cols, rows, i, j), cols, su), rows, sv);
+}
+
+// THE mapping for a mesh, chosen once: `{ kind, at }`, where `at(x, y)` carries
+// a box-local point through the mesh and `kind` says which map it is -
+//
+//   'projective'  one cell whose corners are not a parallelogram: the
+//                 homography (Free Transform's perspective drag);
+//   'affine'      one cell where the affine reading is exact (a parallelogram)
+//                 or is all there is (a quad no homography fits);
+//   'smooth'      any grid: the bicubic surface above.
+//
+// - or null when the mesh changes nothing or cannot be read, which is the
+// caller's signal to draw the box as it is. Every reader of a mesh (painter,
+// hit-test, resample, wireframe) comes through here, so there is exactly one
+// answer to "where does this point go".
+export function meshMap(pts, cols, rows, w, h) {
+  const c = gridN(cols);
+  const r = gridN(rows);
+  const W = Number(w);
+  const H = Number(h);
+  if (!(W > 0) || !(H > 0)) return null;
+  if (isIdentityMesh(pts, c, r, W, H)) return null;
+  if (c === 1 && r === 1) {
+    const quad = [pts[0], pts[1], pts[3], pts[2]]; // row-major tl,tr,bl,br -> polygon order
+    if (!isParallelogram(quad)) {
+      const src = identityMesh(1, 1, W, H);
+      const m = solveHomography([src[0], src[1], src[3], src[2]], quad);
+      if (m) return { kind: 'projective', at: (x, y) => applyHomography(m, +x, +y) };
+    }
+    return { kind: 'affine', at: (x, y) => affineWarpPoint(pts, 1, 1, W, H, x, y) };
+  }
+  return { kind: 'smooth', at: (x, y) => smoothPoint(pts, c, r, W, H, +x, +y) };
+}
+
+// Where the box-local point (x, y) ends up once the mesh has been applied, as a
+// fresh `[x, y]`. This is the READ side of the warp - hit-testing a click
+// against a deformed box, asking where a stroke's point went, resampling the
+// grid - and it is `meshMap`'s own answer, so it can never disagree with the
+// painter about a pixel. A box with no area, an identity mesh, or a point that
+// is not a number comes back unchanged.
+export function warpPoint(pts, cols, rows, w, h, x, y) {
+  const px = +x;
+  const py = +y;
+  if (!Number.isFinite(px) || !Number.isFinite(py)) return [px, py];
+  const m = meshMap(pts, cols, rows, w, h);
+  return m ? m.at(px, py) : [px, py];
 }
 
 // Whether a style's warp changes anything, which is the question every renderer

@@ -3,6 +3,7 @@
 //! Implements panel detection (manga109 YOLO), comic text detection
 //! (DBNet/YOLO/UNet), text ordering, and Japanese OCR (manga-ocr).
 
+pub mod accel;
 pub mod analyze;
 pub mod crops;
 pub mod cvops;

@@ -11,7 +11,7 @@ use super::panels;
 use super::sorting::{
     assign_types, sort_bubbles_by_reading_order, Block, LineType, ReadingDirection,
 };
-use super::textblock::round_half_even;
+use super::textblock::{round_half_even, split_by_regions};
 use super::textdetector::TextDetector;
 
 /// One text line of the response, numbered in reading order.
@@ -45,19 +45,31 @@ pub fn decode_image(bytes: &[u8]) -> Result<DynamicImage, String> {
     image::load_from_memory(bytes).map_err(|e| format!("could not decode image: {e}"))
 }
 
-/// Panel boxes for the page, or empty on failure (falling back to spatial sort).
-fn detect_panels(session: &mut Session, img: &DynamicImage) -> Vec<[i32; 4]> {
-    match panels::detect(session, img, panels::FRAME_CLASS) {
-        Ok(found) => found
-            .into_iter()
-            .map(|p| {
-                let r = |v: f32| round_half_even(v as f64) as i32;
-                [r(p.x1), r(p.y1), r(p.x2), r(p.y2)]
-            })
-            .collect(),
+/// Frame panels and text regions for the page, or empty on failure (falling back to spatial sort).
+fn detect_panels_and_regions(
+    session: &mut Session,
+    img: &DynamicImage,
+) -> (Vec<[i32; 4]>, Vec<[i32; 4]>) {
+    let round_box = |b: &super::geometry::BBox| {
+        let r = |v: f32| round_half_even(v as f64) as i32;
+        [r(b.x1), r(b.y1), r(b.x2), r(b.y2)]
+    };
+    match panels::detect_classes(session, img) {
+        Ok(found) => {
+            let mut panels = Vec::new();
+            let mut text_regions = Vec::new();
+            for b in &found {
+                if b.class == panels::FRAME_CLASS {
+                    panels.push(round_box(b));
+                } else if b.class == panels::TEXT_CLASS {
+                    text_regions.push(round_box(b));
+                }
+            }
+            (panels, text_regions)
+        }
         Err(e) => {
             log::warn!("panel detection failed, falling back to a spatial sort: {e}");
-            Vec::new()
+            (Vec::new(), Vec::new())
         }
     }
 }
@@ -70,12 +82,22 @@ pub fn analyze(
     ocr: Option<&mut OcrEngine>,
 ) -> Result<AnalyzeResponse, String> {
     let (im_w, im_h) = img.dimensions();
-    let (blk_list, mask) = detector.detect(img).map_err(|e| format!("detect failed: {e}"))?;
 
-    let panels = match panel_session {
-        Some(s) => detect_panels(s, img),
-        None => Vec::new(),
+    let (panels, text_regions) = match panel_session {
+        Some(s) => detect_panels_and_regions(s, img),
+        None => (Vec::new(), Vec::new()),
     };
+
+    let (blk_list, mask) = detector.detect(img).map_err(|e| format!("detect failed: {e}"))?;
+    let in_count = blk_list.len();
+    let blk_list = split_by_regions(blk_list, &text_regions, im_w as i32);
+    if blk_list.len() != in_count {
+        log::debug!(
+            "split_by_regions: {} blocks in, {} blocks out",
+            in_count,
+            blk_list.len()
+        );
+    }
 
     let page = Raster::from_rgb(&img.to_rgb8());
     let mask_raster = Raster::from_gray(&mask);

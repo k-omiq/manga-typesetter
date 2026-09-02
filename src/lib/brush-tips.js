@@ -25,6 +25,10 @@ export function inkTipIds(ink, into = new Set()) {
   for (const k of ink?.strokes ?? []) {
     const id = k?.brush;
     if (typeof id === 'string' && id && id !== BUILTIN_BRUSH) into.add(id);
+    // A stroke cycling several tips needs every one of them in hand.
+    for (const t of Array.isArray(k?.tips) ? k.tips : []) {
+      if (typeof t === 'string' && t && t !== BUILTIN_BRUSH) into.add(t);
+    }
   }
   return into;
 }

@@ -792,12 +792,12 @@ describe('a project saved before ink existed', () => {
 describe('a project saved before the warp mesh existed', () => {
   it('loads a project saved before warp existed and gives it the default block', () => {
     const s = normalizeStyle({ size: 28, color: '#111111' });
-    expect(s.warp).toEqual({ on: false, cols: 1, rows: 1, pts: [] });
+    expect(s.warp).toEqual({ on: false, cols: 3, rows: 3, pts: [] });
   });
 
   it('gives a style that pre-dates warp a mesh the engine reads as identity', () => {
     const s = normalizeStyle(JSON.parse(ERA1_STYLE));
-    expect(s.warp).toEqual({ on: false, cols: 1, rows: 1, pts: [] });
+    expect(s.warp).toEqual({ on: false, cols: 3, rows: 3, pts: [] });
   });
 
   it('round-trips a project with a warp mesh through normalizeStyle unchanged', () => {
@@ -828,7 +828,7 @@ describe('a newborn box and the previous box\'s geometry', () => {
     const s = applyBoxDefaults(structuredClone(prev));
     expect(s.ink).toEqual({ on: false, strokes: [] });
     expect(s.path).toEqual({ on: false, pts: [] });
-    expect(s.warp).toEqual({ on: false, cols: 1, rows: 1, pts: [] });
+    expect(s.warp).toEqual({ on: false, cols: 3, rows: 3, pts: [] });
     expect(s.clip.shapes).toEqual([]);
   });
 });

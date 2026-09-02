@@ -1,6 +1,6 @@
 // Native-resolution raster export via canvas 2D. PNG is lossless.
 import { app, page, toast, boxText, saveExportPrefs, isLongstrip, PAGE_W, PAGE_H } from './store.svelte.js';
-import { familyFor, fontShorthand, applyCase, layoutLines, arcLayout, circleLayout, pathLayout, maxLineWidth, BOX_PAD, blockYFor, balloonWidthsFor } from './measure.js';
+import { familyFor, fontShorthand, applyCase, layoutLines, arcLayout, circleLayout, pathLayout, maxLineWidth, BOX_PAD, blockYFor, balloonWidthsFor, baselineInLine, inkShiftY } from './measure.js';
 import {
   strokeBands,
   strokeExtent,
@@ -17,7 +17,8 @@ import {
   drawClipShapes,
   clipActive,
   inkActive,
-  inkExtent,
+  inkReach,
+  shadowExtent,
   drawInk,
   TILE_SS,
 } from './text-paint.js';
@@ -163,10 +164,7 @@ function layoutBox(box, p) {
   // gaussian is done at about three sigma, so 2x the named blur clears it with
   // room to spare where the old `+ blur` cut into it.
   const strokeOut = strokeExtent(s.strokes);
-  const shadowOut = (s.shadows ?? []).reduce(
-    (m, sh) => Math.max(m, Math.hypot(sh.x, sh.y) + 2 * sh.blur),
-    0,
-  );
+  const shadowOut = shadowExtent(s.shadows);
   const pad = Math.ceil(
     Math.max(
       strokeOut,
@@ -174,8 +172,9 @@ function layoutBox(box, p) {
       s.roughen.on ? s.roughen.amount + 2 : 0,
       // Ink is drawn in box-local px and may be drawn right over the box edge,
       // so its overhang has to be padded for like any other thing that paints
-      // outside the letters.
-      inkExtent(s.ink),
+      // outside the letters - and the strokes and shadows wrap the ink too,
+      // so its reach is the overhang plus theirs.
+      inkReach(s),
     ) +
       (s.blur > 0 ? s.blur * 3 : 0) +
       motionBlurExtent(s.motionBlur) +
@@ -261,7 +260,10 @@ function layoutBox(box, p) {
     // BOX_PAD on both sides, so every auto-fitted box exported with 4px of slack
     // under its text. Centred alignments were always right and still are - the
     // padding is symmetric, so it cancels.
-    blockY = blockYFor(s, box.h, blockH);
+    // The fourth argument centres the block on its ink rather than on its line
+    // boxes - see `inkShiftY`. The editor applies the same shift to the same
+    // lines, so a centred block exports where the canvas shows it.
+    blockY = blockYFor(s, box.h, blockH, inkShiftY(lines, s, s.size));
     blockX =
       s.align === 'center'
         ? (box.w - blockW) / 2
@@ -283,7 +285,10 @@ function layoutBox(box, p) {
   const oy = topExtra + pad; // box's top-left Y inside the footprint
   const cw = Math.ceil(box.w + leftExtra + rightExtra + pad * 2);
   const ch = Math.ceil(box.h + topExtra + bottomExtra + pad * 2);
-  return { s, lineH, pad, isCurve, lines, layout, leftExtra, topExtra, ox, oy, blockX, blockY, cw, ch };
+  // Where each line's baseline sits inside its line box - the browser's own
+  // placement, so the raster draws the glyphs where the editor does.
+  const baseY = baselineInLine(s, s.size);
+  return { s, lineH, baseY, pad, isCurve, lines, layout, leftExtra, topExtra, ox, oy, blockX, blockY, cw, ch };
 }
 
 // The rectangle a gradient or a pattern is measured against, in the same
@@ -371,7 +376,10 @@ function setFill(ctx, s, rect, local) {
 function paintBox(ctx, box, L) {
   const s = L.s;
   ctx.font = fontShorthand(s, s.size, familyFor(s));
-  ctx.textBaseline = 'top';
+  // Alphabetic, at the offset `baselineInLine` measured, rather than 'top' at
+  // half the leading: 'top' is the em square, and the browser does not centre
+  // the em square in a line box, it centres the font's ascent-plus-descent.
+  ctx.textBaseline = 'alphabetic';
   ctx.lineJoin = 'round';
   ctx.miterLimit = 2;
 
@@ -460,7 +468,7 @@ function paintBox(ctx, box, L) {
           ? L.ox + box.w - BOX_PAD
           : L.ox + box.w / 2;
     const drawAll = (fn) => {
-      L.lines.forEach((ln, i) => fn(ln, anchorX, startY + i * L.lineH + (L.lineH - s.size) / 2));
+      L.lines.forEach((ln, i) => fn(ln, anchorX, startY + i * L.lineH + L.baseY));
     };
     // Gradient scope 'line' restarts the gradient on every wrapped line, so the
     // fill style is chosen per line rather than once for the block.
@@ -471,7 +479,7 @@ function paintBox(ctx, box, L) {
         if (!L.silhouette && !perLine) setFill(ctx, s, fillRect(box, L));
         L.lines.forEach((ln, i) => {
           if (perLine) setFill(ctx, s, fillRect(box, L, i));
-          ctx.fillText(ln, anchorX, startY + i * L.lineH + (L.lineH - s.size) / 2);
+          ctx.fillText(ln, anchorX, startY + i * L.lineH + L.baseY);
         });
       },
     });
@@ -561,10 +569,13 @@ export function renderBoxTexture(box, p, tips) {
   // picture those operate on, not something applied afterwards. Shapes are
   // box-local page px and (L.ox, L.oy) is the box's top-left in the footprint,
   // the same translation the mask uses below.
+  // The box's strokes and shadows wrap the ink as one shape, drawn with it:
+  // the ink's outline sits over the type, as the ink does, and its shadow
+  // falls where the ink's own pass puts it (see `paintFinish`).
   if (inkActive(s.ink)) {
     ctx.save();
     ctx.translate(L.ox, L.oy);
-    drawInk(ctx, s.ink, undefined, tips);
+    drawInk(ctx, s.ink, undefined, tips, s);
     ctx.restore();
   }
   // Blur first, then roughen - the order the editor's filter list states, and a
@@ -1116,7 +1127,6 @@ async function exportStripImages(fmt) {
   return true;
 }
 
-// Running inside the Tauri webview?
 function isTauri() {
   return typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
 }

@@ -129,6 +129,36 @@ const KINDS = {
       }
     },
   },
+  placeMany: {
+    label: 'that batch placement',
+    apply(e, dir) {
+      const p = pageById(e.pageId);
+      if (!p) throw new Error('the page is gone');
+      if (dir === 'undo') {
+        for (let idx = e.items.length - 1; idx >= 0; idx--) {
+          const item = e.items[idx];
+          const i = p.boxes.findIndex((b) => b.id === item.box.id);
+          if (i === -1) throw new Error('the text box is gone');
+          p.boxes.splice(i, 1);
+          if (item.box.lineN != null) {
+            const ln = p.lines?.find((l) => l.n === item.box.lineN);
+            if (ln) ln.placed = false;
+          }
+        }
+        setActive(p, e.activeBefore);
+      } else {
+        for (const item of e.items) {
+          if (p.boxes.some((b) => b.id === item.box.id)) throw new Error('the text box is back already');
+          if (item.box.lineN != null) {
+            const ln = p.lines?.find((l) => l.n === item.box.lineN);
+            if (ln) ln.placed = true;
+          }
+          p.boxes.splice(Math.min(item.index, p.boxes.length), 0, structuredClone(item.box));
+        }
+        setActive(p, e.activeAfter);
+      }
+    },
+  },
   delete: {
     label: 'that deletion',
     apply(e, dir) {
@@ -354,6 +384,18 @@ function step(from, to, dir) {
     if (id) {
       if (pageById(entry.pageId)?.boxes.some((b) => b.id === id)) selectBox(id);
       else if (app.selectedId === id) app.selectedId = null;
+    }
+    if (entry.t === 'placeMany') {
+      if (dir === 'undo') {
+        if (app.selectedId && entry.items?.some((it) => it.box?.id === app.selectedId)) {
+          app.selectedId = null;
+        }
+      } else {
+        const last = entry.items?.[entry.items.length - 1]?.box?.id;
+        if (last && pageById(entry.pageId)?.boxes.some((b) => b.id === last)) {
+          selectBox(last);
+        }
+      }
     }
     markUnsaved();
     sync();

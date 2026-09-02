@@ -906,6 +906,203 @@ export function inkExtent(ink) {
   return Math.ceil(Math.max(0, out));
 }
 
+// How far a list of shadows throws ink past the shape that casts them, page
+// px: the furthest offset (a diagonal, not the sum of its legs) plus the tail
+// of its blur. The shadow is blurred at sigma = blur / 2 and a gaussian is done
+// at about three sigma, so twice the named blur clears it with room to spare.
+export function shadowExtent(shadows) {
+  let out = 0;
+  for (const sh of shadows ?? []) {
+    out = Math.max(
+      out,
+      Math.hypot(Number(sh?.x) || 0, Number(sh?.y) || 0) + 2 * Math.max(0, Number(sh?.blur) || 0),
+    );
+  }
+  return out;
+}
+
+// The box-local rectangle every stroke's ink reaches, or null for no ink.
+function inkBounds(ink) {
+  let out = null;
+  for (const k of ink.strokes) {
+    const b = strokeBounds(k);
+    if (!b) continue;
+    if (!out) out = { ...b };
+    else {
+      out.minX = Math.min(out.minX, b.minX);
+      out.minY = Math.min(out.minY, b.minY);
+      out.maxX = Math.max(out.maxX, b.maxX);
+      out.maxY = Math.max(out.maxY, b.maxY);
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// The finish: the box's strokes drawn around the WHOLE of its ink as one shape,
+// and its shadows thrown from that shape. The same `strokes` and `shadows` the
+// type wears - a sound effect's outline is the same idea as a caption's, and
+// the Inspector's Stroke and Shadow tabs edit both - but drawn a different way,
+// because ink has no outline to stroke along: it is dilated in pixels instead.
+// Around the whole and not around each stroke, since a letter is several
+// strokes and an outline threading between them is not an outline.
+
+// The finish as the painter uses it: the bands in paint order and the shadows
+// as given, or null when there is nothing to draw. Takes the style itself, or
+// anything with `strokes` and `shadows` in the style's shape.
+function finishOf(f) {
+  const bands = strokeBands(f?.strokes);
+  const shadows = Array.isArray(f?.shadows) ? f.shadows : [];
+  return bands.length || shadows.length ? { bands, shadows } : null;
+}
+
+// How far a box's ink reaches outside the box, page px on the furthest edge,
+// finish included: the overhang of the strokes themselves, plus the outermost
+// band around them, plus the furthest a shadow throws that. What the editor's
+// canvas and the export's footprint pad by.
+export function inkReach(style) {
+  if (!inkActive(style?.ink)) return 0;
+  return inkExtent(style.ink) + Math.ceil(strokeExtent(style.strokes) + shadowExtent(style.shadows));
+}
+
+// The Euclidean distance from every pixel to the nearest one with alpha at or
+// over `T`, in px; 0 for those pixels themselves. Felzenszwalb and
+// Huttenlocher's transform: a lower envelope of parabolas along every row and
+// then every column, so the cost is the plane and not the plane times the
+// radius - and the result is exact and round, where a separable min/max
+// filter (see `erodeAlpha`) is square at the corners. A square structuring
+// element is fine for a rim a few px wide; an outline is the shape people look
+// at, and a square-cornered outline around a round dab is a wrong picture.
+export function distanceOutside(alpha, w, h, T) {
+  // Far enough that no squared distance in a canvas comes near it, and small
+  // enough that adding a squared index to it stays exact in a double.
+  const BIG = 1e10;
+  const n = w * h;
+  const f = new Float32Array(n);
+  for (let i = 0; i < n; i++) f[i] = alpha[i] >= T ? 0 : BIG;
+  const m = Math.max(w, h);
+  const line = new Float64Array(m);
+  const d = new Float64Array(m);
+  const v = new Int32Array(m);
+  const z = new Float64Array(m + 1);
+  for (let y = 0; y < h; y++) {
+    const base = y * w;
+    for (let x = 0; x < w; x++) line[x] = f[base + x];
+    edt1d(line, w, d, v, z);
+    for (let x = 0; x < w; x++) f[base + x] = d[x];
+  }
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y < h; y++) line[y] = f[y * w + x];
+    edt1d(line, h, d, v, z);
+    for (let y = 0; y < h; y++) f[y * w + x] = Math.sqrt(d[y]);
+  }
+  return f;
+}
+
+// One line of the transform: `d[q]` becomes the least of `f[p] + (q - p)^2`
+// over every p, which is the squared distance once f holds squared distances.
+function edt1d(f, n, d, v, z) {
+  let k = 0;
+  v[0] = 0;
+  z[0] = -Infinity;
+  z[1] = Infinity;
+  for (let q = 1; q < n; q++) {
+    let s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    while (s <= z[k]) {
+      k--;
+      s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    }
+    k++;
+    v[k] = q;
+    z[k] = s;
+    z[k + 1] = Infinity;
+  }
+  k = 0;
+  for (let q = 0; q < n; q++) {
+    while (z[k + 1] < q) k++;
+    d[q] = (q - v[k]) * (q - v[k]) + f[v[k]];
+  }
+}
+
+// Paint the finish onto `ctx` from the finished ink in `layer` (device px, the
+// same size as the target, drawn through `t`). Shadows first, last one first so
+// shadows[0] lands on top; then the bands, outermost first, each a full disc of
+// its colour that the next one in covers - the same arrangement the type's
+// strokes use, so a translucent band reads the same on ink and on a glyph.
+// The caller draws the ink itself over the lot.
+//
+// Everything happens in one rectangle: the ink's bounds through the transform,
+// grown by the outermost band, the furthest shadow and a pixel of slack, and
+// clipped to the layer. The distance transform runs once over that rectangle
+// and every band and every shadow is a threshold of it.
+function paintFinish(ctx, layer, ink, t, fx, alloc) {
+  const scale = transformScale(t);
+  const outer = fx.bands.length ? fx.bands[0].line / 2 : 0;
+  const margin = Math.ceil((outer + shadowExtent(fx.shadows)) * scale) + 2;
+  const rect = boundsRect(inkBounds(ink), t, layer.width, layer.height, margin);
+  if (!rect) return;
+  const lctx = layer.getContext('2d');
+  const px = lctx.getImageData(rect.x, rect.y, rect.w, rect.h);
+  const n = rect.w * rect.h;
+  const alpha = new Uint8ClampedArray(n);
+  let top = 0;
+  for (let i = 0, j = 3; i < n; i++, j += 4) {
+    alpha[i] = px.data[j];
+    if (alpha[i] > top) top = alpha[i];
+  }
+  if (!top) return;
+  // Where the ink is: half of the densest it gets, so a translucent stroke
+  // and a soft-edged one are outlined at their body rather than nowhere or at
+  // the last faint pixel of their fringe.
+  const T = Math.max(1, Math.ceil(top / 2));
+  const dist = distanceOutside(alpha, rect.w, rect.h, T);
+  // The silhouette grown by `r` device px, in one colour, as a canvas the
+  // target can composite. The edge is a one-px ramp off the distance; inside
+  // the ink's own anti-aliased fringe the ink's coverage wins where it is the
+  // larger, so a silhouette grown by nothing is still the ink's own outline.
+  const grown = (r, color) => {
+    const [cr, cg, cb] = channels(color);
+    const d = px.data;
+    for (let i = 0, j = 0; i < n; i++, j += 4) {
+      const a = alpha[i];
+      let cov = 1;
+      if (a < T) cov = Math.min(1, Math.max(0, a / T, r + 0.5 - dist[i]));
+      d[j] = cr;
+      d[j + 1] = cg;
+      d[j + 2] = cb;
+      d[j + 3] = cov * 255;
+    }
+    const c = alloc(rect.w, rect.h);
+    c.getContext('2d').putImageData(px, 0, 0);
+    return c;
+  };
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  for (let i = fx.shadows.length - 1; i >= 0; i--) {
+    const sh = fx.shadows[i];
+    const c = grown(outer * scale, sh.color);
+    ctx.globalAlpha = Math.min(1, Math.max(0, Number(sh.opacity) || 0));
+    // A canvas filter's radius is in device px, and a canvas shadow's blur is
+    // twice its gaussian sigma while a filter's is the sigma itself - so half.
+    const blur = Math.max(0, Number(sh.blur) || 0);
+    ctx.filter = blur > 0 ? `blur(${(blur / 2) * scale}px)` : 'none';
+    // The offset through the transform's linear part: 3 px right on the page
+    // is 6 device px at 2x, and turns with a rotated box.
+    const ox = Number(sh.x) || 0;
+    const oy = Number(sh.y) || 0;
+    ctx.drawImage(c, rect.x + t.a * ox + t.c * oy, rect.y + t.b * ox + t.d * oy);
+    releaseCanvas(c);
+  }
+  ctx.filter = 'none';
+  for (const band of fx.bands) {
+    const c = grown((band.line / 2) * scale, band.color);
+    ctx.globalAlpha = band.opacity;
+    ctx.drawImage(c, rect.x, rect.y);
+    releaseCanvas(c);
+  }
+  ctx.restore();
+}
+
 // One stamp of a round tip. `hardness` 100 is a flat disc; below that the edge
 // falls off, which is the only way a synthesised tip can look like anything
 // other than a marker pen.
@@ -1000,6 +1197,10 @@ function tipSize(tip) {
   return w > 0 && h > 0 ? [w, h] : null;
 }
 
+// The "colour" key under which a tip's density image is cached beside its
+// tints - see `buildTinted`. Not a colour, so it can never collide with one.
+const DENSITY = 'density';
+
 // The tinted tip and its mip chain, biggest first. Null when the tip cannot be
 // read - no decoded image, or a canvas that will not give its pixels back
 // (a tainted one), both of which fall the stroke back to the round dab.
@@ -1018,17 +1219,30 @@ function buildTinted(tip, color, alloc) {
     releaseCanvas(base);
     return null;
   }
-  const [r, g, b] = channels(color);
   const d = px.data;
-  // The tip is greyscale, so one channel is the grey; its own alpha is opaque
-  // across the whole image, and multiplying by it costs nothing and keeps a
-  // hand-made RGBA tip honest.
-  for (let i = 0; i < d.length; i += 4) {
-    const cov = (d[i] * d[i + 3]) / 255;
-    d[i] = r;
-    d[i + 1] = g;
-    d[i + 2] = b;
-    d[i + 3] = cov;
+  if (color === DENSITY) {
+    // Density as darkness on an opaque image: white is no ink, black is full.
+    // What the darken blend needs - two of these composited with `darken`
+    // keep the denser of the two, where two alpha tips would add up.
+    for (let i = 0; i < d.length; i += 4) {
+      const cov = (d[i] * d[i + 3]) / 255;
+      d[i] = 255 - cov;
+      d[i + 1] = 255 - cov;
+      d[i + 2] = 255 - cov;
+      d[i + 3] = 255;
+    }
+  } else {
+    const [r, g, b] = channels(color);
+    // The tip is greyscale, so one channel is the grey; its own alpha is
+    // opaque across the whole image, and multiplying by it costs nothing and
+    // keeps a hand-made RGBA tip honest.
+    for (let i = 0; i < d.length; i += 4) {
+      const cov = (d[i] * d[i + 3]) / 255;
+      d[i] = r;
+      d[i + 1] = g;
+      d[i + 2] = b;
+      d[i + 3] = cov;
+    }
   }
   bctx.putImageData(px, 0, 0);
   const levels = [capTint(base, alloc)];
@@ -1115,6 +1329,7 @@ export function pickTipLevel(levels, devicePx) {
 // squashes the round dab's, so the two tips read the same at the same setting.
 function stampTip(ctx, s, alpha, levels, natural, flatness, smooth, scale) {
   const [nw, nh] = natural;
+  if (s.len > 0) return sliceTip(ctx, s, alpha, levels, nw, nh, smooth, scale);
   const f = s.size / Math.max(nw, nh);
   const dw = nw * f;
   const dh = nh * f;
@@ -1132,6 +1347,43 @@ function stampTip(ctx, s, alpha, levels, natural, flatness, smooth, scale) {
   // The tip's longest side IS the stamp's size, so that - through the
   // transform - is the device size the chain has to answer for.
   ctx.drawImage(pickTipLevel(levels, s.size * scale), -dw / 2, -dh / 2, dw, dh);
+  ctx.restore();
+}
+
+// One slice of a ribbon: CSP's Stroke > Ribbon, where the tip is not pressed
+// down again and again but unrolled along the path as one continuous band.
+// The tip's WIDTH is the band's width - the stroke's size at this point - and
+// its height runs along the stroke at the same scale, repeating once it is
+// used up. `s.d` says how far along the path this slice sits and `s.len` how
+// much of the path it covers; the slice is the rows of the tip that belong to
+// that stretch, drawn across the path in the frame `strokeStamps` has already
+// turned to face it.
+function sliceTip(ctx, s, alpha, levels, nw, nh, smooth, scale) {
+  const f = s.size / nw; // page px per tip px
+  const period = nh * f; // how much path one pass of the tip covers
+  if (!(f > 0) || !(period > 0)) return;
+  const level = pickTipLevel(levels, Math.max(s.size, s.len) * scale);
+  const k = level.height / nh; // level px per tip px
+  ctx.save();
+  ctx.translate(s.x, s.y);
+  if (s.angle) ctx.rotate((s.angle * Math.PI) / 180);
+  ctx.globalAlpha = alpha;
+  ctx.imageSmoothingEnabled = smooth;
+  if (smooth) ctx.imageSmoothingQuality = 'high';
+  // The stretch of tip this slice shows, in tip px, from the top of the image
+  // at the start of the stroke; wrapped where it runs past the bottom, in
+  // which case the slice is drawn in two parts so the join is seamless.
+  let v0 = ((s.d - s.len / 2) % period + period) % period / f;
+  let left = s.len / f;
+  let y = -s.len / 2;
+  while (left > 1e-6) {
+    const take = Math.min(left, nh - v0);
+    const dh = take * f;
+    ctx.drawImage(level, 0, v0 * k, level.width, take * k, -s.size / 2, y, s.size, dh);
+    y += dh;
+    left -= take;
+    v0 = 0;
+  }
   ctx.restore();
 }
 
@@ -1202,39 +1454,134 @@ export function erodeAlpha(alpha, w, h, r) {
   return out;
 }
 
-// The pass itself, in place over an ImageData's bytes. The band is what the
-// erosion took off - every pixel within `radius` of the stroke's edge - and it
-// does two things there, because a rim has to read as darker and only one of
-// the two can say that on its own:
+// The largest value in every window of 2r+1 along one line of the plane: the
+// mirror of `minLine`, for growing the ink instead of shrinking it.
+function maxLine(src, dst, n, base, stride, r, dq) {
+  let head = 0;
+  let tail = 0;
+  for (let j = 0; j < n; j++) {
+    const v = src[base + j * stride];
+    while (tail > head && src[base + dq[tail - 1] * stride] <= v) tail--;
+    dq[tail++] = j;
+    const i = j - r;
+    if (i >= r) {
+      while (dq[head] < j - 2 * r) head++;
+      dst[base + i * stride] = src[base + dq[head] * stride];
+    }
+  }
+  // The last r centres never see a whole window; they take the biggest of
+  // what is left, since past the end of the plane there is nothing at all.
+  for (let i = Math.max(0, n - r); i < n; i++) {
+    let m = 0;
+    for (let j = Math.max(0, i - r); j < n; j++) {
+      const v = src[base + j * stride];
+      if (v > m) m = v;
+    }
+    dst[base + i * stride] = m;
+  }
+}
+
+// The alpha plane grown by r px on every side: a pixel takes the densest
+// value within r of it. The same separable square as `erodeAlpha`, for the
+// same reason.
+export function dilateAlpha(alpha, w, h, r) {
+  const dq = new Int32Array(Math.max(w, h));
+  const tmp = new Uint8ClampedArray(w * h);
+  for (let y = 0; y < h; y++) maxLine(alpha, tmp, w, y * w, 1, r, dq);
+  // The first r centres of every line are left at zero by the windowed pass;
+  // fill them the same way the tail is filled.
+  for (let y = 0; y < h; y++) {
+    for (let i = 0; i < Math.min(r, w); i++) {
+      let m = 0;
+      for (let j = 0; j <= Math.min(w - 1, i + r); j++) if (alpha[y * w + j] > m) m = alpha[y * w + j];
+      tmp[y * w + i] = m;
+    }
+  }
+  const out = new Uint8ClampedArray(w * h);
+  for (let x = 0; x < w; x++) maxLine(tmp, out, h, x, w, r, dq);
+  for (let x = 0; x < w; x++) {
+    for (let i = 0; i < Math.min(r, h); i++) {
+      let m = 0;
+      for (let j = 0; j <= Math.min(h - 1, i + r); j++) if (tmp[j * w + x] > m) m = tmp[j * w + x];
+      out[i * w + x] = m;
+    }
+  }
+  return out;
+}
+
+// A box blur of radius r over one plane, run twice, which is close enough to
+// a gaussian for a rim a few px wide. In place.
+function blurPlane(plane, w, h, r) {
+  if (!(r > 0)) return plane;
+  const tmp = new Float32Array(w * h);
+  const pass = (src, dst, n, base, stride) => {
+    let sum = 0;
+    for (let j = 0; j <= Math.min(n - 1, r); j++) sum += src[base + j * stride];
+    for (let i = 0; i < n; i++) {
+      const lo = i - r;
+      const hi = i + r;
+      dst[base + i * stride] = sum / (Math.min(n - 1, hi) - Math.max(0, lo) + 1);
+      if (lo >= 0) sum -= src[base + lo * stride];
+      if (hi + 1 < n) sum += src[base + (hi + 1) * stride];
+    }
+  };
+  const a = Float32Array.from(plane);
+  for (let k = 0; k < 2; k++) {
+    for (let y = 0; y < h; y++) pass(a, tmp, w, y * w, 1);
+    for (let x = 0; x < w; x++) pass(tmp, a, h, x, w);
+  }
+  for (let i = 0; i < a.length; i++) plane[i] = a[i];
+  return plane;
+}
+
+// The pass itself, in place over an ImageData's bytes: CSP's watercolour edge,
+// which the manual states plainly - "edges that look like a watercolor bleed
+// are added to the OUTSIDE of the stroke". The band is what the dilation added
+// - every clear or half-clear pixel within `radius` of the ink - and a rim is
+// laid down there UNDER the ink:
 //
-//   - the alpha goes up by the band scaled by `power`, which is the pigment
-//     pooling: a soft edge gets denser rather than fading out;
-//   - the colour goes down towards black by the same amount, which is what
-//     shows on the brush people actually use. A hardness-100 stroke is already
-//     opaque to the rim, so there is no alpha left to add and an alpha-only
-//     pass would be invisible on the default brush and on every coloured one.
+//   - its alpha is the band scaled by `power`, CSP's Opacity;
+//   - its colour is the ink's own pulled towards black by `dark`, CSP's
+//     Darkness, so a red stroke gets a deep red rim and not a grey one;
+//   - `blur` softens the band before it is laid, CSP's Blurring width.
 //
-// The core - alpha already flat for `radius` in every direction - comes out
-// byte-identical, and power 0 changes nothing at all, so the slider and the
-// switch agree. ImageData is not premultiplied, so the colour under the band is
-// the ink's own and can be scaled directly; where there is no alpha there is no
-// band either, since the erosion has nothing to take off.
-export function waterEdgePixels(data, w, h, radius, power) {
+// The ink itself is composited over the rim, so a pixel the stroke already
+// covers fully comes out byte-identical and only the outline and what lies
+// past it change. Power 0 changes nothing at all, so the slider and the switch
+// agree. `hard` is the anti-aliasing-off case, where the rim is either there
+// or not: a faint rim would otherwise be thrown away by the alpha snap that
+// follows, and CSP draws its edge on a pixel layer solid.
+export function waterEdgePixels(data, w, h, radius, power, dark = 0, blur = 0, rgb = null, hard = false) {
   const p = Math.min(1, Math.max(0, Number(power) || 0));
   const r = Math.max(1, Math.round(Number(radius) || 0));
+  const dk = Math.min(1, Math.max(0, Number(dark) || 0));
+  const b = Math.max(0, Math.round(Number(blur) || 0));
   if (p <= 0) return data;
   const n = w * h;
   const alpha = new Uint8ClampedArray(n);
   for (let i = 0, j = 3; i < n; i++, j += 4) alpha[i] = data[j];
-  const er = erodeAlpha(alpha, w, h, r);
+  const grown = dilateAlpha(alpha, w, h, r);
+  const band = new Float32Array(n);
+  for (let i = 0; i < n; i++) band[i] = Math.max(0, grown[i] - alpha[i]);
+  if (b > 0) blurPlane(band, w, h, b);
+  const ink = rgb ?? [0, 0, 0];
+  const rr = ink[0] * (1 - dk);
+  const rg = ink[1] * (1 - dk);
+  const rb = ink[2] * (1 - dk);
   for (let i = 0, j = 0; i < n; i++, j += 4) {
-    const band = alpha[i] - er[i];
-    if (band <= 0) continue;
-    const f = Math.max(0, 1 - (p * band) / 255);
-    data[j] *= f;
-    data[j + 1] *= f;
-    data[j + 2] *= f;
-    data[j + 3] = Math.min(255, alpha[i] + band * p);
+    let ar = band[i] * p;
+    if (ar <= 0) continue;
+    if (hard) ar = ar >= 32 ? 255 : 0;
+    if (ar <= 0) continue;
+    // Ink over rim: the rim only shows through where the ink is not solid.
+    const a = alpha[i] / 255;
+    const under = (ar / 255) * (1 - a);
+    const ao = a + under;
+    if (ao <= 0) continue;
+    data[j] = (data[j] * a + rr * under) / ao;
+    data[j + 1] = (data[j + 1] * a + rg * under) / ao;
+    data[j + 2] = (data[j + 2] * a + rb * under) / ao;
+    data[j + 3] = Math.min(255, Math.round(ao * 255));
   }
   return data;
 }
@@ -1251,7 +1598,12 @@ function wantsWaterEdge(k) {
 // back per stroke per frame - and the margin of clear pixels the padding buys
 // is what lets the erosion see an edge where the edge is.
 function inkRect(k, stamps, t, w, h, pad) {
-  const b = strokeBounds(k, stamps);
+  return boundsRect(strokeBounds(k, stamps), t, w, h, pad);
+}
+
+// A box-local bounds through `t` into device px, grown by `pad` and clipped
+// to a w x h layer; null for no bounds or nothing left after the clip.
+function boundsRect(b, t, w, h, pad) {
   if (!b) return null;
   let x0 = Infinity;
   let y0 = Infinity;
@@ -1284,7 +1636,12 @@ function inkRect(k, stamps, t, w, h, pad) {
 // hands the result down. A stroke whose tip is not in there stamps the round
 // dab for this frame and keeps its brush id, which is what makes the first
 // frame of a chapter draw immediately instead of waiting on a decode.
-export function drawInk(ctx, ink, makeCanvas, tips) {
+//
+// `finish` is the box's strokes and shadows (the style itself will do), drawn
+// around the whole of the ink - see `paintFinish`. With one, the strokes go
+// into a layer of their own first, because the finish is a reading of the
+// finished ink and there is no finished ink until the last stroke is down.
+export function drawInk(ctx, ink, makeCanvas, tips, finish) {
   if (!inkActive(ink)) return;
   const alloc = makeCanvas ?? ((w, h) => {
     const c = document.createElement('canvas');
@@ -1292,6 +1649,26 @@ export function drawInk(ctx, ink, makeCanvas, tips) {
     c.height = h;
     return c;
   });
+  const fx = finishOf(finish);
+  if (!fx) {
+    paintStrokes(ctx, ink, alloc, tips);
+    return;
+  }
+  const t = ctx.getTransform();
+  const layer = alloc(ctx.canvas.width, ctx.canvas.height);
+  const lctx = layer.getContext('2d');
+  lctx.setTransform(t);
+  paintStrokes(lctx, ink, alloc, tips);
+  paintFinish(ctx, layer, ink, t, fx, alloc);
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(layer, 0, 0);
+  ctx.restore();
+  releaseCanvas(layer);
+}
+
+// The strokes themselves, one after another onto `ctx`.
+function paintStrokes(ctx, ink, alloc, tips) {
   for (const k of ink.strokes) {
     const stamps = strokeStamps(k);
     if (!stamps.length) continue;
@@ -1303,20 +1680,49 @@ export function drawInk(ctx, ink, makeCanvas, tips) {
     const tip = tipFor(k, tips);
     const levels = tip ? tipLevels(tip, k.color, alloc) : null;
     const natural = levels ? tipSize(tip) : null;
+    // The cycle's other tips, by the index `strokeStamps` put on each stamp.
+    // One that is not in hand this frame falls back to the stroke's own, so a
+    // half-decoded cycle draws textured rather than dotted with discs.
+    const cycle = levels && Array.isArray(k.tips) && k.tips.length > 1
+      ? k.tips.map((id) => {
+        const t = tipFor({ brush: id }, tips);
+        const lv = t ? tipLevels(t, k.color, alloc) : null;
+        return lv ? { levels: lv, natural: tipSize(t), tip: t } : null;
+      })
+      : null;
     // The alpha is an argument rather than a field of the stamp, because the
     // layer below draws every stamp at full strength and the stroke's own
     // opacity is applied once to the finished layer. Cloning each stamp to say
     // so allocated an object per dab per frame while the pointer was down.
+    // CSP's Blend brush tips with Darken: where dabs overlap, the darker wins
+    // instead of the two adding up. Only a textured tip can show it - the
+    // round dab has nothing inside its edge to keep - and it is drawn as
+    // black ink on white with the darken operator, then read back as a mask:
+    // for black on white, "darker" and "denser" are the same number.
+    const darken = k.darkenTips === true && !!levels;
+    const darkLevels = darken ? tipLevels(tip, DENSITY, alloc) : null;
+    const darkCycle = darken && cycle
+      ? cycle.map((c) => (c ? tipLevels(c.tip, DENSITY, alloc) : null))
+      : null;
+    const smooth = k.antialias !== false;
     const stamp = levels
-      ? (c, st, alpha) => stampTip(c, st, alpha, levels, natural, k.flatness, k.antialias !== false, scale)
+      ? (c, st, alpha) => {
+        const pick = cycle && st.tip > 0 ? cycle[st.tip] : null;
+        if (pick) {
+          stampTip(c, st, alpha, darkCycle?.[st.tip] ?? pick.levels, pick.natural, k.flatness, smooth, scale);
+        } else {
+          stampTip(c, st, alpha, darkLevels ?? levels, natural, k.flatness, smooth, scale);
+        }
+      }
       : (c, st, alpha) => stampRound(c, st, alpha, k.color, k.hardness, k.flatness);
     const solid = k.opacity >= 0.999;
     const water = wantsWaterEdge(k);
-    // Three reasons to detour through a layer: a translucent stroke must not
+    // Four reasons to detour through a layer: a translucent stroke must not
     // let its own stamps darken each other where they overlap, an aliased one
-    // needs its finished shape in hand before the edge can be cut hard, and the
-    // watercolour edge is a pass over that finished shape too.
-    const layered = !solid || k.antialias === false || water;
+    // needs its finished shape in hand before the edge can be cut hard, the
+    // watercolour edge is a pass over that finished shape too, and the darken
+    // blend needs a white ground to be read back from.
+    const layered = !solid || k.antialias === false || water || darken;
     if (!layered) {
       for (const s of stamps) stamp(ctx, s, s.alpha);
       continue;
@@ -1327,21 +1733,49 @@ export function drawInk(ctx, ink, makeCanvas, tips) {
     const layer = alloc(ctx.canvas.width, ctx.canvas.height);
     const lctx = layer.getContext('2d');
     lctx.setTransform(t);
+    if (darken) {
+      lctx.save();
+      lctx.setTransform(1, 0, 0, 1, 0, 0);
+      lctx.fillStyle = '#ffffff';
+      lctx.fillRect(0, 0, layer.width, layer.height);
+      lctx.restore();
+      lctx.globalCompositeOperation = 'darken';
+    }
     for (const s of stamps) stamp(lctx, s, 1);
+    if (darken) {
+      lctx.globalCompositeOperation = 'source-over';
+      // White ground to ink mask: how far from white a pixel went is how much
+      // ink is there, and the ink is the stroke's own colour.
+      const [ir, ig, ib] = channels(k.color);
+      const px = lctx.getImageData(0, 0, layer.width, layer.height);
+      const d = px.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const a = 255 - d[i];
+        d[i] = ir;
+        d[i + 1] = ig;
+        d[i + 2] = ib;
+        d[i + 3] = a;
+      }
+      lctx.putImageData(px, 0, 0);
+    }
     if (water) {
       // Once per stroke, over its own layer, and before the anti-aliasing snap
       // below: the edge is drawn on the soft alpha the stamps left, and the
       // pixel look is the last word on what is in the stroke and what is out.
-      // The snap only ever touches alpha, so the darkened rim survives it.
       // The radius is the band's page px through the caller's transform, which
       // is what keeps the screen and the file the same picture. The stamps are
       // handed on rather than laid out again: this runs per stroke per frame
-      // while the pointer is down.
+      // while the pointer is down. The rim lies outside the ink, so the read
+      // reaches past the stamps by the band, its blur, and a pixel of slack.
       const r = Math.max(1, Math.round(k.waterEdgeWidth * scale));
-      const rect = inkRect(k, stamps, t, layer.width, layer.height, r + 2);
+      const bl = Math.round((k.waterEdgeBlur || 0) * scale);
+      const rect = inkRect(k, stamps, t, layer.width, layer.height, r + bl + 2);
       if (rect) {
         const px = lctx.getImageData(rect.x, rect.y, rect.w, rect.h);
-        waterEdgePixels(px.data, rect.w, rect.h, r, k.waterEdgePower);
+        waterEdgePixels(
+          px.data, rect.w, rect.h, r, k.waterEdgePower, k.waterEdgeDark, bl, channels(k.color),
+          k.antialias === false,
+        );
         lctx.putImageData(px, rect.x, rect.y);
       }
     }

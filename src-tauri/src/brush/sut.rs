@@ -87,7 +87,7 @@ pub fn materials_from_sut(path: &Path) -> Vec<Material> {
 /// Every tip in a `.sut`, largest first. Never raises on a malformed file.
 pub fn tips_from_sut(path: &Path) -> Vec<Tip> {
     let mut out: Vec<Tip> = materials_from_sut(path).into_iter().filter_map(|m| m.tip).collect();
-    out.sort_by(|a, b| b.area().cmp(&a.area()));
+    out.sort_by_key(|tip| std::cmp::Reverse(tip.area()));
     out
 }
 

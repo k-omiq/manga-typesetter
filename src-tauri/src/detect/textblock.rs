@@ -2,6 +2,8 @@
 
 use image::GrayImage;
 
+use super::textdetector::TextBlockOut;
+
 /// Script assigned to a text block by the YOLO detector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
@@ -516,6 +518,196 @@ pub fn group_output(
     final_list
 }
 
+/// Minimum IoA with a text block for a text region to be considered contained.
+pub const REGION_IN_BLOCK_IOA: f64 = 0.5;
+
+/// Minimum IoA with a text line for a line-to-region match to be meaningful.
+pub const LINE_MATCH_IOA: f64 = 0.2;
+
+/// Ratio of second-best to best match IoA above which line assignment is considered ambiguous.
+pub const AMBIGUOUS_MATCH_RATIO: f64 = 0.85;
+
+fn box_area(b: [i32; 4]) -> f64 {
+    let w = (b[2] - b[0]).max(0) as i64;
+    let h = (b[3] - b[1]).max(0) as i64;
+    (w * h) as f64
+}
+
+fn safe_intersect_area(a: [i32; 4], b: [i32; 4]) -> f64 {
+    let inter = intersect_area(a, b);
+    if inter < 0.0 {
+        0.0
+    } else {
+        inter
+    }
+}
+
+fn nearest_contained_region(lb: &[i32; 4], contained: &[[i32; 4]]) -> usize {
+    let line_cx = (lb[0] as f64 + lb[2] as f64) / 2.0;
+    let line_cy = (lb[1] as f64 + lb[3] as f64) / 2.0;
+
+    let mut best_idx = 0;
+    let mut best_dist_sq = f64::INFINITY;
+
+    for (i, r) in contained.iter().enumerate() {
+        let rcx = (r[0] as f64 + r[2] as f64) / 2.0;
+        let rcy = (r[1] as f64 + r[3] as f64) / 2.0;
+        let dx = rcx - line_cx;
+        let dy = rcy - line_cy;
+        let dist_sq = dx * dx + dy * dy;
+        if dist_sq < best_dist_sq {
+            best_dist_sq = dist_sq;
+            best_idx = i;
+        }
+    }
+
+    best_idx
+}
+
+/// A region sitting inside another (IoA above `REGION_IN_BLOCK_IOA`) is one of two
+/// things: a duplicate - one balloon boxed twice, once whole and once around its
+/// longest column - or one section of a conjoined pair the model also boxed as a
+/// whole. MangaTranslator tells them apart by count, and so does this: a container
+/// with two or more children is the conjoined whole and goes, leaving its
+/// sections; a container with exactly one child is the real balloon and the child
+/// goes. Without this a nested duplicate split a single balloon down its last
+/// column on the first real chapter it was run over.
+fn dedupe_nested_regions(regions: &[[i32; 4]]) -> Vec<[i32; 4]> {
+    let mut drop = vec![false; regions.len()];
+    for (i, big) in regions.iter().enumerate() {
+        let big_area = box_area(*big);
+        let children: Vec<usize> = regions
+            .iter()
+            .enumerate()
+            .filter(|&(j, small)| {
+                if j == i {
+                    return false;
+                }
+                let a = box_area(*small);
+                // Equal areas are ordered by index so a pair of identical boxes
+                // resolves to one survivor rather than none.
+                let smaller = a < big_area || (a == big_area && j > i);
+                a > 0.0 && smaller && safe_intersect_area(*small, *big) / a > REGION_IN_BLOCK_IOA
+            })
+            .map(|(j, _)| j)
+            .collect();
+        match children.len() {
+            0 => {}
+            1 => drop[children[0]] = true,
+            _ => drop[i] = true,
+        }
+    }
+    regions
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| !drop[i])
+        .map(|(_, r)| *r)
+        .collect()
+}
+
+/// Splits blocks the detector drew across two neighbouring bubbles, using per-bubble
+/// text regions from a second detector (MangaTranslator's conjoined-bubble rule).
+pub fn split_by_regions(
+    blocks: Vec<TextBlockOut>,
+    regions: &[[i32; 4]],
+    im_w: i32,
+) -> Vec<TextBlockOut> {
+    let regions = dedupe_nested_regions(regions);
+    let mut out = Vec::with_capacity(blocks.len());
+
+    for blk in blocks {
+        if blk.lines.len() < 2 {
+            out.push(blk);
+            continue;
+        }
+
+        let contained: Vec<[i32; 4]> = regions
+            .iter()
+            .copied()
+            .filter(|&region| {
+                let r_area = box_area(region);
+                if r_area <= 0.0 {
+                    return false;
+                }
+                let inter = safe_intersect_area(region, blk.xyxy);
+                (inter / r_area) > REGION_IN_BLOCK_IOA
+            })
+            .collect();
+
+        if contained.len() < 2 {
+            out.push(blk);
+            continue;
+        }
+
+        let mut groups: Vec<Vec<Quad>> = vec![Vec::new(); contained.len()];
+        let mut first_seen: Vec<Option<usize>> = vec![None; contained.len()];
+
+        for (line_idx, line) in blk.lines.iter().enumerate() {
+            let lb = quad_bbox(line);
+            let lb_area = box_area(lb);
+
+            let mut matches: Vec<(usize, f64)> = Vec::new();
+            if lb_area > 0.0 {
+                for (r_idx, &region) in contained.iter().enumerate() {
+                    let inter = safe_intersect_area(lb, region);
+                    if inter / lb_area >= LINE_MATCH_IOA {
+                        matches.push((r_idx, inter));
+                    }
+                }
+            }
+
+            matches.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+            let assigned_r_idx = if !matches.is_empty() {
+                let best = matches[0];
+                let is_ambiguous =
+                    matches.len() > 1 && (matches[1].1 / best.1) >= AMBIGUOUS_MATCH_RATIO;
+                if !is_ambiguous {
+                    best.0
+                } else {
+                    nearest_contained_region(&lb, &contained)
+                }
+            } else {
+                nearest_contained_region(&lb, &contained)
+            };
+
+            if first_seen[assigned_r_idx].is_none() {
+                first_seen[assigned_r_idx] = Some(line_idx);
+            }
+            groups[assigned_r_idx].push(*line);
+        }
+
+        let non_empty_count = groups.iter().filter(|g| !g.is_empty()).count();
+        if non_empty_count < 2 {
+            out.push(blk);
+            continue;
+        }
+
+        let mut non_empty_indices: Vec<usize> = (0..contained.len())
+            .filter(|&i| !groups[i].is_empty())
+            .collect();
+        non_empty_indices.sort_by_key(|&i| first_seen[i].unwrap());
+
+        for i in non_empty_indices {
+            let lines = std::mem::take(&mut groups[i]);
+            let mut tb = TextBlock::new(blk.xyxy, blk.language);
+            tb.lines = lines;
+            examine_textblk(&mut tb, im_w, true);
+            tb.adjust_bbox(false);
+            out.push(TextBlockOut {
+                xyxy: tb.xyxy,
+                lines: tb.lines,
+                vertical: tb.vertical,
+                font_size: tb.font_size,
+                angle: tb.angle,
+                language: tb.language,
+            });
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,5 +903,180 @@ mod tests {
         assert_eq!(round_half_even(1.5), 2.0);
         assert_eq!(round_half_even(2.5), 2.0);
         assert_eq!(round_half_even(3.5), 4.0);
+    }
+
+    fn hline(x: i32, y: i32, w: i32, h: i32) -> Quad {
+        [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
+    }
+
+    #[test]
+    fn split_by_regions_horizontal_block_with_two_regions_splits() {
+        let lines = vec![
+            hline(110, 120, 160, 30),
+            hline(110, 170, 160, 30),
+            hline(310, 120, 160, 30),
+            hline(310, 170, 160, 30),
+        ];
+        let blk = TextBlockOut {
+            xyxy: [100, 100, 500, 220],
+            lines,
+            vertical: true,
+            font_size: 15.0,
+            angle: 0,
+            language: Language::Eng,
+        };
+        let regions = [[100, 100, 280, 220], [300, 100, 480, 220]];
+        let out = split_by_regions(vec![blk], &regions, 800);
+        assert_eq!(out.len(), 2);
+
+        assert_eq!(out[0].xyxy, [110, 120, 270, 200]);
+        assert_eq!(out[0].lines.len(), 2);
+        assert!(!out[0].vertical);
+        assert!((out[0].font_size - 30.0).abs() < 1e-6);
+
+        assert_eq!(out[1].xyxy, [310, 120, 470, 200]);
+        assert_eq!(out[1].lines.len(), 2);
+        assert!(!out[1].vertical);
+        assert!((out[1].font_size - 30.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn split_by_regions_horizontal_block_with_one_region_unchanged() {
+        let lines = vec![
+            hline(110, 120, 160, 30),
+            hline(110, 170, 160, 30),
+            hline(310, 120, 160, 30),
+            hline(310, 170, 160, 30),
+        ];
+        let blk = TextBlockOut {
+            xyxy: [100, 100, 500, 220],
+            lines,
+            vertical: false,
+            font_size: 30.0,
+            angle: 0,
+            language: Language::Eng,
+        };
+        let regions = [[100, 100, 280, 220]];
+        let out = split_by_regions(vec![blk], &regions, 800);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].xyxy, [100, 100, 500, 220]);
+        assert_eq!(out[0].lines.len(), 4);
+    }
+
+    #[test]
+    fn split_by_regions_unmatched_line_lands_with_nearest_region() {
+        let lines = vec![
+            hline(110, 120, 80, 30),
+            hline(410, 120, 80, 30),
+            hline(210, 120, 40, 30),
+        ];
+        let blk = TextBlockOut {
+            xyxy: [100, 100, 500, 200],
+            lines,
+            vertical: false,
+            font_size: 30.0,
+            angle: 0,
+            language: Language::Eng,
+        };
+        let regions = [[100, 100, 200, 200], [400, 100, 500, 200]];
+        let out = split_by_regions(vec![blk], &regions, 800);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].lines.len(), 2);
+        assert_eq!(out[1].lines.len(), 1);
+    }
+
+    #[test]
+    fn split_by_regions_all_lines_in_same_region_unchanged() {
+        let lines = vec![
+            hline(110, 120, 80, 30),
+            hline(110, 160, 80, 30),
+        ];
+        let blk = TextBlockOut {
+            xyxy: [100, 100, 500, 200],
+            lines,
+            vertical: false,
+            font_size: 30.0,
+            angle: 0,
+            language: Language::Eng,
+        };
+        let regions = [[100, 100, 200, 200], [400, 100, 500, 200]];
+        let out = split_by_regions(vec![blk], &regions, 800);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].xyxy, [100, 100, 500, 200]);
+        assert_eq!(out[0].lines.len(), 2);
+    }
+
+    // Page 14 of the first real chapter this ran over: the model boxed one
+    // balloon twice, whole and around its last column, and the split cut the
+    // balloon down that column. The inner duplicate has to go, not the balloon.
+    #[test]
+    fn a_region_nested_inside_one_other_is_a_duplicate_and_splits_nothing() {
+        let lines = vec![
+            vline(180, 110, 30, 120),
+            vline(140, 110, 30, 120),
+            vline(100, 110, 30, 120),
+        ];
+        let blk = TextBlockOut {
+            xyxy: [90, 100, 220, 240],
+            lines,
+            vertical: true,
+            font_size: 30.0,
+            angle: 0,
+            language: Language::Ja,
+        };
+        let regions = [[95, 105, 215, 235], [178, 108, 212, 232]];
+        let out = split_by_regions(vec![blk], &regions, 800);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].lines.len(), 3);
+    }
+
+    // The other nesting: the model boxed a conjoined pair both as a whole and
+    // as its two sections. The whole is the redundant one; the sections split.
+    #[test]
+    fn a_region_holding_two_others_is_the_conjoined_whole_and_the_sections_split() {
+        let lines = vec![
+            vline(180, 110, 30, 120),
+            vline(140, 110, 30, 120),
+            vline(180, 310, 30, 120),
+            vline(140, 310, 30, 120),
+        ];
+        let blk = TextBlockOut {
+            xyxy: [130, 100, 220, 450],
+            lines,
+            vertical: true,
+            font_size: 30.0,
+            angle: 0,
+            language: Language::Ja,
+        };
+        let regions = [[130, 100, 220, 450], [130, 100, 220, 250], [130, 300, 220, 450]];
+        let out = split_by_regions(vec![blk], &regions, 800);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].lines.len(), 2);
+        assert_eq!(out[1].lines.len(), 2);
+    }
+
+    #[test]
+    fn split_by_regions_vertical_stacked_bubbles_splits() {
+        let lines = vec![
+            vline(180, 110, 30, 120),
+            vline(140, 110, 30, 120),
+            vline(180, 310, 30, 120),
+            vline(140, 310, 30, 120),
+        ];
+        let blk = TextBlockOut {
+            xyxy: [130, 100, 220, 450],
+            lines,
+            vertical: true,
+            font_size: 30.0,
+            angle: 0,
+            language: Language::Ja,
+        };
+        let regions = [[130, 100, 220, 250], [130, 300, 220, 450]];
+        let out = split_by_regions(vec![blk], &regions, 800);
+        assert_eq!(out.len(), 2);
+        assert!(out[0].vertical);
+        assert_eq!(out[0].lines.len(), 2);
+        assert!(out[1].vertical);
+        assert_eq!(out[1].lines.len(), 2);
     }
 }

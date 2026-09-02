@@ -27,11 +27,14 @@
     defaultPathPts,
     WARP_MIN_GRID,
     WARP_MAX_GRID,
+    WARP_MESH_DEFAULT,
   } from './data.js';
   import { gradientCss, patternTileCanvas, sampleStops } from './text-paint.js';
   import { insertPathAnchor } from './measure.js';
   import { maskTool, setMaskTool } from './mask-tool.svelte.js';
   import { regridWarp } from './warp-gizmo.js';
+  import { liquifyTool, setLiquifyMode, LIQUIFY_RADIUS_MIN, LIQUIFY_RADIUS_MAX } from './liquify-tool.svelte.js';
+  import { LIQUIFY_MODES } from './liquify.js';
   import BrushPanel from './BrushPanel.svelte';
   import { brushArmed } from './brush-tool.svelte.js';
   import { prefs } from './prefs.svelte.js';
@@ -101,6 +104,9 @@
     // place that says so to the user: `warp` bends the BASELINE (arc, circle,
     // bezier path), `transform` deforms the whole finished box through a mesh.
     ['transform', 'Transform'],
+    // The same mesh as `transform`, pushed with a round tool instead of dragged
+    // by its handles - which is why it works on type and ink alike.
+    ['liquify', 'Liquify'],
     ['blur', 'Blur'],
     ['edges', 'Edges'],
     ['mask', 'Mask'],
@@ -271,6 +277,17 @@
     el.value = String(n);
     if (!box || n === now) return;
     st.warp = regridWarp(st.warp, key === 'cols' ? n : st.warp.cols, key === 'rows' ? n : st.warp.rows, box.w, box.h);
+    touch();
+  }
+  // Free is the one-cell mesh - four corner handles and a perspective map -
+  // and Mesh is any grid. The two are one setting read two ways, so switching
+  // is a regrid: Free keeps the corners of whatever grid it came from, Mesh
+  // comes up at the default lattice with the perspective carried onto it.
+  const warpIsFree = (st) => st.warp.cols === 1 && st.warp.rows === 1;
+  function setWarpMode(st, free) {
+    if (!box || warpIsFree(st) === free) return;
+    const n = free ? 1 : WARP_MESH_DEFAULT;
+    st.warp = regridWarp(st.warp, n, n, box.w, box.h);
     touch();
   }
 
@@ -1303,10 +1320,12 @@
         {/if}
 
         {#if effectsSubTab.id === 'transform'}
-          <!-- The mesh. One control at two grid sizes, exactly as CSP has it:
-               1x1 is Free Transform's four corner handles, anything larger is
-               Mesh Transform. The handles are ON THE BOX, not in here - this
-               panel only arms the gizmo, sizes its grid and resets it. -->
+          <!-- The mesh. One setting at two grid sizes, exactly as CSP has it:
+               Free is the four corner handles and a perspective map, Mesh is a
+               grid the picture bends smoothly through. The handles are ON THE
+               BOX, not in here - this panel only arms the gizmo, picks the
+               mode, sizes the grid and resets it. -->
+          {@const free = warpIsFree(s)}
           <div class="switch-row">
             <button
               type="button"
@@ -1314,50 +1333,80 @@
               class:on={s.warp.on}
               role="switch"
               aria-checked={s.warp.on}
-              aria-label="Free transform"
+              aria-label="Transform"
               onclick={() => { s.warp.on = !s.warp.on; touch(); }}
             ><span class="knob"></span></button>
-            <span class="lbl2">Free transform</span>
+            <span class="lbl2">Transform</span>
           </div>
           <div class="insp-sub-body" class:disabled={!s.warp.on} style="padding:0;border:none;gap:11px">
-            <div class="row2">
-              <div class="field">
-                <label class="lbl" for="insp-warp-cols">Columns</label>
-                <input
-                  id="insp-warp-cols"
-                  type="number"
-                  min={WARP_MIN_GRID}
-                  max={WARP_MAX_GRID}
-                  step="1"
-                  value={s.warp.cols}
+            <div class="grp">
+              <span class="lbl">Handles</span>
+              <div class="seg">
+                <button
+                  type="button"
+                  class:on={free}
+                  aria-pressed={free}
                   disabled={!s.warp.on}
-                  title="Grid cells across. 1 is the four-corner free transform."
-                  onchange={(e) => setGrid(s, 'cols', e)}
-                />
-              </div>
-              <div class="field">
-                <label class="lbl" for="insp-warp-rows">Rows</label>
-                <input
-                  id="insp-warp-rows"
-                  type="number"
-                  min={WARP_MIN_GRID}
-                  max={WARP_MAX_GRID}
-                  step="1"
-                  value={s.warp.rows}
+                  title="Four corners. Pull one and the box goes into perspective."
+                  onclick={() => setWarpMode(s, true)}
+                >Free</button>
+                <button
+                  type="button"
+                  class:on={!free}
+                  aria-pressed={!free}
                   disabled={!s.warp.on}
-                  title="Grid cells down. 1 is the four-corner free transform."
-                  onchange={(e) => setGrid(s, 'rows', e)}
-                />
+                  title="A grid of dots. The picture bends smoothly between them."
+                  onclick={() => setWarpMode(s, false)}
+                >Mesh</button>
               </div>
             </div>
+            {#if !free}
+              <div class="row2">
+                <div class="field">
+                  <label class="lbl" for="insp-warp-cols">Columns</label>
+                  <input
+                    id="insp-warp-cols"
+                    type="number"
+                    min={WARP_MIN_GRID}
+                    max={WARP_MAX_GRID}
+                    step="1"
+                    value={s.warp.cols}
+                    disabled={!s.warp.on}
+                    title="Grid cells across."
+                    onchange={(e) => setGrid(s, 'cols', e)}
+                  />
+                </div>
+                <div class="field">
+                  <label class="lbl" for="insp-warp-rows">Rows</label>
+                  <input
+                    id="insp-warp-rows"
+                    type="number"
+                    min={WARP_MIN_GRID}
+                    max={WARP_MAX_GRID}
+                    step="1"
+                    value={s.warp.rows}
+                    disabled={!s.warp.on}
+                    title="Grid cells down."
+                    onchange={(e) => setGrid(s, 'rows', e)}
+                  />
+                </div>
+              </div>
+            {/if}
             <!-- Says what the gizmo is for, and warns about the one thing a
                  grid change cannot promise: the deformation is carried onto the
                  new grid, but a finer mesh rebuilt onto a coarser one keeps only
                  what the coarser one can say. -->
             <div class="insp-none">
-              Drag the dots on the box. The dashed outline is where the box
-              started; Esc during a drag puts it back. Changing the grid carries
-              the deformation over, and a smaller grid keeps only its corners.
+              {#if free}
+                Drag a corner on the box; the picture goes into perspective. The
+                dashed outline is where the box started; Esc during a drag puts
+                it back.
+              {:else}
+                Drag the dots on the box; the picture bends smoothly between
+                them. The dashed outline is where the box started; Esc during a
+                drag puts it back. Changing the grid carries the deformation
+                over, and a smaller grid keeps only what its dots can say.
+              {/if}
             </div>
             <div class="mask-row">
               <span class="mask-count">{s.warp.pts.length ? `${s.warp.cols} x ${s.warp.rows} mesh` : 'Not deformed'}</span>
@@ -1372,6 +1421,58 @@
                 }}
               >Reset mesh</button>
             </div>
+          </div>
+        {/if}
+
+        {#if effectsSubTab.id === 'liquify'}
+          <!-- Liquify: the tool that pushes the box's mesh around under the
+               pointer. The controls are the tool's, not the box's - session
+               state, like the mask tools - and what a drag writes is the same
+               `warp` the Transform sub-tab edits, so Reset is shared. -->
+          {@const LIQ_LABEL = { push: 'Push', expand: 'Expand', pinch: 'Pinch', twirl: 'Twirl' }}
+          {@const LIQ_HINT = {
+            push: 'Drags the box along with the pointer.',
+            expand: 'Pushes outwards from the circle’s centre.',
+            pinch: 'Pulls inwards towards the circle’s centre.',
+            twirl: 'Turns about the circle’s centre.',
+          }}
+          <div class="grp">
+            <span class="lbl">Tool</span>
+            <div class="seg">
+              {#each LIQUIFY_MODES as m (m)}
+                <button type="button" class:on={liquifyTool.mode === m} aria-pressed={liquifyTool.mode === m} title={LIQ_HINT[m]} onclick={() => setLiquifyMode(m)}>{LIQ_LABEL[m]}</button>
+              {/each}
+            </div>
+          </div>
+          <div class="grp">
+            <span class="lbl">Radius</span>
+            <div class="slider-row">
+              <input type="range" min={LIQUIFY_RADIUS_MIN} max={LIQUIFY_RADIUS_MAX} step="1" value={liquifyTool.radius} title="How far the tool reaches, in page px" aria-label="Liquify radius" oninput={(e) => (liquifyTool.radius = clamp(Number(e.target.value) || 0, LIQUIFY_RADIUS_MIN, LIQUIFY_RADIUS_MAX))} />
+              <input class="num-s" type="number" min={LIQUIFY_RADIUS_MIN} max={LIQUIFY_RADIUS_MAX} step="1" value={liquifyTool.radius} aria-label="Liquify radius, page px" onchange={(e) => (liquifyTool.radius = clamp(Number(e.target.value) || 0, LIQUIFY_RADIUS_MIN, LIQUIFY_RADIUS_MAX))} />
+            </div>
+          </div>
+          <div class="grp">
+            <span class="lbl">Strength</span>
+            <div class="slider-row">
+              <input type="range" min="0" max="100" step="1" value={liquifyTool.strength} title="How far the picture moves at the centre of the circle" aria-label="Liquify strength" oninput={(e) => (liquifyTool.strength = clamp(Number(e.target.value) || 0, 0, 100))} />
+              <input class="num-s" type="number" min="0" max="100" step="1" value={liquifyTool.strength} aria-label="Liquify strength, percent" onchange={(e) => (liquifyTool.strength = clamp(Number(e.target.value) || 0, 0, 100))} />
+            </div>
+          </div>
+          <div class="insp-none">
+            {LIQ_HINT[liquifyTool.mode] ?? ''} Drag on the box; the circle is what the tool reaches. It bends the text and the ink together, through the box's mesh. Esc during a drag puts it back.
+          </div>
+          <div class="mask-row">
+            <span class="mask-count">{s.warp.pts.length ? `${s.warp.cols} x ${s.warp.rows} mesh` : 'Not deformed'}</span>
+            <button
+              type="button"
+              class="rbtn"
+              disabled={!s.warp.pts.length}
+              onclick={() => {
+                if (!s.warp.pts.length) return;
+                s.warp.pts = [];
+                touch();
+              }}
+            >Reset mesh</button>
           </div>
         {/if}
 

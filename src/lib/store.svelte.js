@@ -8,6 +8,8 @@ import {
   applyBoxDefaults,
   normalizeStyle,
   normalizeFit,
+  normalizeInkStroke,
+  normalizeFinish,
 } from './data.js';
 // The tag module reaches back for nothing - it takes the pages it works on as
 // arguments - so this stays a one-way edge and the two cannot cycle. What comes
@@ -352,7 +354,8 @@ export const app = $state({
   selectedId: null,
   editingId: null, // box currently in inline-edit mode
   tool: 'place', // one of TOOLS - see setTool
-  lastStyle: defaultStyle(), // style new boxes inherit (follows the previous box)
+  lastStyle: defaultStyle(), // style new boxes inherit (follows the previous box; size is per tag, see lastSizeByTag)
+  lastSizeByTag: {}, // font size remembered per primary tag (untagged is '')
   // Bulk-style picker mode. `style` is the template being edited, `targets` the
   // boxes clicked on the canvas (`targetSet` its membership index - see
   // `isBulkTarget`), `mask` which of the template's properties this edit is
@@ -675,10 +678,55 @@ export function cloneStyle(s) {
   return normalizeStyle($state.snapshot(s));
 }
 
+// ---------- font size remembered per tag ----------
+// The size a new box is born at follows the last box that carried the SAME
+// primary tag, not the last box touched: an `sfx` box sized up to 60 must not
+// drag the next dialogue box up with it, and the dialogue size must not pull
+// the next `sfx` back down. Everything else about the style still follows
+// `lastStyle`. The group is the line's first tag - the same one `styleForLine`
+// lets win - and an untagged line is its own group, keyed by the empty string.
+//
+// Persisted beside the tag registry, and for the same reason: it is the
+// user's working vocabulary ("sfx is about 60 here"), not a fact about any
+// one chapter.
+export const sizeKeyFor = (line) => (line ? lineTags(line)[0] ?? '' : '');
+
+function saveTagSizes() {
+  try {
+    localStorage.setItem('mt.tagSizes', JSON.stringify($state.snapshot(app.lastSizeByTag)));
+  } catch {
+    /* ignore */
+  }
+}
+
+// A legacy free box (`lineN == null`) has no line and lands in the untagged group.
+export function rememberSizeFor(p, box) {
+  if (!box?.style || typeof box.style.size !== 'number' || !Number.isFinite(box.style.size)) return;
+  const line = box.lineN != null && p ? lineByN(p, box.lineN) : null;
+  const key = sizeKeyFor(line);
+  app.lastSizeByTag[key] = box.style.size;
+  saveTagSizes();
+}
+
 // Remember the active box's style so the next placed box inherits it.
 export function rememberStyle(box) {
   const b = box ?? (app.selectedId ? byId(app.selectedId) : null);
-  if (b?.style) app.lastStyle = cloneStyle(b.style);
+  if (b?.style) {
+    app.lastStyle = cloneStyle(b.style);
+    rememberSizeFor(page(), b);
+  }
+}
+
+// The style a box is born with: `lastStyle` under the line's tag defaults,
+// with the size taken from the line's own group when that group has been
+// seen before. A group with no memory yet falls back to `lastStyle.size`.
+export function inheritedStyleFor(ln) {
+  const style = styleForLine(ln, applyBoxDefaults(cloneStyle(app.lastStyle)));
+  const size = app.lastSizeByTag[sizeKeyFor(ln)];
+  if (typeof size === 'number' && Number.isFinite(size)) {
+    style.size = size;
+  }
+  return style;
 }
 
 // ---------- export prefs persistence ----------
@@ -697,6 +745,20 @@ export function saveExportPrefs(dir, name) {
   } catch {
     /* ignore */
   }
+}
+
+// ---------- tag font sizes persistence ----------
+try {
+  const savedSizes = JSON.parse(localStorage.getItem('mt.tagSizes') || '{}');
+  if (savedSizes && typeof savedSizes === 'object' && !Array.isArray(savedSizes)) {
+    for (const [k, v] of Object.entries(savedSizes)) {
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        app.lastSizeByTag[k] = v;
+      }
+    }
+  }
+} catch {
+  /* ignore */
 }
 
 // ---------- persistence intervals ----------
@@ -1947,77 +2009,38 @@ export function placementRect(p, rect, imgX, imgY, fallbackW = 220, fallbackH = 
   };
 }
 
-// `target` is the page the click landed on. It defaults to the current one,
-// which is the only page a paged document can offer - in a longstrip every page
-// is on screen at once and the canvas resolves the frame under the pointer, so
-// the coordinates and the page they are in must travel together or the box
-// lands on whichever slice the scroll position happens to have made current.
-export function placeActiveAt(imgX, imgY, target = null) {
-  // Nothing places a box in a translate chapter. The rail forces the hand and
-  // the canvas checks too, so this is the third lock on the same door - cheap,
-  // and it is the one that holds whatever a future caller does, because a box on
-  // a page nobody is typesetting is work the user would have to find and delete.
-  if (isTranslateMode()) return;
-  // Before anything is recorded or selected. The undo stack that is live, the
-  // selection the Inspector reads and the queue on screen are all scoped to the
-  // current page, so placing onto another one has to move the index first or the
-  // edit is filed against a page nobody is looking at. No-op when the target is
-  // already current, which is every call a paged document makes.
-  focusPage(target);
-  // The edit this click ends is recorded before the placement it starts. Left to
-  // the `selectBox` at the bottom - which settles as a side effect of moving the
-  // selection - the free-typed box the user had just finished would be recorded
-  // *after* the box this click places, and undo would then rewind the pair in
-  // the wrong order: the older edit first, the newer one still standing.
-  settleEdits();
-  const p = target ?? page();
-  if (p.activeLineN == null) return;
-  const ln = lineByN(p, p.activeLineN);
-  if (!ln) return;
-  // A free line's box is what created it, so it is placed by definition and
-  // there is nothing here to place. Clicking such a row in the queue arms it
-  // like any other (`activateLine` does not discriminate), and without this the
-  // next click on the canvas dropped a second box onto the same line - two boxes
-  // rendering the same text, one of them invisible under the other, and no
-  // indication in the queue that there were two.
-  if (isFreeLine(ln)) {
-    toast('That text box is already on the page - drag it, or use the Text tool for another');
-    return;
-  }
-  ln.placed = true;
-  // The queue advances as part of this edit, so the record carries both sides
-  // of it - undoing the box without rewinding the queue would leave the two
-  // disagreeing about what still needs placing.
-  const activeBefore = p.activeLineN;
-  // The sizes a box can be placed at, in order of how much is known about the
-  // bubble under it:
-  //
-  //   the balloon    the page's pixels are in hand and the flood fill recovered
-  //                  a shape it believes. The box is the largest rectangle that
-  //                  fits inside that shape, and the shape is kept so the line
-  //                  breaker can lay text out to the curve.
-  //   the click      no detection, or a detection that missed this bubble - but
-  //                  the pixels under the pointer are a solid light colour, so
-  //                  the same flood fill runs from the click itself and the box
-  //                  is sized from the balloon it finds. This is the paste-mode
-  //                  case: a translation in the queue, a page nobody analysed,
-  //                  and a user pointing at the bubble they want it in.
-  //   the block      no fit either way. The detector's rectangle, inset - today's
-  //                  answer - transposed first when the Japanese in it was set
-  //                  vertically, since a tall narrow column is the one shape
-  //                  English does not want. No transpose in the fitted branches
-  //                  above: the inscribed rect of the real balloon is already the
-  //                  right aspect for the real bubble, and swapping its sides
-  //                  would be a heuristic overruling a measurement.
-  //   the text       nothing detected and nothing under the pointer worth
-  //                  fitting, so the box is sized from what has to go in it: the
-  //                  width that makes the text a balanced block rather than the
-  //                  fixed 220 that made it a column. See `balancedBoxSize`.
-  //   the constants  ...and 220x92 when there is not even text to measure - an
-  //                  empty queue row, or an environment with no metrics.
-  // `lastStyle` for the styling the user chose, the preferences for the five
-  // typesetting flags - see `applyBoxDefaults` for why the split falls there.
-  const style = styleForLine(ln, applyBoxDefaults(cloneStyle(app.lastStyle)));
+// The sizes a box can be placed at, in order of how much is known about the
+// bubble under it:
+//
+//   the balloon    the page's pixels are in hand and the flood fill recovered
+//                  a shape it believes. The box is the largest rectangle that
+//                  fits inside that shape, and the shape is kept so the line
+//                  breaker can lay text out to the curve.
+//   the click      no detection, or a detection that missed this bubble - but
+//                  the pixels under the pointer are a solid light colour, so
+//                  the same flood fill runs from the click itself and the box
+//                  is sized from the balloon it finds. This is the paste-mode
+//                  case: a translation in the queue, a page nobody analysed,
+//                  and a user pointing at the bubble they want it in.
+//   the block      no fit either way. The detector's rectangle, inset - today's
+//                  answer - transposed first when the Japanese in it was set
+//                  vertically, since a tall narrow column is the one shape
+//                  English does not want. No transpose in the fitted branches
+//                  above: the inscribed rect of the real balloon is already the
+//                  right aspect for the real bubble, and swapping its sides
+//                  would be a heuristic overruling a measurement.
+//   the text       nothing detected and nothing under the pointer worth
+//                  fitting, so the box is sized from what has to go in it: the
+//                  width that makes the text a balanced block rather than the
+//                  fixed 220 that made it a column. See `balancedBoxSize`.
+//   the constants  ...and 220x92 when there is not even text to measure - an
+//                  empty queue row, or an environment with no metrics.
+// Per-tag font size (untagged is its own group), everything else still
+// inherits `lastStyle` - the font, colour and strokes chosen by hand on the
+// last box touched - plus the preferences for the five typesetting flags
+// (see `applyBoxDefaults`).
+function bornBox(p, ln, imgX, imgY) {
+  const style = inheritedStyleFor(ln);
   const det = detectedEntryFor(p, ln.n, imgX, imgY);
   // The block first: a detected rectangle is a measurement of where the Japanese
   // in THIS line sat, so it seeds the fill closer to the right balloon than a
@@ -2075,6 +2098,52 @@ export function placeActiveAt(imgX, imgY, target = null) {
   // text needs; an empty one is placed at the bubble's size and grows as it is
   // filled in, through `setBoxText`.
   autoFitBox(b, p);
+  return b;
+}
+
+// `target` is the page the click landed on. It defaults to the current one,
+// which is the only page a paged document can offer - in a longstrip every page
+// is on screen at once and the canvas resolves the frame under the pointer, so
+// the coordinates and the page they are in must travel together or the box
+// lands on whichever slice the scroll position happens to have made current.
+export function placeActiveAt(imgX, imgY, target = null) {
+  // Nothing places a box in a translate chapter. The rail forces the hand and
+  // the canvas checks too, so this is the third lock on the same door - cheap,
+  // and it is the one that holds whatever a future caller does, because a box on
+  // a page nobody is typesetting is work the user would have to find and delete.
+  if (isTranslateMode()) return;
+  // Before anything is recorded or selected. The undo stack that is live, the
+  // selection the Inspector reads and the queue on screen are all scoped to the
+  // current page, so placing onto another one has to move the index first or the
+  // edit is filed against a page nobody is looking at. No-op when the target is
+  // already current, which is every call a paged document makes.
+  focusPage(target);
+  // The edit this click ends is recorded before the placement it starts. Left to
+  // the `selectBox` at the bottom - which settles as a side effect of moving the
+  // selection - the free-typed box the user had just finished would be recorded
+  // *after* the box this click places, and undo would then rewind the pair in
+  // the wrong order: the older edit first, the newer one still standing.
+  settleEdits();
+  const p = target ?? page();
+  if (p.activeLineN == null) return;
+  const ln = lineByN(p, p.activeLineN);
+  if (!ln) return;
+  // A free line's box is what created it, so it is placed by definition and
+  // there is nothing here to place. Clicking such a row in the queue arms it
+  // like any other (`activateLine` does not discriminate), and without this the
+  // next click on the canvas dropped a second box onto the same line - two boxes
+  // rendering the same text, one of them invisible under the other, and no
+  // indication in the queue that there were two.
+  if (isFreeLine(ln)) {
+    toast('That text box is already on the page - drag it, or use the Text tool for another');
+    return;
+  }
+  ln.placed = true;
+  // The queue advances as part of this edit, so the record carries both sides
+  // of it - undoing the box without rewinding the queue would leave the two
+  // disagreeing about what still needs placing.
+  const activeBefore = p.activeLineN;
+  const b = bornBox(p, ln, imgX, imgY);
   p.boxes.push(b);
   p.activeLineN = firstUnplaced(p);
   if (p.activeLineN == null && app.tool === 'place') {
@@ -2095,6 +2164,76 @@ export function placeActiveAt(imgX, imgY, target = null) {
   toast(
     `Placed line ${ln.n} → next: ${p.activeLineN ? 'line ' + p.activeLineN : 'all placed'}`,
   );
+}
+
+export function placeableDetectedLines(p) {
+  if (!p?.lines) return [];
+  const placed = placedLineNs(p);
+  const dets = p.detect?.boxes ?? [];
+  return p.lines.filter((l) => {
+    if (!l || isFreeLine(l) || placed.has(l.n)) return false;
+    return dets.some(
+      (d) =>
+        d?.n === l.n &&
+        Array.isArray(d.box) &&
+        d.box.length === 4 &&
+        d.box.every((v) => typeof v === 'number' && Number.isFinite(v)),
+    );
+  });
+}
+
+export function placeDetectedOnPage(target = null) {
+  if (isTranslateMode()) return 0;
+  if (!app.pages.length) return 0;
+  focusPage(target);
+  settleEdits();
+  const p = target ?? page();
+  const lines = placeableDetectedLines(p);
+  if (!lines.length) {
+    toast('No detected bubbles left to place on this page');
+    return 0;
+  }
+  const activeBefore = p.activeLineN;
+  const items = [];
+  const dets = p.detect?.boxes ?? [];
+  for (const ln of lines) {
+    ln.placed = true;
+    const det = dets.find(
+      (d) =>
+        d?.n === ln.n &&
+        Array.isArray(d.box) &&
+        d.box.length === 4 &&
+        d.box.every((v) => typeof v === 'number' && Number.isFinite(v)),
+    );
+    const [x1, y1, x2, y2] = det.box;
+    const cx = (x1 + x2) / 2;
+    const cy = (y1 + y2) / 2;
+    const b = bornBox(p, ln, cx, cy);
+    p.boxes.push(b);
+    items.push({ index: p.boxes.length - 1, box: $state.snapshot(b) });
+  }
+  p.activeLineN = firstUnplaced(p);
+  if (p.activeLineN == null && app.tool === 'place') {
+    setTool('text');
+  }
+  recordEdit({
+    t: 'placeMany',
+    pageId: p.id,
+    items,
+    activeBefore,
+    activeAfter: p.activeLineN,
+  });
+  markUnsaved();
+  const lastBox = items[items.length - 1]?.box;
+  if (lastBox) {
+    selectBox(lastBox.id, { remember: false });
+  }
+  const placed = placedLineNs(p);
+  const remaining = (p.lines ?? []).filter((l) => !isFreeLine(l) && !placed.has(l.n)).length;
+  const countStr = `${items.length} box${items.length === 1 ? '' : 'es'}`;
+  const leftStr = remaining > 0 ? ` · ${remaining} left with no detected bubble` : '';
+  toast(`Placed ${countStr} from detection${leftStr}`);
+  return items.length;
 }
 
 // ---------- re-running a fit by hand ----------
@@ -2182,11 +2321,10 @@ export function addEmptyBox(imgX, imgY, target = null) {
     y: clamp(imgY - h / 2, 0, Math.max(0, p.h - h)),
     w,
     h,
-    // Through `styleForLine` like `placeActiveAt`, so there is one answer to
-    // "what style is a box born with" rather than two. A line created this
-    // instant has no tags, so what comes back is the inherited style untouched -
-    // but the moment the user tags the row, tagging and placing agree.
-    style: styleForLine(ln, applyBoxDefaults(cloneStyle(app.lastStyle))),
+    // Through `inheritedStyleFor` like `placeActiveAt`: font size follows the
+    // untagged size memory (or `lastStyle.size`), defaults come from preferences,
+    // and everything else inherits `lastStyle`.
+    style: inheritedStyleFor(ln),
     // Never fitted at birth: a box typed onto the page is not on a detected
     // bubble and there is no block to seed a fill from. The user can ask for one
     // from the Inspector once the box is where they want it, which is what
@@ -2258,8 +2396,7 @@ export function visiblePageCenter(p, viewport, frame, zoom = 1) {
 // canvas handing over a `viewportRect()` at mount. That is a change to
 // Canvas.svelte, and this needs no cooperation from it at all, so the query
 // stands until somebody wants the seam for a second reason.
-export function addTextBoxInView() {
-  if (!app.pages.length) return null;
+export function visibleCenterInView() {
   const el = (sel) =>
     typeof document === 'undefined' ? null : (document.querySelector(sel)?.getBoundingClientRect() ?? null);
   // Addressed by page id, because NEITHER canvas mounts one frame: a longstrip
@@ -2273,7 +2410,12 @@ export function addTextBoxInView() {
   // carry the attribute, so there is one selector rather than a branch, and the
   // fallback is for a canvas that is not mounted at all.
   const frame = el(`.page-frame[data-page-id="${page().id}"]`) ?? el('.page-frame');
-  const { x, y } = visiblePageCenter(page(), el('.editor-scroll'), frame, app.zoom);
+  return visiblePageCenter(page(), el('.editor-scroll'), frame, app.zoom);
+}
+
+export function addTextBoxInView() {
+  if (!app.pages.length) return null;
+  const { x, y } = visibleCenterInView();
   return addEmptyBox(x, y);
 }
 
@@ -2343,6 +2485,84 @@ export function duplicateBox(id = app.selectedId) {
   markUnsaved();
   selectBox(b.id);
   return b.id;
+}
+
+// ---------- a box born from the brush board ----------
+// The board's strokes become a box of their own: a free line, a box sized to
+// the ink, `ink.on`, and nothing else - no text, and a style that starts from
+// the defaults rather than from `lastStyle`, because a hand-lettered sound
+// effect is not the previous balloon's dialogue with the words taken out.
+//
+// `w`/`h` and `strokes` are what `boardPlacement` hands back: the strokes are
+// already in the box's own frame. The box is centred on `(imgX, imgY)`, page
+// px, and clamped onto the page the way `addEmptyBox` clamps.
+//
+// One `place` entry, the kind `duplicateBox` records, so undo takes the box and
+// its line out together.
+export function addInkBox({ w, h, strokes, finish }, imgX, imgY, target = null) {
+  if (!app.pages.length) return null;
+  if (isTranslateMode()) return null;
+  // Normalised before anything is written: a list of strokes that all turn
+  // out empty must not leave a ghost box and an orphan queue row behind.
+  const list = (Array.isArray(strokes) ? strokes : []).map(normalizeInkStroke).filter(Boolean);
+  if (!list.length) return null;
+  settleEdits();
+  focusPage(target);
+  const p = target ?? page();
+  const ln = { n: nextFreeLineN(p), type: 'sfx', jp: '', en: '' };
+  p.lines.push(ln);
+  const bw = Math.max(1, Math.round(Number(w) || 0));
+  const bh = Math.max(1, Math.round(Number(h) || 0));
+  const style = applyBoxDefaults(defaultStyle());
+  style.ink = { on: true, strokes: list };
+  // The box's strokes and shadows wrap its ink as one shape (see `drawInk`),
+  // so they are the finish the board was showing and nothing else: a text
+  // box's default outline is a text box's, and none was asked for here.
+  const fin = normalizeFinish(finish);
+  style.strokes = fin.strokes;
+  style.shadows = fin.shadows;
+  const b = {
+    id: 'b' + boxSeq++,
+    lineN: ln.n,
+    text: null,
+    x: clamp(Math.round(imgX - bw / 2), 0, Math.max(0, p.w - bw)),
+    y: clamp(Math.round(imgY - bh / 2), 0, Math.max(0, p.h - bh)),
+    w: bw,
+    h: bh,
+    style,
+    fit: null,
+  };
+  p.boxes.push(b);
+  recordEdit({
+    t: 'place',
+    pageId: p.id,
+    index: p.boxes.length - 1,
+    box: $state.snapshot(b),
+    ...freeLineRecord(p, b),
+  });
+  markUnsaved();
+  selectBox(b.id, { remember: false });
+  return b.id;
+}
+
+// Replace a box's ink with strokes edited on the board. One `style` entry;
+// the box's geometry is left alone, because the strokes come back in the frame
+// they left in and the ink canvas already grows to hold overhang.
+export function setBoxInk(pageId, boxId, strokes) {
+  const p = pageById(pageId);
+  const b = p?.boxes.find((x) => x.id === boxId);
+  if (!b) return false;
+  settleEdits();
+  const before = cloneStyle(b.style);
+  const list = (Array.isArray(strokes) ? strokes : []).map(normalizeInkStroke).filter(Boolean);
+  const ink = { on: list.length > 0, strokes: list };
+  // Applying what is already there is not an edit: no entry, no dirty flag,
+  // or the next undo would rewind nothing visible.
+  if (JSON.stringify(before.ink) === JSON.stringify(ink)) return true;
+  b.style.ink = ink;
+  recordEdit({ t: 'style', pageId, boxId, before, after: cloneStyle(b.style) });
+  markUnsaved();
+  return true;
 }
 
 // ---------- keyboard nudge ----------
@@ -2752,6 +2972,7 @@ function restyleForBulk(boxes) {
     const after = mergeMaskedInto(cloneStyle(before), tpl, mask);
     const geomBefore = fitGeom(b);
     b.style = cloneStyle(after);
+    if (mask?.size) rememberSizeFor(pg, b);
     // A bulk that changes the font, the size or the line height changes what
     // every target box has to fit. It costs no extra undo step: the item carries
     // the geometry either side of the fit, so the one entry the apply writes

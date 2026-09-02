@@ -127,6 +127,41 @@ describe('command records', () => {
     expect(history.canUndo).toBe(false);
   });
 
+  it('undoes a placeMany batch placement and redoes it', () => {
+    const p = page();
+    p.lines = [
+      { n: 1, placed: true },
+      { n: 2, placed: true },
+    ];
+    const b10 = { id: 'b10', lineN: 1, text: null, x: 10, y: 10, w: 100, h: 50, style: null };
+    const b11 = { id: 'b11', lineN: 2, text: null, x: 20, y: 20, w: 100, h: 50, style: null };
+    p.boxes.push(b10, b11);
+    record({
+      t: 'placeMany',
+      pageId: 1,
+      items: [
+        { index: 2, box: b10 },
+        { index: 3, box: b11 },
+      ],
+      activeBefore: 1,
+      activeAfter: null,
+    });
+    expect(history.canUndo).toBe(true);
+    undo();
+    expect(p.boxes.some((b) => b.id === 'b10')).toBe(false);
+    expect(p.boxes.some((b) => b.id === 'b11')).toBe(false);
+    expect(p.lines[0].placed).toBe(false);
+    expect(p.lines[1].placed).toBe(false);
+    expect(p.activeLineN).toBe(1);
+
+    redo();
+    expect(p.boxes.some((b) => b.id === 'b10')).toBe(true);
+    expect(p.boxes.some((b) => b.id === 'b11')).toBe(true);
+    expect(p.lines[0].placed).toBe(true);
+    expect(p.lines[1].placed).toBe(true);
+    expect(p.activeLineN).toBe(null);
+  });
+
   // An entry belongs to one page, and a bulk entry is no exception. It used to
   // resolve each item through the item's own page id so that a chapter-wide tag
   // apply could be undone from wherever it was pressed - which meant an entry on

@@ -345,28 +345,15 @@ pub struct OcrEngine {
     vocab: Vec<String>,
 }
 
-/// Loads an ONNX session with optional CoreML execution provider.
-///
-/// Note: CoreML is enabled for encoder only; decoder dynamic sequence lengths cause CoreML recompile errors.
-fn load_session(model_path: &Path, coreml: bool) -> ort::Result<Session> {
-    #[cfg_attr(target_os = "macos", allow(unused_mut))]
-    let mut builder = Session::builder()?;
-    #[cfg(target_os = "macos")]
-    let mut builder = if coreml {
-        builder.with_execution_providers([ort::ep::CoreML::default().build()])?
-    } else {
-        builder
-    };
-    #[cfg(not(target_os = "macos"))]
-    let _ = coreml;
-    builder.commit_from_file(model_path)
-}
-
 impl OcrEngine {
     /// Loads `encoder_model.onnx`, `decoder_model.onnx` and `vocab.txt` from model directory.
+    ///
+    /// The encoder sees one fixed input shape; the decoder's token sequence
+    /// grows every step, so it only goes to providers that handle dynamic
+    /// shapes without recompiling (see `accel`).
     pub fn load(dir: &Path) -> ort::Result<Self> {
-        let encoder = load_session(&dir.join("encoder_model.onnx"), true)?;
-        let decoder = load_session(&dir.join("decoder_model.onnx"), false)?;
+        let (encoder, _) = super::accel::open(&dir.join("encoder_model.onnx"), false)?;
+        let (decoder, _) = super::accel::open(&dir.join("decoder_model.onnx"), true)?;
         let vocab_path = dir.join("vocab.txt");
         let vocab_text = std::fs::read_to_string(&vocab_path)
             .map_err(|e| ort::Error::new(format!("{}: {e}", vocab_path.display())))?;

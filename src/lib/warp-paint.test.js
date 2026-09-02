@@ -11,7 +11,7 @@ import {
   MAX_DEVICE,
   MAX_DEVICE_AREA,
 } from './warp-paint.js';
-import { identityMesh, warpPoint, solveHomography, applyHomography } from './warp.js';
+import { identityMesh, warpPoint, affineWarpPoint, solveHomography, applyHomography } from './warp.js';
 import { renderPageCanvas, paintWarpedBox } from './exporter.js';
 import { loadProjectPages, app } from './store.svelte.js';
 import { normalizeStyle } from './data.js';
@@ -274,7 +274,11 @@ function canvasOf(w0, h0) {
       const size = parseFloat(/(\d+(?:\.\d+)?)px/.exec(this.font)?.[1] ?? '10');
       const wid = String(text).length * size * 0.6;
       const left = this.textAlign === 'center' ? x - wid / 2 : this.textAlign === 'right' ? x - wid : x;
-      const top = this.textBaseline === 'middle' ? y - size / 2 : y;
+      // 'alphabetic' is what the straight-line painter uses, and under node the
+      // baseline sits 0.8 of the size below the em square's top (measure.js's
+      // stand-in ascent), so the block starts that far above it.
+      const top =
+        this.textBaseline === 'middle' ? y - size / 2 : this.textBaseline === 'alphabetic' ? y - size * 0.8 : y;
       this.fillRect(left, top, wid, size);
     },
     strokeText() {},
@@ -451,6 +455,9 @@ describe('warpPlan', () => {
     const pts = identityMesh(2, 2, W, H).map((p, i) => (i === 4 ? [70, 20] : p));
     const plan = warpPlan({ on: true, cols: 2, rows: 2, pts }, W, H);
     expect(plan.projective).toBe(false);
+    // And subdivides each mesh cell, because the surface between the dots is
+    // curved: `WARP_SUB` per side, spread over two cells.
+    expect(plan.tris).toHaveLength(2 * WARP_SUB * WARP_SUB);
     // Every control point is somewhere in the destination, to the bit.
     const flat = plan.tris.flatMap((t) => t.dst).map((p) => `${p[0]},${p[1]}`);
     for (const p of pts) expect(flat).toContain(`${p[0]},${p[1]}`);
@@ -458,7 +465,8 @@ describe('warpPlan', () => {
 
   it('splits every cell into two triangles that share the cell diagonal', () => {
     const pts = identityMesh(2, 2, W, H).map((p, i) => (i === 4 ? [70, 20] : p));
-    const plan = warpPlan({ on: true, cols: 2, rows: 2, pts }, W, H);
+    // One virtual cell per mesh cell, so the cells counted are the mesh's own.
+    const plan = warpPlan({ on: true, cols: 2, rows: 2, pts }, W, H, null, { sub: 2 });
     // No band: the source rect is the box rect, so 2x2 cells and no more.
     expect(plan.tris).toHaveLength(8);
     for (let i = 0; i < plan.tris.length; i += 2) {
@@ -475,7 +483,7 @@ describe('warpPlan', () => {
 
   it('adds a ring of cells for the footprint the box overflows into', () => {
     const rect = { x: -PAD, y: -PAD, w: W + PAD * 2, h: H + PAD * 2 };
-    const plan = warpPlan({ on: true, cols: 2, rows: 2, pts: identityMesh(2, 2, W, H).map((p, i) => (i === 4 ? [70, 20] : p)) }, W, H, rect);
+    const plan = warpPlan({ on: true, cols: 2, rows: 2, pts: identityMesh(2, 2, W, H).map((p, i) => (i === 4 ? [70, 20] : p)) }, W, H, rect, { sub: 2 });
     // Two lines added on each axis, so 4x4 cells instead of 2x2.
     expect(plan.tris).toHaveLength(32);
     const srcPts = plan.tris.flatMap((t) => t.src).map((p) => `${p[0]},${p[1]}`);
@@ -504,10 +512,14 @@ describe('warpPlan', () => {
     const mid = dst.find(({ src }) => src[0] === 50 && src[1] === 50);
     expect(mid.p[0]).toBeCloseTo(40, 6);
     expect(mid.p[1]).toBeCloseTo(40, 6);
-    // Which is not what the affine reading of the same quad gives.
+    // Which is what the read side says too, and not what the two triangles
+    // would have given.
     const [ax, ay] = warpPoint(pts, 1, 1, W, H, 50, 50);
-    expect(ax).toBeCloseTo(100 / 3, 6);
-    expect(ay).toBeCloseTo(100 / 3, 6);
+    expect(ax).toBeCloseTo(40, 6);
+    expect(ay).toBeCloseTo(40, 6);
+    const [tx, ty] = affineWarpPoint(pts, 1, 1, W, H, 50, 50);
+    expect(tx).toBeCloseTo(100 / 3, 6);
+    expect(ty).toBeCloseTo(100 / 3, 6);
   });
 
   it('stays affine for a parallelogram, where both maps are the same map', () => {
@@ -686,9 +698,9 @@ describe('warpBoxCanvas', () => {
     expect(alphaAt(out.canvas, 10 + out.ox, 135 + out.oy)).toBe(0);
   });
 
-  it('carries a piecewise-affine grid the way its own triangles say', () => {
-    // A 2x2 mesh, so the mapping is `warpPoint`'s, and the probes are read
-    // straight off it.
+  it('carries a grid the way its own surface says', () => {
+    // A 2x2 mesh, so the mapping is the bicubic surface, and the probes are
+    // read straight off `warpPoint`.
     const pts = identityMesh(2, 2, W, H).map((p, i) => (i === 4 ? [30, 60] : p));
     const out = warpBoxCanvas(quadTexture(), warpArgs({ on: true, cols: 2, rows: 2, pts }));
     for (const [sx, sy, want] of [[20, 20, RED], [80, 20, GREEN], [80, 80, YELLOW]]) {

@@ -11,6 +11,8 @@ import {
   applyHomography,
   isParallelogram,
   warpActive,
+  meshMap,
+  affineWarpPoint,
 } from './warp.js';
 import { normalizeStyle, normalizeWarp, defaultStyle } from './data.js';
 
@@ -187,46 +189,53 @@ describe('warpPoint', () => {
     expect(warpPoint(BR, 1, 1, W, H, 0, 100)).toEqual([0, 100]);
   });
 
-  // (80, 20) sits in the upper-right half (v <= u), so it is read against
-  // (TL, TR, BR) with barycentric weights 0.2 / 0.6 / 0.2:
+  // The dragged corner makes a quad that is not a parallelogram, so the four
+  // handles read as a perspective: the same homography the painter draws
+  // through, not the two triangles that would crease along the diagonal.
+  it('reads a four-handle quad through the homography the painter draws', () => {
+    const src = identityMesh(1, 1, W, H);
+    const m = solveHomography([src[0], src[1], src[3], src[2]], [BR[0], BR[1], BR[3], BR[2]]);
+    for (const [x, y] of [[80, 20], [20, 80], [50, 50]]) {
+      const want = applyHomography(m, x, y);
+      const got = warpPoint(BR, 1, 1, W, H, x, y);
+      expect(got[0]).toBeCloseTo(want[0], 10);
+      expect(got[1]).toBeCloseTo(want[1], 10);
+    }
+    // Which is NOT the triangles' answer in the middle of the cell - (60, 70)
+    // is where the diagonal's midpoint would land, and the crease with it.
+    const [cx, cy] = warpPoint(BR, 1, 1, W, H, 50, 50);
+    expect(Math.abs(cx - 60) + Math.abs(cy - 70)).toBeGreaterThan(1);
+    expect(meshMap(BR, 1, 1, W, H).kind).toBe('projective');
+  });
+
+  it('reads a parallelogram through the affine map, which is exact there', () => {
+    const shear = [[0, 0], [100, 0], [30, 100], [130, 100]];
+    expect(meshMap(shear, 1, 1, W, H).kind).toBe('affine');
+    const [x, y] = warpPoint(shear, 1, 1, W, H, 50, 50);
+    expect(x).toBeCloseTo(65, 10);
+    expect(y).toBeCloseTo(50, 10);
+  });
+
+  // The plain reading, kept for the two cases where it is the honest one and
+  // for the painter's fallback. (80, 20) sits in the upper-right half (v <= u),
+  // so it is read against (TL, TR, BR) with barycentric weights 0.2 / 0.6 / 0.2:
   //   0.6 * (100, 0) + 0.2 * (120, 140) = (84, 28)
-  it('interpolates a point in the upper-right triangle by its barycentrics', () => {
-    const [x, y] = warpPoint(BR, 1, 1, W, H, 80, 20);
-    expect(x).toBeCloseTo(84, 10);
-    expect(y).toBeCloseTo(28, 10);
-  });
-
-  // (20, 80) is on the other side of the diagonal, read against (TL, BR, BL)
-  // with weights 0.2 / 0.2 / 0.6:
+  // and (20, 80) against (TL, BR, BL) with weights 0.2 / 0.2 / 0.6:
   //   0.2 * (120, 140) + 0.6 * (0, 100) = (24, 88)
-  it('interpolates a point in the lower-left triangle by its barycentrics', () => {
-    const [x, y] = warpPoint(BR, 1, 1, W, H, 20, 80);
-    expect(x).toBeCloseTo(24, 10);
-    expect(y).toBeCloseTo(88, 10);
-  });
-
-  it('agrees with itself along the diagonal, whichever half claims the point', () => {
-    // The cut is at u == v; the point on it must map the same from both sides.
-    const on = warpPoint(BR, 1, 1, W, H, 50, 50);
-    const justAbove = warpPoint(BR, 1, 1, W, H, 50.0001, 50);
-    const justBelow = warpPoint(BR, 1, 1, W, H, 50, 50.0001);
-    expect(on[0]).toBeCloseTo(60, 10);
-    expect(on[1]).toBeCloseTo(70, 10);
-    expect(justAbove[0]).toBeCloseTo(on[0], 3);
-    expect(justBelow[0]).toBeCloseTo(on[0], 3);
-    expect(justAbove[1]).toBeCloseTo(on[1], 3);
-    expect(justBelow[1]).toBeCloseTo(on[1], 3);
-  });
-
-  it('resolves a point outside the grid against the nearest cell', () => {
+  it('affineWarpPoint interpolates each triangle by its barycentrics', () => {
+    expect(affineWarpPoint(BR, 1, 1, W, H, 80, 20)[0]).toBeCloseTo(84, 10);
+    expect(affineWarpPoint(BR, 1, 1, W, H, 80, 20)[1]).toBeCloseTo(28, 10);
+    expect(affineWarpPoint(BR, 1, 1, W, H, 20, 80)[0]).toBeCloseTo(24, 10);
+    expect(affineWarpPoint(BR, 1, 1, W, H, 20, 80)[1]).toBeCloseTo(88, 10);
     // (-50, 0) is left of the only cell, and left of the diagonal's line, so it
-    // is read against the lower-left triangle (TL, BR, BL) and carries that
-    // triangle's stretch outwards: x' = 1.2x, y' = 0.4x + y.
-    const [x, y] = warpPoint(BR, 1, 1, W, H, -50, 0);
-    expect(x).toBeCloseTo(-60, 10);
-    expect(y).toBeCloseTo(-20, 10);
-    // The extension is continuous with the inside: a step across the box's edge
-    // is a step, not a jump.
+    // is read against the lower-left triangle and carries that triangle's
+    // stretch outwards: x' = 1.2x, y' = 0.4x + y.
+    expect(affineWarpPoint(BR, 1, 1, W, H, -50, 0)[0]).toBeCloseTo(-60, 10);
+    expect(affineWarpPoint(BR, 1, 1, W, H, -50, 0)[1]).toBeCloseTo(-20, 10);
+  });
+
+  it('resolves a point outside the grid continuously with the inside', () => {
+    // A step across the box's edge is a step, not a jump.
     const inside = warpPoint(BR, 1, 1, W, H, 1e-6, 60);
     const outside = warpPoint(BR, 1, 1, W, H, -1e-6, 60);
     expect(outside[0]).toBeCloseTo(inside[0], 4);
@@ -244,20 +253,18 @@ describe('warpPoint', () => {
 });
 
 describe('resampleMesh', () => {
-  // 1x1 -> 2x2 over the worked example. Corners are kept; each edge midpoint is
-  // the plain average of the two control points it sits between; the centre
-  // lands on the diagonal, so it is the average of TL and BR.
+  // 1x1 -> 2x2 over the worked example. Corners are kept, and every new point
+  // is where the perspective puts the identity point - so the handles the user
+  // gains sit ON the picture they were already looking at.
   it('keeps the deformed shape when the grid gets finer', () => {
     const out = resampleMesh(BR, 1, 1, 2, 2, W, H);
     expect(out).toHaveLength(9);
-    const want = [
-      [0, 0], [50, 0], [100, 0],
-      [0, 50], [60, 70], [110, 70],
-      [0, 100], [60, 120], [120, 140],
-    ];
-    out.forEach(([x, y], k) => {
-      expect(x, `x of point ${k}`).toBeCloseTo(want[k][0], 10);
-      expect(y, `y of point ${k}`).toBeCloseTo(want[k][1], 10);
+    expect(out[0]).toEqual([0, 0]);
+    expect(out[8]).toEqual([120, 140]);
+    identityMesh(2, 2, W, H).forEach(([x, y], k) => {
+      const want = warpPoint(BR, 1, 1, W, H, x, y);
+      expect(out[k][0], `x of point ${k}`).toBeCloseTo(want[0], 10);
+      expect(out[k][1], `y of point ${k}`).toBeCloseTo(want[1], 10);
     });
   });
 
@@ -314,9 +321,9 @@ describe('meshBounds', () => {
 });
 
 describe('the warp style block', () => {
-  it('defaults to off, one cell, and no points', () => {
-    expect(defaultStyle().warp).toEqual({ on: false, cols: 1, rows: 1, pts: [] });
-    expect(normalizeStyle({}).warp).toEqual({ on: false, cols: 1, rows: 1, pts: [] });
+  it('defaults to off, the 3x3 mesh, and no points', () => {
+    expect(defaultStyle().warp).toEqual({ on: false, cols: 3, rows: 3, pts: [] });
+    expect(normalizeStyle({}).warp).toEqual({ on: false, cols: 3, rows: 3, pts: [] });
   });
 
   it('keeps a well-formed mesh as written', () => {
@@ -328,10 +335,10 @@ describe('the warp style block', () => {
     expect(w.pts[0]).not.toBe(BR[0]);
   });
 
-  it('clamps the grid to 1..8 and rounds it to whole cells', () => {
+  it('clamps the grid to 1..24, rounds it to whole cells, and defaults an unreadable one', () => {
     expect(normalizeWarp({ cols: 0, rows: -3 })).toMatchObject({ cols: 1, rows: 1 });
-    expect(normalizeWarp({ cols: 99, rows: 8.4 })).toMatchObject({ cols: 8, rows: 8 });
-    expect(normalizeWarp({ cols: 2.6, rows: 'nope' })).toMatchObject({ cols: 3, rows: 1 });
+    expect(normalizeWarp({ cols: 99, rows: 8.4 })).toMatchObject({ cols: 24, rows: 8 });
+    expect(normalizeWarp({ cols: 2.6, rows: 'nope' })).toMatchObject({ cols: 3, rows: 3 });
   });
 
   it('resets a mesh of the wrong length to identity rather than repairing it', () => {
@@ -502,6 +509,78 @@ describe('isParallelogram', () => {
   it('reads a mesh it cannot understand as one, so the caller skips the solve', () => {
     expect(isParallelogram(null)).toBe(true);
     expect(isParallelogram([[0, 0], [1, 0], [NaN, 1]])).toBe(true);
+  });
+});
+
+describe('the bicubic surface a grid draws through', () => {
+  const id = identityMesh(3, 3, W, H);
+  // One interior handle pulled down and right.
+  const bent = id.map((p, k) => (k === 5 ? [45, 50] : p));
+
+  it('is the map for any grid, and none at all for an untouched one', () => {
+    expect(meshMap(bent, 3, 3, W, H).kind).toBe('smooth');
+    expect(meshMap(id, 3, 3, W, H)).toBeNull();
+    expect(meshMap(bent, 3, 3, 0, 0)).toBeNull();
+  });
+
+  it('passes through every control point exactly', () => {
+    id.forEach(([x, y], k) => {
+      expect(warpPoint(bent, 3, 3, W, H, x, y)).toEqual(bent[k]);
+    });
+  });
+
+  it('reproduces an affine deformation exactly, so a sheared grid stays flat', () => {
+    const aff = id.map(([x, y]) => [1.5 * x + 0.3 * y + 10, 0.2 * x + 0.8 * y - 5]);
+    for (const [x, y] of [[13, 27], [50, 50], [99, 1], [33.3, 66.6], [-20, 50], [120, 130]]) {
+      const [px, py] = warpPoint(aff, 3, 3, W, H, x, y);
+      expect(px).toBeCloseTo(1.5 * x + 0.3 * y + 10, 9);
+      expect(py).toBeCloseTo(0.2 * x + 0.8 * y - 5, 9);
+    }
+  });
+
+  it('has no fold at a cell edge: the slope is the same on both sides of it', () => {
+    const d = 1e-4;
+    const edge = W / 3;
+    const f = (x) => warpPoint(bent, 3, 3, W, H, x, 20);
+    const left = (f(edge)[0] - f(edge - d)[0]) / d;
+    const right = (f(edge + d)[0] - f(edge)[0]) / d;
+    expect(left).toBeCloseTo(right, 2);
+    // Whereas the plain triangle reading of the same mesh does fold there.
+    const g = (x) => affineWarpPoint(bent, 3, 3, W, H, x, 20);
+    const aLeft = (g(edge)[0] - g(edge - d)[0]) / d;
+    const aRight = (g(edge + d)[0] - g(edge)[0]) / d;
+    expect(Math.abs(aLeft - aRight)).toBeGreaterThan(0.05);
+  });
+
+  it('bends between the dots rather than cutting straight across the cell', () => {
+    // The middle of the top-left cell sits between a moved node and three
+    // unmoved ones; the surface curves towards the moved one.
+    const [x, y] = warpPoint(bent, 3, 3, W, H, W / 6, H / 6);
+    expect(x).toBeGreaterThan(W / 6);
+    expect(y).toBeGreaterThan(H / 6);
+    // But not as far as the bilinear average of the four corners would say -
+    // the cubic is pulled back by the unmoved nodes past them.
+    expect(x).toBeLessThan((W / 6 + 45 / 2) / 1);
+  });
+
+  it('continues straight past the edge of the grid, along the surface’s own tangent', () => {
+    const g = (x) => warpPoint(bent, 3, 3, W, H, x, 50)[0];
+    const far = (g(-10) - g(-20)) / 10;
+    const near = (g(-1e-3) - g(-2e-3)) / 1e-3;
+    const inside = (g(1e-3) - g(0)) / 1e-3;
+    expect(far).toBeCloseTo(near, 6);
+    expect(near).toBeCloseTo(inside, 3);
+    // And never NaN, however far out.
+    expect(Number.isFinite(warpPoint(bent, 3, 3, W, H, -5000, 9000)[0])).toBe(true);
+  });
+
+  it('carries a drag onto a finer grid and back to a coarser one', () => {
+    const fine = resampleMesh(bent, 3, 3, 6, 6, W, H);
+    expect(fine).toHaveLength(49);
+    // Every old node is still exactly where it was.
+    expect(fine[2 * 7 + 2]).toEqual([45, 50]);
+    // A 1x1 keeps only the corners, and they never moved.
+    expect(resampleMesh(bent, 3, 3, 1, 1, W, H)).toEqual(identityMesh(1, 1, W, H));
   });
 });
 

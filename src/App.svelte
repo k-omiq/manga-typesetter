@@ -6,6 +6,7 @@
 <script>
   import EditorRoot from './lib/editor/EditorRoot.svelte';
   import FontModal from './lib/FontModal.svelte';
+  import BrushModal from './lib/BrushModal.svelte';
   import SettingsModal from './lib/SettingsModal.svelte';
   import ExportDialog from './lib/ExportDialog.svelte';
   import Toast from './lib/Toast.svelte';
@@ -19,6 +20,7 @@
   import { copyStyle, pasteStyle } from './lib/presets.svelte.js';
   import { dispatchShortcut, registerShortcutHandlers } from './lib/shortcuts.svelte.js';
   import { setInspectorTab, cycleInspectorTab } from './lib/inspector-tabs.svelte.js';
+  import { brushTool, closeBrushManager } from './lib/brush-tool.svelte.js';
   import { initHistory, undo, redo } from './lib/editor/history.svelte.js';
   import { flushPanels } from './lib/editor/panels.svelte.js';
   import { switchHistoryPage } from './lib/editor/history-file.svelte.js';
@@ -202,7 +204,6 @@
         changed = true;
       }
     }
-    // Apply as application menu if modified.
     if (changed) await menu.setAsAppMenu();
   }
 
@@ -346,6 +347,7 @@
       if (app.bulk.active) return closeBulk();
       if (settingsOpen) return (settingsOpen = false);
       if (fontModalOpen) return (fontModalOpen = false);
+      if (brushTool.manager) return closeBrushManager();
       return deselect();
     }
     // Suppress global editor shortcuts while a modal overlay is open. Markup
@@ -449,6 +451,7 @@
   chapterId={sourcesRef.chapterId}
 />
 <FontModal bind:open={fontModalOpen} />
+<BrushModal />
 <SettingsModal bind:open={settingsOpen} />
 <ExportDialog />
 <Toast />

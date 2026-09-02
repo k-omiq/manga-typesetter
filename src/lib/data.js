@@ -147,7 +147,7 @@ export function applyBoxDefaults(style) {
   // come through here - which is the same line the comment above draws.
   style.path = { on: false, pts: [] };
   style.clip = { on: false, mode: 'exclude', brushSize: style.clip?.brushSize ?? 20, shapes: [] };
-  style.warp = { on: false, cols: 1, rows: 1, pts: [] };
+  style.warp = { on: false, cols: WARP_MESH_DEFAULT, rows: WARP_MESH_DEFAULT, pts: [] };
   style.ink = { on: false, strokes: [] };
   return style;
 }
@@ -258,7 +258,7 @@ export function defaultStyle() {
     // pass. `warp.js` owns the geometry; this is only its storage.
     // Not to be confused with the Effects panel's `warp` sub-tab, which is the
     // arc/circle/path group - this is the `transform` sub-tab.
-    warp: { on: false, cols: 1, rows: 1, pts: [] },
+    warp: { on: false, cols: WARP_MESH_DEFAULT, rows: WARP_MESH_DEFAULT, pts: [] },
     // Text closed into a full circle (see `circleLayout`): the ring's size
     // comes from the text's own advance, `angle` (degrees, clockwise) turns
     // it, `inside` flips the text onto the inner face - the bottom arc of a
@@ -333,6 +333,19 @@ const hex = (v, d) => (typeof v === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0
 export function normalizeStroke(x) {
   return { color: hex(x?.color, STROKE_DEF.color), width: Math.max(0, num(x?.width, STROKE_DEF.width)), opacity: Math.min(1, Math.max(0, num(x?.opacity, 1))) };
 }
+// A box's strokes and shadows together, copied and normalised: the finish a
+// sound effect's ink wears (see `drawInk`), as the brush tool carries it and
+// as `addInkBox` writes it. Zero-width strokes are dropped, as `normalizeStyle`
+// drops them.
+export function normalizeFinish(finish) {
+  return {
+    strokes: (Array.isArray(finish?.strokes) ? finish.strokes : [])
+      .map(normalizeStroke)
+      .filter((k) => k.width > 0),
+    shadows: (Array.isArray(finish?.shadows) ? finish.shadows : []).map(normalizeShadow),
+  };
+}
+
 export function normalizeShadow(x) {
   return {
     x: num(x?.x, SHADOW_DEF.x),
@@ -372,6 +385,9 @@ export function normalizeInkStroke(src) {
     on: !!t?.on,
     len: Math.min(500, Math.max(0, num(t?.len, d))),
     ratio: Math.min(100, Math.max(0, num(t?.ratio, 60))),
+    // 'pct' reads `len` as a percentage of the size; anything else is px,
+    // which is what every stroke saved before the mode existed meant.
+    mode: t?.mode === 'pct' ? 'pct' : 'px',
   });
   return {
     brush: typeof src.brush === 'string' && src.brush ? src.brush : 'round',
@@ -384,6 +400,20 @@ export function normalizeInkStroke(src) {
     hardness: Math.min(100, Math.max(0, num(src.hardness, 100))),
     angle: ((num(src.angle, 0) % 360) + 360) % 360,
     angleJitter: Math.min(100, Math.max(0, num(src.angleJitter, 0))),
+    // The three tip behaviours read like the watercolour edge below: only a
+    // literal true switches one on, so a stroke saved before it existed keeps
+    // the fixed, stamped, alpha-over tip it was drawn with.
+    followDir: src.followDir === true,
+    ribbon: src.ribbon === true,
+    darkenTips: src.darkenTips === true,
+    // A tip cycle is a list of brush ids; anything that is not one, or that
+    // holds fewer than two, is no cycle and the stroke draws its one brush.
+    ...(Array.isArray(src.tips) && src.tips.filter((t) => typeof t === 'string' && t).length > 1
+      ? {
+        tips: src.tips.filter((t) => typeof t === 'string' && t),
+        tipOrder: ['repeat', 'reverse', 'once', 'random'].includes(src.tipOrder) ? src.tipOrder : 'repeat',
+      }
+      : null),
     // Flatness squashes the tip across its angle. 1 is round; 0 would be a
     // line with no area, so the floor is a hair above it.
     flatness: Math.min(1, Math.max(0.01, num(src.flatness, 1))),
@@ -399,6 +429,8 @@ export function normalizeInkStroke(src) {
     // and any export scale. Past 20 px the rim stops being a rim.
     waterEdgeWidth: Math.min(20, Math.max(1, num(src.waterEdgeWidth, 4))),
     waterEdgePower: Math.min(1, Math.max(0, num(src.waterEdgePower, 0.5))),
+    waterEdgeDark: Math.min(1, Math.max(0, num(src.waterEdgeDark, 0))),
+    waterEdgeBlur: Math.min(20, Math.max(0, num(src.waterEdgeBlur, 0))),
     taperIn: taper(src.taperIn, 20),
     taperOut: taper(src.taperOut, 20),
     // The seed makes angle jitter repeatable: the same stroke must draw the
@@ -408,13 +440,19 @@ export function normalizeInkStroke(src) {
   };
 }
 // How coarse a warp mesh may get. One cell is the four corner handles (free
-// transform) and is the floor because a mesh with no cell is not a mesh; eight
-// is the ceiling because 9x9 = 81 handles is already more than the gizmo can
-// show without them touching. Stated here, beside the sanitiser that enforces
-// them, so the panel's steppers and a hand-edited file meet the same limits -
-// `warp.js` itself imposes none, being pure geometry.
+// transform) and is the floor because a mesh with no cell is not a mesh.
+// Twenty-four is the ceiling: the liquify tool builds meshes far finer than a
+// hand would drag, and past this the triangle count per frame stops paying
+// for itself. The gizmo shows handles only up to `HANDLE_GRID_MAX` (see
+// warp-gizmo.js); a finer mesh draws as hairlines. Stated here, beside the
+// sanitiser that enforces them, so the panel's steppers and a hand-edited file
+// meet the same limits - `warp.js` itself imposes none, being pure geometry.
 export const WARP_MIN_GRID = 1;
-export const WARP_MAX_GRID = 8;
+export const WARP_MAX_GRID = 24;
+// The grid a box starts with, and the one the panel's Mesh mode returns to from
+// Free: three cells a side, which is CSP's own lattice default (four points a
+// side), coarse enough to drag by hand and fine enough to bend a word.
+export const WARP_MESH_DEFAULT = 3;
 
 // The mesh, gated. `pts` is all-or-nothing, unlike a mask shape's points or an
 // ink stroke's: a mesh missing one control point is not a coarser mesh, it is a
@@ -428,7 +466,7 @@ export const WARP_MAX_GRID = 8;
 // silently drop a state they set; with no points it simply draws unwarped,
 // which is what an untouched warp does too.
 export function normalizeWarp(src) {
-  const grid = (v) => Math.min(WARP_MAX_GRID, Math.max(WARP_MIN_GRID, Math.round(num(v, 1))));
+  const grid = (v) => Math.min(WARP_MAX_GRID, Math.max(WARP_MIN_GRID, Math.round(num(v, WARP_MESH_DEFAULT))));
   const cols = grid(src?.cols);
   const rows = grid(src?.rows);
   const want = (cols + 1) * (rows + 1);

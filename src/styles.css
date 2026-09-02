@@ -397,6 +397,7 @@ button,input,select{ font:inherit; color:inherit; font-variant-numeric:tabular-n
    `--panel` and not `--surface`: it sits over the panel's own ground, not over
    a row. */
 .qadd{
+  display:flex; gap:6px;
   position:sticky; bottom:0; z-index:1;
   margin:2px -6px -6px; padding:7px 6px calc(6px + env(safe-area-inset-bottom, 0px));
   background:var(--panel); border-top:1px solid var(--line);

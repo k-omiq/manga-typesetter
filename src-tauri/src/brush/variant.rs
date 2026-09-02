@@ -67,6 +67,21 @@ const WANTED: &[&str] = &[
     "BrushWaterEdgeRadius",
     "BrushWaterEdgeRadiusUnit",
     "BrushWaterEdgeAlphaPower",
+    "BrushWaterEdgeValuePower",
+    "BrushWaterEdgeBlur",
+    "BrushWaterEdgeBlurUnit",
+    // Stabilization proper. `FlickerReduction` is CSP's 手ブレ補正 - the live
+    // smoothing slider - and `BrushRevision` is 後補正, Post correction, which
+    // is why the two below it (`BrushRevisionBySpeed`, `BrushRevisionBezier`)
+    // are the Post correction sub-options in the manual.
+    "FlickerReduction",
+    "BrushRevisionBySpeed",
+    "BrushRotationEffector",
+    "BrushRibbon",
+    "BrushBlendPatternByDarken",
+    "BrushInOutType",
+    "BrushInOutBySpeed",
+    "BrushPatternOrderType",
 ];
 
 /// The one BLOB column read here: the dynamics that modulate `BrushSize`, in
@@ -84,10 +99,48 @@ const ENGINE_MIN_W: f64 = 0.08;
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Taper {
     pub on: bool,
-    /// Page px.
+    /// Page px, or percent of the brush size when `mode` is `pct`.
     pub len: f32,
     /// Percent of full width the end tapers away, 0-100.
     pub ratio: f32,
+    /// CSP's Specification method: `px` is Specify length, `pct` is By
+    /// percentage. Fade is read as a percentage taper over the whole stroke.
+    pub mode: TaperMode,
+}
+
+/// CSP's Repeat method: the order a brush with several tip images cycles
+/// through them. `BrushPatternOrderType` in the order the manual lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TipOrder {
+    /// 0: left to right, round and round.
+    Repeat,
+    /// 1: left to right then back.
+    Reverse,
+    /// 2: Do not repeat - the last tip stays once the run is used up.
+    Once,
+    /// 3: Random.
+    Random,
+}
+
+impl TipOrder {
+    fn from_code(code: i64) -> Option<Self> {
+        match code {
+            0 => Some(TipOrder::Repeat),
+            1 => Some(TipOrder::Reverse),
+            2 => Some(TipOrder::Once),
+            3 => Some(TipOrder::Random),
+            _ => None,
+        }
+    }
+}
+
+/// How a taper's length is stated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaperMode {
+    Px,
+    Pct,
 }
 
 /// Corner preservation: vertices turning by more than `deg` are exempt from the
@@ -140,18 +193,49 @@ pub struct BrushSettings {
     pub angle: f32,
     /// Percent of a half turn of random rotation per stamp, 0-100.
     pub angle_jitter: f32,
+    /// CSP's Direction "Direction of line". Never set from a file: the low
+    /// bits of `BrushRotationEffector` are 3 in every corpus brush, tip
+    /// shape regardless, so they cannot be the switch, and a dry brush with a
+    /// fixed bearing would be wrecked by a guess. The letterer's toggle.
+    pub follow_dir: bool,
+    /// CSP's Stroke "Ribbon": the tip laid along the stroke as one band.
+    pub ribbon: bool,
+    /// CSP's Stroke "Blend brush tips with Darken".
+    pub darken_tips: bool,
+    /// Every tip image the sub tool cycles through, as the ids of the brushes
+    /// they were installed as, in file order and including this one. Empty -
+    /// and then absent from the JSON - for a brush with one tip, which is what
+    /// the picker's spread wants: a single-tip brush must not carry an empty
+    /// list that stomps nothing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tips: Vec<String>,
+    /// CSP's Repeat method for those tips.
+    pub tip_order: TipOrder,
     /// Tip squash across its short axis, 0-1, where 1 is unsquashed.
     pub flatness: f32,
     pub antialias: bool,
     pub taper_in: Taper,
     pub taper_out: Taper,
+    /// CSP's Starting and ending by speed.
+    pub taper_by_speed: bool,
     pub water_edge: bool,
     /// Px, 1-20.
     pub water_edge_width: f32,
-    /// 0-1.
+    /// 0-1, CSP's Opacity.
     pub water_edge_power: f32,
-    /// Stabilisation window, 0-100.
+    /// 0-1, CSP's Darkness.
+    pub water_edge_dark: f32,
+    /// Px, 0-20, CSP's Blurring width.
+    pub water_edge_blur: f32,
+    /// Stabilisation window, 0-100: CSP's Stabilization (`FlickerReduction`).
     pub stabilise: f32,
+    /// Post correction, 0-100: CSP's `BrushRevision`. Optional the way `dyn`
+    /// is - a file that has the column sends it, one that does not sends no
+    /// key and leaves the letterer's own slider alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_correct: Option<f32>,
+    /// CSP's Adjust by speed under Post correction.
+    pub post_by_speed: bool,
     pub sharp_angles: SharpAngles,
     /// The size dynamics, out of the `BrushSizeEffector` blob.
     ///
@@ -175,14 +259,24 @@ impl Default for BrushSettings {
             hardness: 100.0,
             angle: 0.0,
             angle_jitter: 0.0,
+            follow_dir: false,
+            ribbon: false,
+            darken_tips: false,
+            tips: Vec::new(),
+            tip_order: TipOrder::Repeat,
             flatness: 1.0,
             antialias: true,
-            taper_in: Taper { on: true, len: 20.0, ratio: 60.0 },
-            taper_out: Taper { on: true, len: 20.0, ratio: 60.0 },
+            taper_in: Taper { on: true, len: 20.0, ratio: 60.0, mode: TaperMode::Px },
+            taper_out: Taper { on: true, len: 20.0, ratio: 60.0, mode: TaperMode::Px },
+            taper_by_speed: false,
             water_edge: false,
             water_edge_width: 4.0,
             water_edge_power: 0.5,
+            water_edge_dark: 0.0,
+            water_edge_blur: 0.0,
             stabilise: 12.0,
+            post_correct: None,
+            post_by_speed: false,
             sharp_angles: SharpAngles { on: false, deg: 45.0 },
             // NOT `defaultBrushSettings().dyn`: the default here is "the file
             // said nothing", which the JS side reads as "keep what you have".
@@ -423,11 +517,36 @@ fn normalise(r: &Row) -> BrushSettings {
         }
     };
 
-    let taper = |used: &str, length: &str, unit: &str, ratio: &str, dflt: Taper| Taper {
-        on: r.on(used).unwrap_or(dflt.on),
-        len: len(length, unit, 4000.0).unwrap_or(dflt.len),
-        ratio: pct(ratio).unwrap_or(dflt.ratio),
+    // `BrushInOutType` is CSP's Specification method for both ends: 0 Specify
+    // length, 1 By percentage (of the brush size), 2 Fade. A percentage is a
+    // plain number in the length column, whatever unit its sibling names, and
+    // Fade is read as a percentage taper running the whole stroke, which is
+    // what "reach the minimum value from the beginning" draws as.
+    let in_out_type = r.int("BrushInOutType").unwrap_or(0);
+    let taper = |used: &str, length: &str, unit: &str, ratio: &str, dflt: Taper| match in_out_type {
+        1 => Taper {
+            on: r.on(used).unwrap_or(dflt.on),
+            len: r.num(length).map(|v| v.clamp(0.0, 500.0) as f32).unwrap_or(dflt.len),
+            ratio: pct(ratio).unwrap_or(dflt.ratio),
+            mode: TaperMode::Pct,
+        },
+        2 => Taper {
+            on: r.on(used).unwrap_or(dflt.on),
+            len: 500.0,
+            ratio: pct(ratio).unwrap_or(dflt.ratio),
+            mode: TaperMode::Pct,
+        },
+        _ => Taper {
+            on: r.on(used).unwrap_or(dflt.on),
+            len: len(length, unit, 4000.0).unwrap_or(dflt.len),
+            ratio: pct(ratio).unwrap_or(dflt.ratio),
+            mode: TaperMode::Px,
+        },
     };
+    // The random rotation slider only counts when the Random source is
+    // switched on in the Direction dynamics: `BrushRotationRandomScale` sits
+    // at 100 in forty corpus brushes and Random is on in twelve of them.
+    let rotation_random = r.int("BrushRotationEffector").map(|m| m & 0x80 != 0);
 
     BrushSettings {
         // 1000 px is already a stroke as wide as a page; past that the value is
@@ -442,7 +561,16 @@ fn normalise(r: &Row) -> BrushSettings {
         hardness: pct("BrushHardness").unwrap_or(d.hardness),
         // CSP stores a bearing; the engine wants one too, folded into one turn.
         angle: r.num("BrushRotation").map(|v| v.rem_euclid(360.0) as f32).unwrap_or(d.angle),
-        angle_jitter: pct("BrushRotationRandomScale").unwrap_or(d.angle_jitter),
+        angle_jitter: match rotation_random {
+            Some(false) => 0.0,
+            _ => pct("BrushRotationRandomScale").unwrap_or(d.angle_jitter),
+        },
+        follow_dir: d.follow_dir,
+        ribbon: r.on("BrushRibbon").unwrap_or(d.ribbon),
+        darken_tips: r.on("BrushBlendPatternByDarken").unwrap_or(d.darken_tips),
+        // Filled in by the importer once it knows the ids.
+        tips: Vec::new(),
+        tip_order: r.int("BrushPatternOrderType").and_then(TipOrder::from_code).unwrap_or(d.tip_order),
         // `BrushThickness` is a percent, but the corpus holds values up to 153,
         // so it is clamped rather than trusted: past 100 the tip is round, and
         // an unsquashed tip is what 1.0 means here.
@@ -461,23 +589,32 @@ fn normalise(r: &Row) -> BrushSettings {
             "BrushOutRatio",
             d.taper_out,
         ),
+        taper_by_speed: r.on("BrushInOutBySpeed").unwrap_or(d.taper_by_speed),
         water_edge: r.on("BrushUseWaterEdge").unwrap_or(d.water_edge),
         // The engine's edge is a band a few px wide, so the radius is clamped
-        // into the range its slider offers. `BrushWaterEdgeBlur` has no
-        // counterpart in the engine and is not read.
+        // into the range its slider offers.
         water_edge_width: len("BrushWaterEdgeRadius", "BrushWaterEdgeRadiusUnit", 20.0)
             .map(|v| v.max(1.0))
             .unwrap_or(d.water_edge_width),
         water_edge_power: pct("BrushWaterEdgeAlphaPower")
             .map(|v| v / 100.0)
             .unwrap_or(d.water_edge_power),
-        // Correction off means no stabilisation, not the engine's default: the
-        // brush was authored to track the pointer exactly.
-        stabilise: match r.on("BrushUseRevision") {
-            Some(false) => 0.0,
-            Some(true) => pct("BrushRevision").unwrap_or(d.stabilise),
-            None => d.stabilise,
+        water_edge_dark: pct("BrushWaterEdgeValuePower")
+            .map(|v| v / 100.0)
+            .unwrap_or(d.water_edge_dark),
+        water_edge_blur: len("BrushWaterEdgeBlur", "BrushWaterEdgeBlurUnit", 20.0)
+            .unwrap_or(d.water_edge_blur),
+        // CSP's Stabilization slider is `FlickerReduction`, and it has no
+        // switch: zero is off.
+        stabilise: pct("FlickerReduction").unwrap_or(d.stabilise),
+        // Post correction off means none, not the engine's default: the brush
+        // was authored to leave the finished line as drawn.
+        post_correct: match r.on("BrushUseRevision") {
+            Some(false) => Some(0.0),
+            Some(true) => pct("BrushRevision").or(Some(d.stabilise)),
+            None => None,
         },
+        post_by_speed: r.on("BrushRevisionBySpeed").unwrap_or(d.post_by_speed),
         // `BrushSharpenCorner` is 0 in every corpus file, so its scale cannot be
         // measured. It is read as a flag, and the threshold stays the engine's
         // default rather than being invented from a number that has never been
@@ -636,7 +773,7 @@ mod tests {
             ("BrushOutRatio", "100.0"),
         ]))
         .settings;
-        assert_eq!(s.taper_in, Taper { on: true, len: 20.0, ratio: 16.3 });
+        assert_eq!(s.taper_in, Taper { on: true, len: 20.0, ratio: 16.3, mode: TaperMode::Px });
         assert!(!s.taper_out.on);
         // 1 mm at 600 dpi is 23.6 px.
         assert!((s.taper_out.len - 23.62).abs() < 0.01, "got {}", s.taper_out.len);
@@ -644,17 +781,73 @@ mod tests {
     }
 
     #[test]
-    fn correction_that_is_switched_off_is_no_stabilisation_at_all() {
+    fn a_percentage_taper_is_read_as_one_and_fade_runs_the_whole_stroke() {
+        let s = read(&db(&[
+            ("BrushInOutType", "1"),
+            ("BrushUseIn", "1"),
+            ("BrushInLength", "30.0"),
+            ("BrushInLengthUnit", "2"),
+            ("BrushInRatio", "30.0"),
+        ]))
+        .settings;
+        assert_eq!(s.taper_in, Taper { on: true, len: 30.0, ratio: 30.0, mode: TaperMode::Pct });
+        let fade = read(&db(&[("BrushInOutType", "2"), ("BrushUseOut", "1"), ("BrushOutLength", "3")])).settings;
+        assert_eq!(fade.taper_out.mode, TaperMode::Pct);
+        assert_eq!(fade.taper_out.len, 500.0);
+        assert!(read(&db(&[("BrushInOutBySpeed", "1")])).settings.taper_by_speed);
+    }
+
+    #[test]
+    fn stabilisation_is_flicker_reduction_and_revision_is_post_correction() {
+        let s = read(&db(&[
+            ("FlickerReduction", "17"),
+            ("BrushUseRevision", "1"),
+            ("BrushRevision", "40"),
+            ("BrushRevisionBySpeed", "1"),
+        ]))
+        .settings;
+        assert_eq!(s.stabilise, 17.0);
+        assert_eq!(s.post_correct, Some(40.0));
+        assert!(s.post_by_speed);
+        // Post correction switched off is none at all, and a file that says
+        // nothing sends no key.
         assert_eq!(
-            read(&db(&[("BrushUseRevision", "0"), ("BrushRevision", "10")])).settings.stabilise,
-            0.0
+            read(&db(&[("BrushUseRevision", "0"), ("BrushRevision", "10")])).settings.post_correct,
+            Some(0.0)
         );
-        assert_eq!(
-            read(&db(&[("BrushUseRevision", "1"), ("BrushRevision", "40")])).settings.stabilise,
-            40.0
-        );
-        // Neither column present: the engine's default stands.
+        assert_eq!(read(&db(&[("Opacity", "100")])).settings.post_correct, None);
+        // No stabilisation column: the engine's default stands.
         assert_eq!(read(&db(&[("Opacity", "100")])).settings.stabilise, 12.0);
+    }
+
+    #[test]
+    fn random_rotation_counts_only_when_the_random_source_is_on() {
+        let off = read(&db(&[("BrushRotationEffector", "3"), ("BrushRotationRandomScale", "100")])).settings;
+        assert_eq!(off.angle_jitter, 0.0);
+        let on = read(&db(&[("BrushRotationEffector", "131"), ("BrushRotationRandomScale", "100")])).settings;
+        assert_eq!(on.angle_jitter, 100.0);
+        // No effector column at all: the slider is taken at its word.
+        assert_eq!(read(&db(&[("BrushRotationRandomScale", "50")])).settings.angle_jitter, 50.0);
+    }
+
+    #[test]
+    fn the_stroke_switches_and_the_edges_darkness_and_blur_arrive() {
+        let s = read(&db(&[
+            ("BrushRibbon", "1"),
+            ("BrushBlendPatternByDarken", "1"),
+            ("BrushWaterEdgeValuePower", "20"),
+            ("BrushWaterEdgeBlur", "0.76"),
+            ("BrushWaterEdgeBlurUnit", "0"),
+        ]))
+        .settings;
+        assert!(s.ribbon);
+        assert!(s.darken_tips);
+        assert_eq!(read(&db(&[("BrushPatternOrderType", "3")])).settings.tip_order, TipOrder::Random);
+        assert_eq!(read(&db(&[("BrushPatternOrderType", "0")])).settings.tip_order, TipOrder::Repeat);
+        assert_eq!(read(&db(&[("BrushPatternOrderType", "9")])).settings.tip_order, TipOrder::Repeat);
+        assert!(!s.follow_dir, "never guessed from a file");
+        assert!((s.water_edge_dark - 0.2).abs() < 1e-6);
+        assert!((s.water_edge_blur - 0.76).abs() < 1e-6);
     }
 
     #[test]

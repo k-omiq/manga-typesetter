@@ -10,7 +10,7 @@ import {
   stripPageSuffix,
 } from './exporter.js';
 import { PAGE_W, PAGE_H, normalizeStyle } from './data.js';
-import { arcLayout, layoutLines, BOX_PAD, balloonWidthsFor, setTypesetEnabled } from './measure.js';
+import { arcLayout, layoutLines, BOX_PAD, balloonWidthsFor, setTypesetEnabled, baselineInLine } from './measure.js';
 import { patternTilePx, TILE_SS } from './text-paint.js';
 import { neededHeight } from './typeset.js';
 
@@ -417,11 +417,10 @@ describe('shaped lines reach the page', () => {
       await renderPageCanvas({ id: 7, w: 800, h: 1200, lines: [], boxes: [box] });
       const [x, y] = drawnAt();
       expect(x).toBe(box.x + BOX_PAD);
-      // The baseline sits half the leading below the top of the line box, which
-      // is the same offset the un-padded version had - the padding is the only
-      // thing that moved.
-      const lineH = box.style.size * box.style.lineHeight;
-      expect(y).toBe(box.y + BOX_PAD + (lineH - box.style.size) / 2);
+      // The baseline sits where the browser puts it inside the line box - half
+      // the leading, then the ascent - which is the same offset the un-padded
+      // version had: the padding is the only thing that moved.
+      expect(y).toBe(box.y + BOX_PAD + baselineInLine(box.style, box.style.size));
     });
 
     it('anchors a right/bottom-aligned block 2px in from the far corner', async () => {
@@ -431,7 +430,7 @@ describe('shaped lines reach the page', () => {
       const [x, y] = drawnAt();
       expect(x).toBe(box.x + box.w - BOX_PAD);
       const lineH = box.style.size * box.style.lineHeight;
-      expect(y).toBe(box.y + box.h - BOX_PAD - lineH + (lineH - box.style.size) / 2);
+      expect(y).toBe(box.y + box.h - BOX_PAD - lineH + baselineInLine(box.style, box.style.size));
     });
 
     it('leaves a centred block where it was - the padding is symmetric', async () => {
@@ -441,7 +440,9 @@ describe('shaped lines reach the page', () => {
       const [x, y] = drawnAt();
       const lineH = box.style.size * box.style.lineHeight;
       expect(x).toBe(box.x + box.w / 2);
-      expect(y).toBe(box.y + (box.h - lineH) / 2 + (lineH - box.style.size) / 2);
+      // No ink shift under node - there is no canvas to measure ink with, so
+      // `inkShiftY` answers zero and the block is centred by its line box.
+      expect(y).toBe(box.y + (box.h - lineH) / 2 + baselineInLine(box.style, box.style.size));
     });
 
     it('gives an auto-fitted box no slack under its last line', async () => {
@@ -453,7 +454,7 @@ describe('shaped lines reach the page', () => {
       const lineH = box.style.size * box.style.lineHeight;
       box.h = neededHeight(1, box.style, BOX_PAD);
       await renderPageCanvas({ id: 7, w: 800, h: 1200, lines: [], boxes: [box] });
-      const blockBottom = drawnAt()[1] - (lineH - box.style.size) / 2 + lineH;
+      const blockBottom = drawnAt()[1] - baselineInLine(box.style, box.style.size) + lineH;
       expect(box.y + box.h - blockBottom).toBe(BOX_PAD);
     });
   });
@@ -1086,7 +1087,7 @@ describe('a box with every effect on at once', () => {
     // And the glyphs still land where an effect-less box would put them.
     expect([composited.at(-1)[0] + placed.at(-1)[0], composited.at(-1)[1] + placed.at(-1)[1]]).toEqual([
       box.x + box.w / 2,
-      box.y + (box.h - lineH) / 2 + (lineH - box.style.size) / 2,
+      box.y + (box.h - lineH) / 2 + baselineInLine(box.style, box.style.size),
     ]);
   });
 

@@ -51,9 +51,10 @@ export function filterBrushes(list, query) {
 //
 // THE CONTRACT (2.3, `sanitiseBrushSettings`): an imported brush speaks for the
 // tip and the marks it makes, and for nothing else. Its `settings` deliberately
-// carry no `color` and no `postCorrect`, so this spread leaves the letterer's
-// ink colour and correction exactly where they set them and replaces only what
-// the `.sut` had an opinion about.
+// carry no `color`, so this spread leaves the letterer's ink colour exactly
+// where they set it and replaces only what the `.sut` had an opinion about.
+// `postCorrect` joined the conditional keys when `BrushRevision` was read: a
+// brush that states one carries it, an older index row does not.
 //
 // `dyn` was on that list until phase 6.1 decoded the `Effector` blobs, and it is
 // the reason this stayed a spread rather than a merge: a brush that names a size

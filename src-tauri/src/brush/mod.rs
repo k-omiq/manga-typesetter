@@ -289,6 +289,18 @@ fn import_sut(path: &Path, stem: String, hash: u128) -> Result<Vec<ImportedBrush
         out.push(round_brush(brush_id(hash, 0), base, &meta.settings)?);
         return Ok(out);
     }
+    // A sub tool with several pattern images cycles through them along one
+    // stroke (CSP's Repeat method), so every entry it installs as carries the
+    // whole set, in file order, and the engine cycles the same way. A material
+    // that yielded no tip is left out of the cycle: it draws round on its own
+    // and would put a disc into a run of textured dabs.
+    let cycle: Vec<String> = if numbered {
+        materials.iter().filter(|m| m.tip.is_some()).map(|m| brush_id(hash, m.index)).collect()
+    } else {
+        Vec::new()
+    };
+    let mut settings = meta.settings.clone();
+    settings.tips = if cycle.len() > 1 { cycle } else { Vec::new() };
     for m in materials {
         let id = brush_id(hash, m.index);
         let name = name_at(m.index);
@@ -301,7 +313,7 @@ fn import_sut(path: &Path, stem: String, hash: u128) -> Result<Vec<ImportedBrush
                 tip_png: encode_png(&tip.image)?,
                 source: tip.source.into(),
                 diff: tip.diff,
-                settings: meta.settings.clone(),
+                settings: settings.clone(),
             }),
             None => out.push(round_brush(id, name, &meta.settings)?),
         }
@@ -509,20 +521,33 @@ mod tests {
                 "angle",
                 "angleJitter",
                 "antialias",
+                "darkenTips",
                 "flatness",
+                "followDir",
                 "hardness",
                 "opacity",
+                "postBySpeed",
+                "ribbon",
                 "sharpAngles",
                 "size",
                 "spacing",
                 "stabilise",
+                "taperBySpeed",
                 "taperIn",
                 "taperOut",
+                "tipOrder",
                 "waterEdge",
+                "waterEdgeBlur",
+                "waterEdgeDark",
                 "waterEdgePower",
                 "waterEdgeWidth",
             ]
         );
+        // `postCorrect` is conditional the same way: the round tip's settings
+        // state none, so the key stays out and the letterer's slider stands.
+        assert!(!set.contains(&"postCorrect"), "no post correction column, no key");
+        assert!(!set.contains(&"tips"), "one tip, no cycle, no key");
+        assert_eq!(b["settings"]["taperIn"]["mode"], "px");
         // `dyn` is the ONE key that may be missing, and the round tip's settings
         // are the case where it is: the picker spreads what arrives over the
         // tool's settings, so an absent key leaves the letterer's dynamics and a

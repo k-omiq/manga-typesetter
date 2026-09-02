@@ -22,6 +22,20 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [profile.dev.package.app]
 opt-level = 2
 
+[features]
+# GPU execution providers the OS does not imply. Windows gets CUDA + DirectML
+# and macOS CoreML from the target-specific `ort` entries below; these two are
+# for Linux, where pyke ships one prebuilt onnxruntime per provider so a build
+# carries exactly one of them:
+#   gpu-webgpu - any Vulkan-capable GPU (NVIDIA, AMD, Intel), nothing to install.
+#   gpu-cuda   - NVIDIA only, needs CUDA 13 + cuDNN 9 on the user's machine,
+#                and its provider libraries beside the executable
+#                (see tauri.linux-cuda.conf.json).
+# Both at once matches no prebuilt and ort-sys refuses to build. Release and CI
+# pass `--features gpu-webgpu`; build.rs warns when a Linux build has neither.
+gpu-webgpu = ["ort/webgpu"]
+gpu-cuda = ["ort/cuda"]
+
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
 
@@ -55,7 +69,15 @@ flate2 = "1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
-# CoreML is a macOS-only execution provider; the feature must not reach the
-# windows/linux builds or ort fails to compile there.
+# Execution providers are per-OS `ort` features: each one selects a different
+# prebuilt onnxruntime, and a provider the target cannot have (CoreML off a
+# Mac) makes ort-sys fail to find binaries. See src/detect/accel.rs for the
+# order they are tried in.
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { version = "2.0.0-rc.10", features = ["coreml"] }
+
+# One archive carries both: CUDA for NVIDIA machines with CUDA 13 + cuDNN 9
+# installed, DirectML for every other GPU. The provider DLLs it ships are
+# staged by build.rs and bundled by tauri.windows.conf.json.
+[target.'cfg(target_os = "windows")'.dependencies]
+ort = { version = "2.0.0-rc.10", features = ["cuda", "directml"] }

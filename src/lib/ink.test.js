@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { normalizeStyle, normalizeInkStroke } from './data.js';
+import { inkTipIds } from './brush-tips.js';
 
 describe('ink style block', () => {
   it('defaults to off with no strokes', () => {
@@ -39,7 +40,7 @@ describe('ink style block', () => {
     expect(k.angle).toBe(40);
     expect(k.angleJitter).toBe(0);
     expect(k.flatness).toBe(0.01);
-    expect(k.taperIn).toEqual({ on: true, len: 0, ratio: 100 });
+    expect(k.taperIn).toEqual({ on: true, len: 0, ratio: 100, mode: 'px' });
     expect(k.pts).toEqual([[1, 2, 0.5], [3, 4, 1]]);
   });
 
@@ -176,13 +177,17 @@ function canvasOf(w, h) {
   const cnv = { width: w, height: h, data, reads: 0, writes: 0 };
   // Source-over on non-premultiplied bytes, which is what an ImageData holds
   // and therefore what the pass reads back.
+  // `darken` is the one blend the painter uses besides source-over: the
+  // separable-blend formula from the compositing spec with B = min.
   const over = (i, sr, sg, sb, sa) => {
     if (sa <= 0) return;
     const da = data[i + 3] / 255;
     const oa = sa + da * (1 - sa);
-    data[i] = (sr * sa + data[i] * da * (1 - sa)) / oa;
-    data[i + 1] = (sg * sa + data[i + 1] * da * (1 - sa)) / oa;
-    data[i + 2] = (sb * sa + data[i + 2] * da * (1 - sa)) / oa;
+    const blend = ctx.globalCompositeOperation === 'darken' ? Math.min : (s) => s;
+    const mix = (s, d) => (s * sa * (1 - da) + d * da * (1 - sa) + blend(s, d) * sa * da) / oa;
+    data[i] = mix(sr, data[i]);
+    data[i + 1] = mix(sg, data[i + 1]);
+    data[i + 2] = mix(sb, data[i + 2]);
     data[i + 3] = 255 * oa;
   };
   const ctx = {
@@ -190,6 +195,7 @@ function canvasOf(w, h) {
     m: { ...IDENT },
     stack: [],
     globalAlpha: 1,
+    globalCompositeOperation: 'source-over',
     fillStyle: null,
     dab: null,
     imageSmoothingEnabled: true,
@@ -231,6 +237,14 @@ function canvasOf(w, h) {
       return g;
     },
     beginPath() {},
+    fillRect(x, y, fw, fh) {
+      const [sr, sg, sb] = hexRgb(this.fillStyle);
+      for (let py = Math.max(0, Math.floor(y)); py < Math.min(h, y + fh); py++) {
+        for (let px = Math.max(0, Math.floor(x)); px < Math.min(w, x + fw); px++) {
+          over((py * w + px) * 4, sr, sg, sb, this.globalAlpha);
+        }
+      }
+    },
     arc(x, y, r) {
       this.dab = { x, y, r };
     },
@@ -274,7 +288,15 @@ function canvasOf(w, h) {
     // Nearest neighbour, which keeps the picture a deterministic function of
     // the transform; `imageSmoothingEnabled` changes no pixel here, so a test
     // that wants to see the hard edge has to read alpha rather than trust it.
-    drawImage(src, dx = 0, dy = 0, dw = src.width, dh = src.height) {
+    drawImage(src, ...args) {
+      // The 5-argument form draws the whole source; the 9-argument form draws
+      // a rectangle of it, which is how a ribbon slice is cut.
+      let sx = 0;
+      let sy = 0;
+      let sw = src.width;
+      let sh = src.height;
+      let [dx = 0, dy = 0, dw = src.width, dh = src.height] = args;
+      if (args.length >= 8) [sx, sy, sw, sh, dx, dy, dw, dh] = args;
       const back = inv(this.m);
       let x0 = Infinity;
       let y0 = Infinity;
@@ -294,9 +316,9 @@ function canvasOf(w, h) {
           const cy = py + 0.5;
           const lx = back.a * cx + back.c * cy + back.e;
           const ly = back.b * cx + back.d * cy + back.f;
-          const u = Math.floor(((lx - dx) / dw) * src.width);
-          const v = Math.floor(((ly - dy) / dh) * src.height);
-          if (u < 0 || v < 0 || u >= src.width || v >= src.height) continue;
+          const u = Math.floor(sx + ((lx - dx) / dw) * sw);
+          const v = Math.floor(sy + ((ly - dy) / dh) * sh);
+          if (u < sx || v < sy || u >= sx + sw || v >= sy + sh || u >= src.width || v >= src.height) continue;
           const j = (v * src.width + u) * 4;
           over((py * w + px) * 4, src.data[j], src.data[j + 1], src.data[j + 2],
             (src.data[j + 3] / 255) * this.globalAlpha);
@@ -441,50 +463,48 @@ describe('the watercolour edge on a soft tip', () => {
 // goes, so an alpha-only pass would do nothing at all on it - the rim there is
 // the colour going darker, which is what CSP draws and what the spec asks for.
 describe('the watercolour edge on the default hard tip', () => {
-  // Two pixels in from the outline of a 24 px tip centred on y = 30, against
-  // the middle of the stroke where the tube is flat.
-  const RIM = [110, 20];
+  // Two pixels OUTSIDE the outline of a 24 px tip centred on y = 30, against
+  // the middle of the stroke where the tube is flat, and a pixel well inside.
+  // CSP's manual: the edge is "added to the outside of the stroke".
+  const RIM = [110, 16];
   const CORE = [110, 30];
 
-  it('darkens the rim of a grey stroke and leaves its core alone', () => {
+  it('lays a rim outside a grey stroke and leaves its ink alone', () => {
     const off = render(hardLine({ color: '#808080', waterEdge: false }));
     const on = render(hardLine({ color: '#808080', waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 0.5 }));
-    expect(at(off, ...RIM)).toEqual([128, 128, 128, 255]);
-    // Half the band off a full-strength band is half the ink's own value.
-    expect(at(on, ...RIM)).toEqual([64, 64, 64, 255]);
+    expect(at(off, ...RIM)).toEqual([0, 0, 0, 0]);
+    // Half power is a half-alpha rim in the ink's own grey.
+    expect(at(on, ...RIM)).toEqual([128, 128, 128, 128]);
     expect(at(on, ...CORE)).toEqual(at(off, ...CORE));
     expect(at(on, ...CORE)).toEqual([128, 128, 128, 255]);
   });
 
-  it('keeps a coloured stroke its own colour while it darkens', () => {
-    const on = render(hardLine({ color: '#ff0000', waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 0.5 }));
-    const [r, g, b, a] = at(on, ...RIM);
-    const [cr] = at(on, ...CORE);
-    expect(r).toBeLessThan(cr); // the rim is darker than the ink inside it
-    expect(r).toBeGreaterThan(g); // and still red, not a grey smudge
-    expect(r).toBeGreaterThan(b);
-    expect(a).toBe(255); // an opaque stroke stays opaque
-    expect(at(on, ...CORE)).toEqual([255, 0, 0, 255]);
-  });
-
-  it('survives the anti-aliasing snap, which only ever touches alpha', () => {
-    // With anti-aliasing off the alpha is thrown to 0 or 255 straight after the
-    // pass, so a rim that lived in alpha alone would be wiped by it.
+  it('darkens the rim by the darkness setting and keeps its hue', () => {
     const on = render(hardLine({
-      color: '#ff0000', antialias: false, waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 0.5,
+      color: '#ff0000', waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 0.5, waterEdgeDark: 0.5,
     }));
-    const [r, , , a] = at(on, ...RIM);
-    expect(a).toBe(255);
-    expect(r).toBeLessThan(at(on, ...CORE)[0]);
+    const [r, g, b, a] = at(on, ...RIM);
+    expect(r).toBe(128); // half way to black
+    expect(g).toBe(0); // and still red, not a grey smudge
+    expect(b).toBe(0);
+    expect(a).toBe(128);
     expect(at(on, ...CORE)).toEqual([255, 0, 0, 255]);
   });
 
-  it('reaches in from the outline as far as the band and no further', () => {
+  it('draws the rim solid when anti-aliasing is off, as CSP does on a pixel layer', () => {
+    const on = render(hardLine({
+      color: '#ff0000', antialias: false, waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 0.3, waterEdgeDark: 1,
+    }));
+    expect(at(on, ...RIM)).toEqual([0, 0, 0, 255]);
+    expect(at(on, ...CORE)).toEqual([255, 0, 0, 255]);
+  });
+
+  it('reaches out from the outline as far as the band and no further', () => {
     const on = render(hardLine({ color: '#808080', waterEdge: true, waterEdgeWidth: 4, waterEdgePower: 1 }));
-    // The tip is 24 px across on y = 30, so its outline is y = 18. Four px in
-    // is the last darkened row; the fifth is the ink's own grey.
-    expect(at(on, 110, 21)[0]).toBe(0);
-    expect(at(on, 110, 23)[0]).toBe(128);
+    // The tip is 24 px across on y = 30, so its outline is y = 18. Three px
+    // out is rim; six px out is clear page.
+    expect(at(on, 110, 15)[3]).toBeGreaterThan(200);
+    expect(at(on, 110, 12)[3]).toBe(0);
   });
 });
 
@@ -531,7 +551,7 @@ describe('the watercolour edge at two scales', () => {
 
   it('darkens by the same amount at 1x, 2x and 3x', () => {
     const one = added(1, 4);
-    expect(one).toBeGreaterThan(8);
+    expect(one).toBeGreaterThan(2);
     expect(added(2, 4)).toBeCloseTo(one, 0);
     expect(added(3, 4)).toBeCloseTo(one, 0);
   });
@@ -575,17 +595,20 @@ describe('waterEdgePixels', () => {
   };
   const A = (d, w, x, y) => d[(y * w + x) * 4 + 3];
 
-  it('adds the band the erosion took off, scaled by the power', () => {
+  it('lays the band the dilation added under the ink, scaled by the power', () => {
     const w = 80;
     const h = 40;
     const before = ramp(w, h);
     const after = waterEdgePixels(ramp(w, h), w, h, 3, 0.5);
-    // Down a falling ramp the smallest alpha within 3 px is the one 3 px along,
-    // so the band is 30 and half of it goes back on.
-    expect(A(after, w, 30, 20)).toBe(A(before, w, 30, 20) + 15);
-    // Flat and saturated: the erosion takes nothing, so nothing is added.
+    // Down a falling ramp the densest alpha within 3 px is the one 3 px back,
+    // so the band is 30; half of it is a rim of 15, and the ink at 200 shows
+    // 55/255 of that through.
+    expect(A(before, w, 30, 20)).toBe(200);
+    expect(A(after, w, 30, 20)).toBe(203);
+    // Flat and saturated: the dilation adds nothing, so nothing is laid.
     expect(A(after, w, 5, 20)).toBe(255);
-    // Clear on both sides of the window: nothing to darken.
+    // Just past the ramp's foot there is a rim; well past it, nothing.
+    expect(A(after, w, 51, 20)).toBeGreaterThan(0);
     expect(A(after, w, 70, 20)).toBe(0);
   });
 
@@ -611,7 +634,7 @@ describe('waterEdgePixels', () => {
     expect(changed(6)).toBe(6);
   });
 
-  it('darkens the colour under the band and nothing outside it', () => {
+  it('colours the rim from the ink, darkened, and nothing past it', () => {
     // Opaque grey with a hard edge at column 50: no alpha to add, so the rim is
     // the colour alone - the case the default brush is in.
     const w = 80;
@@ -626,11 +649,11 @@ describe('waterEdgePixels', () => {
         d[i + 3] = 255;
       }
     }
-    waterEdgePixels(d, w, h, 4, 0.5);
+    waterEdgePixels(d, w, h, 4, 0.5, 0.5, 0, [200, 200, 200]);
     const px = (x) => Array.from(d.slice((20 * w + x) * 4, (20 * w + x) * 4 + 4));
-    expect(px(48)).toEqual([100, 100, 100, 255]); // in the band: half as bright
-    expect(px(40)).toEqual([200, 200, 200, 255]); // past it: the ink as it was
-    expect(px(60)).toEqual([0, 0, 0, 0]); // clear stays clear, colour included
+    expect(px(48)).toEqual([200, 200, 200, 255]); // inside: the ink as it was
+    expect(px(52)).toEqual([100, 100, 100, 128]); // the rim: half as bright, half power
+    expect(px(60)).toEqual([0, 0, 0, 0]); // past the band: clear stays clear
   });
 
   it('leaves the pixels alone at zero power', () => {
@@ -1082,5 +1105,213 @@ describe('an imported tip at two scales', () => {
     const f2 = footprint(renderTip(dab({}), tipMap(WIDE), 2));
     expect([f2.x0 / 2, f2.y0 / 2]).toEqual([f1.x0, f1.y0]);
     expect([f2.w / 2, f2.h / 2]).toEqual([f1.w, f1.h]);
+  });
+});
+
+// ===========================================================================
+// The finish: an outline around the whole of the ink, and shadows under it
+// ===========================================================================
+// The box's own strokes and shadows, drawn a different way: ink has no outline
+// to stroke along, so the finished ink is dilated in pixels - through an exact
+// distance transform, so the outline is round - and the shadows are thrown from
+// that. Around the whole, not around each stroke.
+import { drawInk as drawInkFx, inkReach, shadowExtent, distanceOutside } from './text-paint.js';
+
+function renderFx(strokes, finish, alloc = (cw, ch) => canvasOf(cw, ch)) {
+  const cnv = canvasOf(W, H);
+  const ctx = cnv.getContext('2d');
+  drawInkFx(ctx, { on: true, strokes: strokes.map(normalizeInkStroke) }, alloc, undefined, finish);
+  return cnv;
+}
+
+const white = { color: '#ffffff', width: 4, opacity: 1 };
+
+describe('the outline', () => {
+  it('is the band colour just outside the ink, nothing past its width, ink on top', () => {
+    const cnv = renderFx([hardLine()], { strokes: [white], shadows: [] });
+    // The line is 24 px tall about y = 30, so its top edge is y = 18.
+    expect(at(cnv, 110, 16)).toEqual([255, 255, 255, 255]);
+    expect(at(cnv, 110, 12)[3]).toBe(0);
+    expect(at(cnv, 110, 30)).toEqual([0, 0, 0, 255]);
+    // Off the ends too: the band wraps the whole, ends included.
+    expect(at(cnv, 10, 30)).toEqual([255, 255, 255, 255]);
+  });
+
+  it('changes nothing when there is nothing in it', () => {
+    const plain = renderFx([hardLine()], undefined);
+    const empty = renderFx([hardLine()], { strokes: [], shadows: [] });
+    const zero = renderFx([hardLine()], { strokes: [{ color: '#ffffff', width: 0 }], shadows: [] });
+    expect(Array.from(empty.data)).toEqual(Array.from(plain.data));
+    expect(Array.from(zero.data)).toEqual(Array.from(plain.data));
+    expect(at(plain, 110, 16)[3]).toBe(0);
+  });
+
+  it('is round: a dot\'s outline reaches as far on the diagonal as on the axis', () => {
+    const dot = hardLine({ pts: [[110, 30, 1]] });
+    const cnv = renderFx([dot], { strokes: [{ color: '#ffffff', width: 16, opacity: 1 }], shadows: [] });
+    // 12 px of dab plus 16 of band is 28 from the centre, in every direction.
+    expect(at(cnv, 110 + 25, 30)[3]).toBe(255);
+    expect(at(cnv, 110 + 18, 30 + 18)[3]).toBe(255);
+    // A square dilation would reach this corner; a round one cannot.
+    expect(at(cnv, 110 + 24, 30 + 24)[3]).toBe(0);
+  });
+
+  it('wraps the whole and not each stroke', () => {
+    // Two strokes touching end to end: no band threads the join.
+    const a = hardLine({ pts: [[24, 30, 1], [110, 30, 1]] });
+    const b = hardLine({ pts: [[110, 30, 1], [196, 30, 1]] });
+    const cnv = renderFx([a, b], { strokes: [white], shadows: [] });
+    expect(at(cnv, 110, 30)).toEqual([0, 0, 0, 255]);
+    expect(at(cnv, 100, 30)).toEqual([0, 0, 0, 255]);
+  });
+
+  it('reads the finished ink once, over its bounds, and stacks bands outermost first', () => {
+    const layers = [];
+    const cnv = renderFx(
+      [hardLine()],
+      { strokes: [{ color: '#ff0000', width: 2, opacity: 1 }, { color: '#0000ff', width: 3, opacity: 1 }], shadows: [] },
+      (cw, ch) => {
+        const c = canvasOf(cw, ch);
+        layers.push(c);
+        return c;
+      },
+    );
+    // The first layer is the ink; it is read once, bounded, not the whole plane.
+    expect(layers[0].reads).toBe(1);
+    // Red is the inner band (listed first, innermost), blue the outer.
+    expect(at(cnv, 110, 17)).toEqual([255, 0, 0, 255]);
+    expect(at(cnv, 110, 14)).toEqual([0, 0, 255, 255]);
+    expect(at(cnv, 110, 12)[3]).toBe(0);
+  });
+});
+
+describe('the shadow', () => {
+  it('is the ink\'s shape thrown by its offset, under the ink', () => {
+    const cnv = renderFx([hardLine()], { strokes: [], shadows: [{ x: 0, y: 12, blur: 0, color: '#ff0000', opacity: 1 }] });
+    // The line spans y 18..42; thrown 12 down it spans 30..54, so below the
+    // ink it shows and under the ink it does not.
+    expect(at(cnv, 110, 50)).toEqual([255, 0, 0, 255]);
+    expect(at(cnv, 110, 30)).toEqual([0, 0, 0, 255]);
+    expect(at(cnv, 110, 10)[3]).toBe(0);
+  });
+
+  it('is thrown from the outline, at its own opacity', () => {
+    const cnv = renderFx([hardLine()], { strokes: [white], shadows: [{ x: 0, y: 12, blur: 0, color: '#ff0000', opacity: 0.5 }] });
+    // 4 px of band under the ink's bottom edge (42) thrown 12 down reaches 58.
+    expect(at(cnv, 110, 56)[0]).toBe(255);
+    expect(at(cnv, 110, 56)[3]).toBeCloseTo(128, -1);
+  });
+});
+
+describe('the finish\'s reach', () => {
+  it('adds the outermost band and the furthest shadow to the ink\'s overhang', () => {
+    const ink = { on: true, strokes: [normalizeInkStroke({ size: 20, pts: [[2, 50, 1], [100, 50, 1]] })] };
+    expect(inkReach({ ink, strokes: [], shadows: [] })).toBe(8);
+    expect(shadowExtent([{ x: 3, y: 4, blur: 2 }, { x: -1, y: 0, blur: 0 }])).toBe(9);
+    expect(inkReach({ ink, strokes: [{ width: 3 }, { width: 2 }], shadows: [{ x: 3, y: 4, blur: 2 }] })).toBe(8 + 5 + 9);
+    expect(inkReach({ ink: { on: false, strokes: [] }, strokes: [{ width: 3 }], shadows: [] })).toBe(0);
+  });
+});
+
+describe('distanceOutside', () => {
+  it('is the exact euclidean distance to the nearest inked pixel', () => {
+    const w = 5;
+    const h = 5;
+    const a = new Uint8ClampedArray(w * h);
+    a[2 * w + 2] = 255;
+    const d = distanceOutside(a, w, h, 128);
+    expect(d[2 * w + 2]).toBe(0);
+    expect(d[2 * w + 0]).toBe(2);
+    expect(d[0]).toBeCloseTo(Math.SQRT2 * 2, 5);
+    expect(d[1 * w + 1]).toBeCloseTo(Math.SQRT2, 5);
+  });
+
+  it('reads the threshold, and is far everywhere with nothing inked', () => {
+    const a = new Uint8ClampedArray([0, 100, 0, 0]);
+    expect(distanceOutside(a, 4, 1, 100)[3]).toBe(2);
+    expect(distanceOutside(a, 4, 1, 128)[3]).toBeGreaterThan(1000);
+  });
+});
+
+// ===========================================================================
+// Ribbon, darken, and the tip cycle
+// ===========================================================================
+describe('a ribbon of an imported tip', () => {
+  // A 4 x 32 strip, ink at 255: unrolled it is a band as wide as the size and
+  // as long as the path, with no dot-to-dot gaps at any spacing.
+  const STRIP = tipOf('strip', tipImage(4, 32, () => 255));
+  const band = (extra) => renderTip(dab({ brush: 'strip', size: 10, spacing: 100, pts: [[20, 60, 1], [140, 60, 1]], ...extra }), tipMap(STRIP));
+
+  it('lays a continuous band the width of the size along the path', () => {
+    const f = footprint(band({ ribbon: true }));
+    expect(f.h).toBe(10);
+    expect(f.w).toBeGreaterThanOrEqual(119);
+    // Every column between the ends is inked through: no gaps.
+    for (let x = 25; x < 135; x++) expect(at(band({ ribbon: true }), x, 60)[3]).toBe(255);
+  });
+
+  it('is what the same tip stamped at that spacing is not', () => {
+    // Stamped at 100% spacing the 10 px stamps of a 4:32 tip are 1.25 px
+    // wide, 10 px apart: dots.
+    let gaps = 0;
+    const st = band({ ribbon: false });
+    for (let x = 25; x < 135; x++) if (at(st, x, 60)[3] === 0) gaps++;
+    expect(gaps).toBeGreaterThan(50);
+  });
+
+  it('unrolls the tip along the stroke rather than repeating one row', () => {
+    // Ink in the top half of the strip only: the band then has ink for the
+    // first half of every period along the path and none for the second.
+    const HALF_STRIP = tipOf('hs', tipImage(4, 32, (x, y) => (y < 16 ? 255 : 0)));
+    const cnv = renderTip(dab({ brush: 'hs', size: 8, ribbon: true, pts: [[20, 60, 1], [140, 60, 1]] }), tipMap(HALF_STRIP));
+    // Period is 32 * (8 / 4) = 64 px: ink from 20 to 52, none from 52 to 84.
+    expect(at(cnv, 30, 60)[3]).toBe(255);
+    expect(at(cnv, 70, 60)[3]).toBe(0);
+    expect(at(cnv, 100, 60)[3]).toBe(255);
+  });
+});
+
+describe('darkening overlaps', () => {
+  // A tip half as dense as ink: stacked twice, alpha-over makes it denser and
+  // darken keeps it where it was.
+  const GREY = tipOf('grey', tipImage(32, 16, () => 128));
+  const twice = (extra) => renderTip(dab({ brush: 'grey', size: 40, spacing: 1, pts: [[TX, TY, 1], [TX + 1, TY, 1]], ...extra }), tipMap(GREY));
+
+  it('keeps the tip\'s own density through an overlap', () => {
+    expect(at(twice({}), TX, TY)[3]).toBeGreaterThan(128 + 40);
+    const a = at(twice({ darkenTips: true }), TX, TY);
+    expect(a[3]).toBe(128);
+    // And the ink is still the stroke's colour, not the black it was read in.
+    const red = at(renderTip(dab({ brush: 'grey', color: '#ff0000', darkenTips: true }), tipMap(GREY)), TX, TY);
+    expect(red.slice(0, 3)).toEqual([255, 0, 0]);
+  });
+});
+
+describe('a stroke that cycles several tips', () => {
+  // Two tips that could not be confused: a bar and a taller bar.
+  const SHORT = tipOf('short', tipImage(32, 8, () => 255));
+  const stroke = (extra) => normalizeInkStroke(dab({
+    brush: 'wide', size: 40, spacing: 100, tips: ['wide', 'short'], tipOrder: 'repeat',
+    pts: [[40, TY, 1], [80, TY, 1], [120, TY, 1]], ...extra,
+  }));
+
+  it('stamps the second tip where the cycle says so', () => {
+    const cnv = renderTip(stroke({}), tipMap(WIDE, SHORT));
+    // The first and third stamps are the 40 x 20 wide tip; the middle one is
+    // the 40 x 10 short one, so 8 px above the line there is ink at 40 and
+    // 120 and none at 80.
+    expect(at(cnv, 40, TY - 8)[3]).toBe(255);
+    expect(at(cnv, 80, TY - 8)[3]).toBe(0);
+    expect(at(cnv, 120, TY - 8)[3]).toBe(255);
+    expect(at(cnv, 80, TY)[3]).toBe(255);
+  });
+
+  it('falls back to its own tip for one that is not in hand', () => {
+    const cnv = renderTip(stroke({}), tipMap(WIDE));
+    expect(at(cnv, 80, TY - 8)[3]).toBe(255);
+  });
+
+  it('names every tip it needs to the prefetch', () => {
+    expect([...inkTipIds({ strokes: [stroke({})] })].sort()).toEqual(['short', 'wide']);
   });
 });

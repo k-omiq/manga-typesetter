@@ -29,10 +29,11 @@
   // box's own repaints for the rest of the session.
   import {
     HANDLE_R,
+    HANDLE_GRID_MAX,
     NUDGE_SETTLE_MS,
     nudgeDelta,
     handlePoints,
-    meshSegments,
+    meshLines,
     ghostOutline,
     warpDragGesture,
     resetWarp,
@@ -44,8 +45,11 @@
   let { box, pageId, z, toLocal, painter = null } = $props();
 
   const s = $derived(box.style);
-  const pts = $derived(handlePoints(s.warp, box.w, box.h));
-  const segs = $derived(meshSegments(s.warp, box.w, box.h));
+  // No handles on a mesh too fine to grab - see HANDLE_GRID_MAX. The hairlines
+  // and Reset still show, so the letterer can see what liquify made and undo it.
+  const showHandles = $derived(s.warp.cols <= HANDLE_GRID_MAX && s.warp.rows <= HANDLE_GRID_MAX);
+  const pts = $derived(showHandles ? handlePoints(s.warp, box.w, box.h) : []);
+  const lines = $derived(meshLines(s.warp, box.w, box.h));
   const ghost = $derived(ghostOutline(box.w, box.h));
   // Nothing to reset until something has been dragged. The empty array is the
   // stored form of "never touched" (see data.js), so this is exactly that test.
@@ -225,8 +229,8 @@
   data-warp-gizmo={box.id}
 >
   <polygon class="ghost" points={ghost.map(([x, y]) => `${x * z},${y * z}`).join(' ')} />
-  {#each segs as [x1, y1, x2, y2], i (i)}
-    <line class="mesh" x1={x1 * z} y1={y1 * z} x2={x2 * z} y2={y2 * z} />
+  {#each lines as line, i (i)}
+    <polyline class="mesh" points={line.map(([x, y]) => `${x * z},${y * z}`).join(' ')} />
   {/each}
   {#each pts as p (p.i)}
     <circle
@@ -300,6 +304,7 @@
     vector-effect: non-scaling-stroke;
   }
   .mesh {
+    fill: none;
     stroke: var(--wg-mesh);
     stroke-width: 1;
     opacity: 0.75;

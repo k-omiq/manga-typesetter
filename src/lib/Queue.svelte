@@ -15,6 +15,8 @@
     addQueueLine,
     pageById,
     setEditSettleHook,
+    placeableDetectedLines,
+    placeDetectedOnPage,
   } from './store.svelte.js';
   import { record } from './editor/history.svelte.js';
   import { onDestroy } from 'svelte';
@@ -175,7 +177,6 @@
     const f = form;
     if (!f) return;
     if (f.edit) {
-      // Save tag default styling.
       saveTagDefaults(f.name, tagFormDefaults(f));
       form = null;
       return;
@@ -382,6 +383,14 @@
       <button class="qadd-btn" disabled={!app.pages.length} onclick={addText}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" /></svg>
         Add text
+      </button>
+      <button
+        class="qadd-btn"
+        title="Put a text box on every detected bubble on this page that has none yet"
+        disabled={placeableDetectedLines(p).length === 0}
+        onclick={() => placeDetectedOnPage(p)}
+      >
+        Place detected
       </button>
     </div>
   {:else}

@@ -30,7 +30,7 @@
     caretAfter,
     isAtomicInput,
   } from './editor/field-undo.svelte.js';
-  import { arcLayout, circleLayout, pathLayout, pathPolyline, removePathAnchor, applyCase, layoutLines, BOX_PAD, balloonWidthsFor } from './measure.js';
+  import { arcLayout, circleLayout, pathLayout, pathPolyline, removePathAnchor, applyCase, layoutLines, BOX_PAD, balloonWidthsFor, inkShiftY } from './measure.js';
   import {
     strokeBands,
     rgba,
@@ -41,7 +41,7 @@
     drawClipShapes,
     clipActive,
     inkActive,
-    inkExtent,
+    inkReach,
     drawInk,
     ensureNoisePhase,
     OCTAVES,
@@ -52,11 +52,10 @@
   import { maskTool } from './mask-tool.svelte.js';
   import { inspectorTab, effectsSubTab } from './inspector-tabs.svelte.js';
   import WarpGizmo from './editor/WarpGizmo.svelte';
-  import { brushTool, brushArmed, liquifySettings } from './brush-tool.svelte.js';
-  import { liquifyGesture, frameScaleFor } from './liquify-gesture.js';
-  import { buildStroke, strokeHit } from './brush.js';
+  import { brushArmed } from './brush-tool.svelte.js';
   import { inkTipIds, settleTips } from './brush-tips.js';
-  import { normalizeInkStroke } from './data.js';
+  import { liquifySettings } from './liquify-tool.svelte.js';
+  import { liquifyMeshGesture, frameScaleFor } from './liquify-mesh.js';
 
   // pg defaults to current page; longstrip passes explicit page.
   let { box, pageFrameEl, pg = page() } = $props();
@@ -221,23 +220,14 @@
   // reaches outside it - a stroke drawn over the edge must not be cut off here
   // any more than it is on export.
   let inkEl = $state(null);
-  // The gesture in flight. Raw pointer samples, not stored points: `buildStroke`
-  // is what turns them into a stroke, once, when the pointer lifts. Declared
-  // here rather than beside the gesture because the repaint key below reads it.
-  let inkDraft = $state(null);
-  // The draft has no committed extent to measure, so while one is in flight the
-  // canvas is padded by the tip's own width. Without it the live stroke is
-  // clipped at the box edge and then jumps wider on release, which reads as the
-  // brush having moved rather than as the canvas having grown.
-  const inkPad = $derived(
-    Math.max(
-      inkActive(s.ink) ? inkExtent(s.ink) : 0,
-      inkDraft?.length ? Math.ceil(brushTool.settings.size) : 0,
-    ),
-  );
+  // Padded by however far the ink reaches outside the box, so a stroke that
+  // overhangs the edge is not cut off here any more than it is on export.
+  const inkPad = $derived(inkReach(s));
+  // The strokes and shadows are in the key because they are in the picture:
+  // they wrap the ink (see `drawInk`), so a change to either repaints it.
   const inkKey = $derived(
-    (inkActive(s.ink) || inkDraft?.length)
-      ? JSON.stringify(s.ink) + '|' + (inkDraft?.length ?? 0) + `|${box.w}|${box.h}|${z}`
+    inkActive(s.ink)
+      ? JSON.stringify([s.ink, s.strokes, s.shadows]) + `|${box.w}|${box.h}|${z}`
       : '',
   );
   let inkDrawn = '';
@@ -259,10 +249,11 @@
     return true;
   }
 
-  // The ink canvas, drawn from scratch: the committed strokes and, while the
-  // pointer is down, the stroke under it. `tips` is what the imported brushes
+  // The ink canvas, drawn from scratch. `tips` is what the imported brushes
   // stamp with; without it - the first frame, or a brush this install does not
-  // have - those strokes draw with the round tip and keep their brush id.
+  // have - those strokes draw with the round tip and keep their brush id. The
+  // strokes themselves are drawn on the brush board and placed here whole; a
+  // box never takes a stroke from the pointer directly.
   function paintInk(el, tips) {
     const w = Math.max(1, Math.round((box.w + inkPad * 2) * z));
     const h = Math.max(1, Math.round((box.h + inkPad * 2) * z));
@@ -273,13 +264,7 @@
     ctx.clearRect(0, 0, w, h);
     ctx.scale(z, z);
     ctx.translate(inkPad, inkPad);
-    drawInk(ctx, s.ink, undefined, tips);
-    // The stroke under the pointer, drawn with the same painter so what the
-    // user is watching is what they will get when they lift.
-    if (inkDraft?.length) {
-      const preview = buildStroke($state.snapshot(inkDraft), $state.snapshot(brushTool.settings));
-      if (preview) drawInk(ctx, { on: true, strokes: [preview] }, undefined, tips);
-    }
+    drawInk(ctx, s.ink, undefined, tips, s);
   }
 
   $effect(() => {
@@ -314,7 +299,6 @@
     // frame after that.
     paintInk(el, inkTips);
     const ids = inkTipIds(s.ink);
-    if (inkDraft?.length) inkTipIds({ strokes: [brushTool.settings] }, ids);
     if (!ids.size) {
       inkTips = null;
       inkTipSeq++;
@@ -361,7 +345,7 @@
   //
   // This is the substitution the PSD export already makes for a box Photoshop
   // cannot re-render, and it costs the same things: no caret, no selection, and
-  // no drawing tool. See `onDblClick`, `maskArmed` and `inkArmed` below.
+  // no drawing tool. See `onDblClick` and `maskArmed` below.
   const warped = $derived(warpActive(s, box.w, box.h));
   let warpEl = $state(null);
   let warpGeom = $state(null);
@@ -708,6 +692,25 @@
     );
   });
 
+  // How far the centred block moves so its INK, not its line boxes, is centred
+  // in the box - the exporter's `inkShiftY`, in zoomed px because it is applied
+  // to the zoomed text. Zero for any other `valign` and for curved text, which
+  // is placed glyph by glyph from the box centre. While the box is being typed
+  // into there are no shaped lines, so the typed paragraphs stand in: their
+  // first ascender and last descender are the ones that decide the shift, and
+  // measuring them keeps the text from jumping when the edit starts and ends.
+  const inkShift = $derived.by(() => {
+    if (s.valign !== 'middle' || layout) return 0;
+    const lines = shaped ?? (editing ? applyCase(text, s).split('\n') : null);
+    return lines ? inkShiftY(lines, s, effSize) : 0;
+  });
+  // The shift goes FIRST in the transform list so it is applied in the box's
+  // frame: written after a mirror it would be flipped along with the glyphs and
+  // move a vertically-mirrored block the wrong way.
+  const stackTransform = $derived(
+    inkShift || mirror ? `transform:translateY(${inkShift}px)${mirror ? ' ' + mirror : ''};` : '',
+  );
+
   // Reactive auto-fit effect for text metrics.
   //
   // The box's height follows its line count, and this component has just worked
@@ -1015,14 +1018,9 @@
   // with one undo record each, like the path gizmo's drags.
   // ...and never on a warped box: a mask shape is stated in box-local px and is
   // applied to the texture BEFORE the mesh carries it, so the shape would land
-  // where the pointer is not. The same is true of a brush stroke below. Both
-  // tools come back the moment the warp is switched off.
+  // where the pointer is not. The tool comes back the moment the warp is
+  // switched off.
   const maskArmed = $derived(selected && !editing && !warped && !bulkOn && s.clip?.on && maskTool.id);
-
-  // The brush draws into the SELECTED box only, and never while its text is
-  // being edited or while the bulk panel owns the selection. Same gate the mask
-  // tool uses, for the same reason: two things must not own one pointer.
-  const inkArmed = $derived(selected && !editing && !warped && !bulkOn && brushArmed());
 
   // The gesture in progress: a shape being drawn, not yet in the style.
   const maskDraft = $state({ shape: null, poly: null });
@@ -1097,70 +1095,30 @@
     document.addEventListener('pointercancel', end, { signal: ac.signal });
   }
 
-  function commitInkStroke(stroke) {
-    const styleBefore = cloneStyle(box.style);
-    // Switching the block on is part of the same edit as the first stroke, so
-    // undo takes both away together rather than leaving an empty ink block on.
-    s.ink.on = true;
-    s.ink.strokes = [...s.ink.strokes, stroke];
-    markUnsaved();
-    record({ t: 'style', pageId: pg.id, boxId: box.id, before: styleBefore, after: cloneStyle(box.style) });
-  }
-
-  // Erasing removes whole strokes the pointer crosses. There are no pixels to
-  // cut in a vector model, and a stroke-level eraser is the one that needs no
-  // second data shape to describe a half-erased stroke.
-  function onErasePointerDown(e) {
-    e.currentTarget.setPointerCapture?.(e.pointerId);
-    const pid = e.pointerId;
-    const styleBefore = cloneStyle(box.style);
-    let hitAny = false;
-    const rub = (ev) => {
-      const [x, y] = maskPoint(ev);
-      const r = brushTool.settings.size / 2;
-      const kept = s.ink.strokes.filter((k) => !strokeHit(k, x, y, r));
-      if (kept.length !== s.ink.strokes.length) {
-        s.ink.strokes = kept;
-        hitAny = true;
-      }
-    };
-    rub(e);
-    const move = (ev) => {
-      if (ev.pointerId !== pid) return;
-      rub(ev);
-    };
-    const ac = new AbortController();
-    const end = (ev) => {
-      if (ev.pointerId !== pid) return;
-      live.delete(ac);
-      ac.abort();
-      // One rub is one history step, however many strokes it took out.
-      if (!hitAny) return;
-      markUnsaved();
-      record({ t: 'style', pageId: pg.id, boxId: box.id, before: styleBefore, after: cloneStyle(box.style) });
-    };
-    live.add(ac);
-    document.addEventListener('pointermove', move, { signal: ac.signal });
-    document.addEventListener('pointerup', end, { signal: ac.signal });
-    document.addEventListener('pointercancel', end, { signal: ac.signal });
-  }
-
   // ---- liquify ----
   //
-  // The third brush mode bends the strokes that are already there instead of
-  // laying a new one down. The maths is `liquify.js` and the gesture - the
-  // snapshot, the one commit, the cancel - is `liquify-gesture.js`; what lives
-  // here is the pointer, the clock and the circle the cursor draws.
+  // The Effects panel's liquify sub-tab: a round tool that pushes the box's
+  // MESH around under the pointer, so the type and the ink bend together
+  // through the same texture the transform gizmo deforms by hand. The maths is
+  // `liquify.js`, the gesture - the snapshot, the one commit, the cancel - is
+  // `liquify-mesh.js`; what lives here is the pointer, the clock, the circle
+  // the cursor draws, and the cached-texture repaint the gizmo also uses.
   //
   // `liquifyEnd` is how a gesture in flight is ended from anywhere: the pointer
   // coming up, Escape, a cancelled pointer, and the two endings that arrive
   // with no pointer event at all - the capture surface being unmounted, and
   // this box being destroyed. Null when no gesture is running.
   let liquifyEnd = null;
-  // Where the tool's circle is drawn, box-local page px, or null when the
-  // pointer is not over the box. Only ever read while liquify is armed.
   let liquifyAt = $state(null);
-  const liquifyOn = $derived(inkArmed && brushTool.mode === 'liquify');
+  const liquifyOn = $derived(
+    selected &&
+      !editing &&
+      !bulkOn &&
+      !brushArmed() &&
+      !!pageFrameEl &&
+      inspectorTab.id === 'effects' &&
+      effectsSubTab.id === 'liquify',
+  );
   const liquifyRing = $derived(
     liquifyOn && liquifyAt
       ? { x: liquifyAt[0], y: liquifyAt[1], d: liquifySettings().radius * 2 * z }
@@ -1168,29 +1126,29 @@
   );
 
   function onLiquifyPointerDown(e) {
-    // A second pointer arriving mid-gesture - a finger on a multi-touch screen,
-    // a pen tapped while a mouse button is down - starts a new session, and the
-    // old one has to END rather than be overwritten: its listeners would go on
-    // running against an AbortController nothing holds any more, and it would
-    // never settle, so its deformation would sit on the box with no history
-    // entry able to take it back. Cancelled, not committed, for the reason the
-    // mesh gizmo cancels: a pointer that never came up did not finish.
+    if (e.button !== 0 || !liquifyOn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // A second pointer mid-gesture ends the first as a cancel: a pointer that
+    // never came up did not finish.
     liquifyEnd?.(false);
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const pid = e.pointerId;
-    const g = liquifyGesture(box, pg.id, brushTool.settings);
+    const g = liquifyMeshGesture(box, pg.id, liquifySettings());
+    // The texture is rendered once, here, and every move re-warps it - the
+    // same trade the transform gizmo makes, for the same reason.
+    warpPainter.begin();
     const ac = new AbortController();
     let [lx, ly] = maskPoint(e);
     let lastT = e.timeStamp;
     liquifyAt = [lx, ly];
-
-    // One ending, whichever way it is reached.
     liquifyEnd = (commit) => {
       liquifyEnd = null;
       live.delete(ac);
       ac.abort();
       if (commit) g.commit();
       else g.cancel();
+      warpPainter.end();
     };
     const move = (ev) => {
       if (ev.pointerId !== pid) return;
@@ -1198,31 +1156,18 @@
       const scale = frameScaleFor(ev.timeStamp - lastT);
       lastT = ev.timeStamp;
       liquifyAt = [x, y];
-      // The tool is centred where the pointer IS - the ink is dragged towards
-      // the hand rather than pushed from where it was - and the delta is the
-      // hand's own movement over that step, which is what push moves the ink
-      // by. The gesture zeroes it for the modes that do not use it.
-      g.step({ cx: x, cy: y, dx: x - lx, dy: y - ly, scale });
+      if (g.step({ cx: x, cy: y, dx: x - lx, dy: y - ly, scale })) warpPainter.frame();
       lx = x;
       ly = y;
     };
     const up = (ev) => {
-      if (ev.pointerId !== pid) return;
-      liquifyEnd?.(true);
+      if (ev.pointerId === pid) liquifyEnd?.(true);
     };
-    // A cancelled pointer is Escape: it is a gesture the browser took away
-    // mid-drag, and half a deformation is not something to put on the stack.
     const cancel = (ev) => {
-      if (ev.pointerId !== pid) return;
-      liquifyEnd?.(false);
+      if (ev.pointerId === pid) liquifyEnd?.(false);
     };
-    // Escape puts the ink back exactly as the pointer found it, and does ONLY
-    // that. Capture phase on the document - the mesh gizmo's own answer to the
-    // same problem - so this press is read before App's window handler can read
-    // it as "deselect the box", and stopped there: cancelling a drag and losing
-    // the selection are two different things, and the second would take the
-    // panel and the tool away with it. The listener lives only for as long as
-    // the gesture does, so Escape with no drag in flight still deselects.
+    // Escape puts the mesh back exactly as the pointer found it, and ONLY that:
+    // capture phase so App's window handler cannot also read it as "deselect".
     const key = (ev) => {
       if (ev.key !== 'Escape') return;
       ev.preventDefault();
@@ -1236,23 +1181,17 @@
     document.addEventListener('keydown', key, { signal: ac.signal, capture: true });
   }
 
-  // The circle follows the pointer while nothing is pressed, so a letterer can
-  // see what the tool would reach before committing to a drag.
-  function onInkPointerMove(e) {
+  function onLiquifyPointerMove(e) {
     if (!liquifyOn || liquifyEnd) return;
     liquifyAt = maskPoint(e);
   }
-  function onInkPointerLeave() {
+  function onLiquifyPointerLeave() {
     if (!liquifyEnd) liquifyAt = null;
   }
 
-  // The capture surface can go away mid-drag with no pointer event ever
-  // arriving: the brush is disarmed, another box is selected, the warp is
-  // switched on. Tearing the listeners down is not enough - the ink would be
-  // left wherever the drag had bent it with nothing on the stack to take it
-  // back - so the gesture is ended like any other ending, as a cancel, because
-  // a pointer that never came up did not finish. Same reading as the mesh
-  // gizmo's teardown.
+  // The capture surface can go away mid-drag with no pointer event: the
+  // sub-tab changes, another box is selected, the brush is armed. Ended as a
+  // cancel, like the mesh gizmo's teardown.
   $effect(() => {
     if (liquifyOn) return;
     untrack(() => {
@@ -1264,64 +1203,6 @@
     liquifyEnd?.(false);
     liquifyAt = null;
   });
-
-  function onInkPointerDown(e) {
-    if (e.button !== 0 || !inkArmed || !pageFrameEl) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (brushTool.mode === 'erase') {
-      onErasePointerDown(e);
-      return;
-    }
-    if (brushTool.mode === 'liquify') {
-      onLiquifyPointerDown(e);
-      return;
-    }
-    e.currentTarget.setPointerCapture?.(e.pointerId);
-    const pid = e.pointerId;
-    const t0 = e.timeStamp;
-    const sample = (ev) => {
-      const [x, y] = maskPoint(ev);
-      // A mouse reports a flat 0.5 and a pen reports 0 on the up edge; both are
-      // handled by the width source, not here.
-      return { x, y, pressure: ev.pressure ?? 0.5, t: ev.timeStamp - t0 };
-    };
-    inkDraft = [sample(e)];
-    const move = (ev) => {
-      if (ev.pointerId !== pid || !inkDraft) return;
-      // Coalesced events give the full pointer trace on a device that batches
-      // them, which is what makes velocity dynamics read correctly on a tablet.
-      // An empty list means the engine kept no trace, not that the pointer did
-      // not move, so fall back to the event itself rather than drop the sample.
-      const coalesced = ev.getCoalescedEvents?.();
-      const evs = coalesced?.length ? coalesced : [ev];
-      for (const one of evs) {
-        const p = sample(one);
-        const last = inkDraft[inkDraft.length - 1];
-        // Half a page pixel of movement is below what any tip can show, and
-        // dropping those keeps a slow stroke from storing thousands of points.
-        if (Math.hypot(p.x - last.x, p.y - last.y) > 0.5) inkDraft.push(p);
-      }
-    };
-    const ac = new AbortController();
-    const end = (ev) => {
-      if (ev.pointerId !== pid) return;
-      live.delete(ac);
-      ac.abort();
-      const raw = inkDraft;
-      inkDraft = null;
-      if (!raw) return;
-      const stroke = buildStroke($state.snapshot(raw), $state.snapshot(brushTool.settings));
-      // Normalized at the boundary, so what is stored is already what a reload
-      // would hand back - the editor and a reopened file draw the same ink.
-      const norm = stroke && normalizeInkStroke(stroke);
-      if (norm) commitInkStroke(norm);
-    };
-    live.add(ac);
-    document.addEventListener('pointermove', move, { signal: ac.signal });
-    document.addEventListener('pointerup', end, { signal: ac.signal });
-    document.addEventListener('pointercancel', end, { signal: ac.signal });
-  }
 
   // Double-click closes the polygon; Escape drops it.
   function onMaskDblClick(e) {
@@ -1538,7 +1419,7 @@
     <div
       class="txt editable"
       contenteditable="true"
-      style={editStyle}
+      style="{editStyle}{inkShift ? `transform:translateY(${inkShift}px);` : ''}"
       use:focusSelect
       oninput={onEditInput}
       onblur={onEditBlur}
@@ -1563,7 +1444,7 @@
       {/each}
     </div>
   {:else}
-    <div class="txt shaped stack" style="{textStyle}{mirror ? `transform:${mirror};` : ''}{filterCss}">
+    <div class="txt shaped stack" style="{textStyle}{stackTransform}{filterCss}">
       {#each layers as ly, li (li)}
         <div class="tlayer" class:base={li === 0} style={ly.css}>
           {#each shaped as ln, i (i)}<div class="tline" style={ly.line}>{ln === '' ? '\u200b' : ln}</div>{/each}
@@ -1571,7 +1452,7 @@
       {/each}
     </div>
   {/if}
-    {#if !warped && (inkActive(s.ink) || inkDraft?.length)}
+    {#if !warped && inkActive(s.ink)}
       <!-- Inside the clip wrapper so the visibility mask hides ink the same way
            it hides letters; positioned off the box's own top-left, offset by the
            overhang the canvas was grown by. -->
@@ -1640,18 +1521,18 @@
     </svg>
   {/if}
 
-  {#if inkArmed}
-    <!-- The surface that turns a drag into a stroke. Full-box and on top, the
+  {#if liquifyOn}
+    <!-- The surface that turns a drag into a liquify. Full-box and on top, the
          same shape the mask tool's capture rect has; without it the drag lands
          on the box and moves it instead. Outside the clip wrapper so a mask
-         cannot hide the surface that captures the drag. -->
+         cannot hide it. -->
     <div
-      class="ink-capture"
+      class="liq-capture"
       style="width:{box.w * z}px;height:{box.h * z}px"
-      onpointerdown={onInkPointerDown}
-      onpointermove={onInkPointerMove}
-      onpointerenter={onInkPointerMove}
-      onpointerleave={onInkPointerLeave}
+      onpointerdown={onLiquifyPointerDown}
+      onpointermove={onLiquifyPointerMove}
+      onpointerenter={onLiquifyPointerMove}
+      onpointerleave={onLiquifyPointerLeave}
       aria-hidden="true"
     ></div>
   {/if}
@@ -1659,9 +1540,7 @@
   {#if liquifyRing}
     <!-- The tool's own circle, at its radius in PAGE px times the zoom: what
          the next application would reach. Drawn rather than made a CSS cursor
-         because the radius goes to 200 page px and a cursor image cannot. It
-         takes no pointer - the capture surface underneath it must keep the
-         drag - and it sits outside the clip wrapper so a mask cannot hide it. -->
+         because the radius goes to 300 page px and a cursor image cannot. -->
     <div
       class="liq-ring"
       style="left:{liquifyRing.x * z}px;top:{liquifyRing.y * z}px;width:{liquifyRing.d}px;height:{liquifyRing.d}px"
@@ -1712,7 +1591,8 @@
      is stated in. */
   .clipwrap { position: absolute; inset: 0; display: flex; box-sizing: border-box; }
   /* The ink layer. Absolute so it does not disturb the text's flex centring,
-     and never a pointer target: drawing is captured by the box, not by this. */
+     and never a pointer target: the strokes are drawn on the brush board and
+     placed here whole. */
   .inkl {
     position: absolute;
     pointer-events: none;
@@ -1747,9 +1627,9 @@
   .mask-gizmo.excl .stroke { stroke: rgba(230, 60, 60, 0.3); }
   .mask-gizmo .draft { fill: none; stroke: #f90; stroke-width: 1.5; stroke-dasharray: 4 3; }
   .mask-gizmo .vert { fill: #f90; stroke: #fff; stroke-width: 1; }
-  /* The brush's capture surface. `touch-action: none` so a pen or a finger
-     draws instead of scrolling the page out from under the stroke. */
-  .ink-capture {
+  /* The liquify tool's capture surface. `touch-action: none` so a pen or a
+     finger drags instead of scrolling the page out from under the tool. */
+  .liq-capture {
     position: absolute;
     left: 0;
     top: 0;
@@ -1757,16 +1637,13 @@
     touch-action: none;
     z-index: 3;
   }
-  /* Liquify draws its own circle, and the crosshair inside it is what says
-     where the centre of that circle is - so both are shown, unlike a paint app
-     that hides the system cursor behind a brush outline it can draw at native
-     resolution. */
+  /* Liquify draws its own circle, and the crosshair inside it says where the
+     centre is - so both are shown. A darker ring under the first, so the circle
+     reads on white paper and on black art alike. */
   .liq-ring {
     position: absolute;
     border: 1px solid rgba(255, 153, 0, 0.9);
     border-radius: 50%;
-    /* A second, darker ring under the first, so the circle reads on white
-       paper and on black art alike - the same trick the mesh hairline uses. */
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset;
     transform: translate(-50%, -50%);
     pointer-events: none;

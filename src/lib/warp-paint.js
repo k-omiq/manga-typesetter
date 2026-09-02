@@ -16,15 +16,7 @@
 // point outside the grid, so the extension is continuous with the inside and is
 // stated in one place.
 
-import {
-  identityMesh,
-  isIdentityMesh,
-  affineFromTriangle,
-  warpPoint,
-  solveHomography,
-  applyHomography,
-  isParallelogram,
-} from './warp.js';
+import { isIdentityMesh, affineFromTriangle, affineWarpPoint, meshMap } from './warp.js';
 
 // How far past the deformed mesh the destination canvas reaches, page px. Two
 // is the antialiasing bleed: a triangle whose edge lands on the last pixel of
@@ -32,17 +24,22 @@ import {
 // each edge out by a fraction of a pixel more.
 export const WARP_PAD = 2;
 
-// How finely the four-corner case is subdivided before it is drawn, at the
-// floor and at the ceiling. The projective map is approximated by a straight
-// affine piece per cell, and the error of that approximation is a fraction of
-// the CELL, not of the box: measured against the homography it approximates,
-// eight by eight is a third of a pixel out on a 100px balloon and thirteen out
-// on a 4000px full-page SFX under a moderate drag - which facets visibly, and
-// gets worse the harder the corner is pulled. So the grid
-// follows the box's size - one cell per ~120 page px - and the two bounds are
-// what keeps that honest at both ends: never coarser than the 8x8 that was
-// right for a small box, never finer than 32x32, which is 2048 triangles and
-// already past the point where another one changes a pixel.
+// How finely a curved map is subdivided before it is drawn, at the floor and at
+// the ceiling. The projective map and the bicubic surface are both approximated
+// by a straight affine piece per virtual cell, and the error of that
+// approximation is a fraction of the CELL, not of the box: measured against the
+// homography it approximates, eight by eight is a third of a pixel out on a
+// 100px balloon and thirteen out on a 4000px full-page SFX under a moderate
+// drag - which facets visibly, and gets worse the harder the corner is pulled.
+// So the grid follows the box's size - one cell per ~120 page px - and the two
+// bounds are what keeps that honest at both ends: never coarser than the 8x8
+// that was right for a small box, never finer than 32x32 on a side, which is
+// 2048 triangles and already past the point where another one changes a pixel.
+//
+// For a MESH the count is per side of the whole box, spread over the mesh's
+// own cells: a 3x3 on a balloon gets three virtual cells per mesh cell, a
+// 24x24 liquify mesh gets one (its cells are already finer than the floor
+// asks), and nothing gets more than the ceiling on a side.
 export const WARP_SUB = 8;
 export const WARP_SUB_MAX = 32;
 export const WARP_SUB_PX = 120;
@@ -158,13 +155,15 @@ export function expandTriangle(tri, pad) {
   return out;
 }
 
-// The source grid lines for one axis: the mesh's own cell boundaries, plus the
-// band the footprint reaches past them. Returns the coordinates and, for each,
-// which mesh column/row it is (-1 for a band line, which has no control point
-// and is mapped rather than read).
-function axisLines(n, size, lo, hi) {
+// The source grid lines for one axis: the mesh's own cell boundaries, each cell
+// cut into `per` virtual ones, plus the band the footprint reaches past them.
+// Returns the coordinates and, for each, which mesh column/row it is (-1 for a
+// virtual or band line, which has no control point and is mapped rather than
+// read).
+function axisLines(n, per, size, lo, hi) {
   const at = [];
-  for (let i = 0; i <= n; i++) at.push({ v: (size * i) / n, k: i });
+  const m = n * per;
+  for (let i = 0; i <= m; i++) at.push({ v: (size * i) / m, k: i % per === 0 ? i / per : -1 });
   if (Number.isFinite(lo) && lo < at[0].v) at.unshift({ v: lo, k: -1 });
   if (Number.isFinite(hi) && hi > at[at.length - 1].v) at.push({ v: hi, k: -1 });
   return at;
@@ -233,14 +232,16 @@ function planFor(xs, ys, map, span) {
 // negative origin for the overhang above and left of the box - and is what the
 // band of cells is sized from. Omit it and only the box rect is carried.
 //
-// The four-handle case goes through the projective map when the quad asks for
-// one: one cell drawn as two triangles creases along its diagonal, so the quad
-// is subdivided into virtual cells whose corners come from the homography -
-// `subdivisionFor` of them per side unless a caller names a number, because the
-// error of an affine piece is a fraction of the cell and a full-page box needs
-// more cells than a balloon does. A quad that is already a parallelogram takes
-// the plain path - the affine map is exact there, and both routes draw the same
-// picture.
+// The map is `meshMap`'s - the homography for a four-handle perspective, the
+// bicubic surface for a grid - and a curved map is drawn by subdividing every
+// mesh cell into virtual cells whose corners come from the map, because one
+// cell drawn as two triangles creases along its diagonal. `subdivisionFor` of
+// them per side of the box unless a caller names a number (`opts.sub`): the
+// error of an affine piece is a fraction of the cell, and a full-page box needs
+// more cells than a balloon does. The control points themselves are carried
+// exactly, read straight off the mesh rather than back through the map. A
+// one-cell mesh whose affine reading is already exact (a parallelogram) takes
+// the plain path - both routes draw the same picture there.
 export function warpPlan(warp, w, h, rect = null, opts = {}) {
   const W = num(w);
   const H = num(h);
@@ -249,6 +250,8 @@ export function warpPlan(warp, w, h, rect = null, opts = {}) {
   const rows = gridN(warp?.rows);
   const pts = warp?.pts;
   if (isIdentityMesh(pts, cols, rows, W, H)) return null;
+  const map = meshMap(pts, cols, rows, W, H);
+  if (!map) return null;
 
   const sub = gridN(opts.sub ?? subdivisionFor(W, H));
   const x0 = rect ? Math.min(0, num(rect.x)) : 0;
@@ -257,36 +260,29 @@ export function warpPlan(warp, w, h, rect = null, opts = {}) {
   const y1 = rect ? Math.max(H, num(rect.y) + num(rect.h)) : H;
   const span = Math.max(x1 - x0, y1 - y0, W, H);
 
-  // The plain reading of the mesh: the control points themselves at the grid's
-  // own corners, and the outermost cell extended for the band around them.
-  const affine = () => {
-    const xs = axisLines(cols, W, x0, x1);
-    const ys = axisLines(rows, H, y0, y1);
-    const map = (x, y) =>
-      x.k >= 0 && y.k >= 0
-        ? pts[y.k * (cols + 1) + x.k]
-        : warpPoint(pts, cols, rows, W, H, x.v, y.v);
-    return planFor(xs, ys, map, span);
+  // How many virtual cells each mesh cell is cut into on an axis of `n` cells:
+  // enough to reach `sub` per side, never past the ceiling, never fewer than
+  // one - and exactly one for the affine reading, which is straight already.
+  const per = (n) =>
+    map.kind === 'affine' ? 1 : Math.max(1, Math.min(Math.ceil(sub / n), Math.floor(WARP_SUB_MAX / n)));
+  const plan = (at, kx, ky) => {
+    const xs = axisLines(cols, kx, W, x0, x1);
+    const ys = axisLines(rows, ky, H, y0, y1);
+    return planFor(
+      xs,
+      ys,
+      (x, y) => (x.k >= 0 && y.k >= 0 ? pts[y.k * (cols + 1) + x.k] : at(x.v, y.v)),
+      span,
+    );
   };
 
-  if (cols === 1 && rows === 1) {
-    const quad = [pts[0], pts[1], pts[3], pts[2]]; // row-major tl,tr,bl,br -> polygon order
-    if (!isParallelogram(quad)) {
-      const src = identityMesh(1, 1, W, H);
-      const m = solveHomography([src[0], src[1], src[3], src[2]], quad);
-      if (m) {
-        const xs = axisLines(sub, W, x0, x1);
-        const ys = axisLines(sub, H, y0, y1);
-        const plan = planFor(xs, ys, (x, y) => applyHomography(m, x.v, y.v), span);
-        // A horizon crossing the band, or a quad so extreme the raster would be
-        // useless: the two triangles are a worse picture than this one, but they
-        // are a picture.
-        if (plan) return { ...plan, projective: true };
-      }
-    }
-  }
-  const plan = affine();
-  return plan && { ...plan, projective: false };
+  const curved = plan(map.at, per(cols), per(rows));
+  if (curved) return { ...curved, projective: map.kind === 'projective' };
+  // A projective quad whose horizon crosses the band, or one so extreme the
+  // raster would be useless: the two triangles are a worse picture than that
+  // one, but they are a picture.
+  const flat = plan((x, y) => affineWarpPoint(pts, cols, rows, W, H, x, y), 1, 1);
+  return flat && { ...flat, projective: false };
 }
 
 function newCanvas(w, h) {

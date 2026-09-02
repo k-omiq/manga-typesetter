@@ -37,7 +37,9 @@ export function cycleInspectorTab(step = 1) {
 // transform above it. Two different features with two adjacent names, so the
 // panel labels them "Warp" and "Transform" and the design says so in as many
 // words: they must not be confused.
-export const EFFECTS_SUBTABS = ['stroke', 'shadow', 'warp', 'transform', 'blur', 'edges', 'mask'];
+// `liquify` sits beside `transform` because it edits the same mesh with a
+// round tool instead of handles.
+export const EFFECTS_SUBTABS = ['stroke', 'shadow', 'warp', 'transform', 'liquify', 'blur', 'edges', 'mask'];
 
 export const effectsSubTab = $state({ id: 'stroke' });
 

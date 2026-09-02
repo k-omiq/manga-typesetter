@@ -99,6 +99,7 @@ const {
   brushTip,
   forgetBrushTips,
   removeBrush,
+  updateBrush,
   brushDir,
   sanitiseBrushSettings,
   __resetBrushLibrary,
@@ -261,7 +262,7 @@ describe('importBrushes', () => {
     await importBrushes(['/x/one.sut']);
     const s = getBrush('aaa').settings;
     expect(s.size).toBe(48);
-    expect(s.taperIn).toEqual({ on: true, len: 30, ratio: 70 });
+    expect(s.taperIn).toEqual({ on: true, len: 30, ratio: 70, mode: 'px' });
     expect(s.sharpAngles).toEqual({ on: true, deg: 60 });
     // Colour, dynamics and the selected brush belong to the tool, not the file.
     expect(s.color).toBeUndefined();
@@ -625,6 +626,46 @@ describe('removeBrush', () => {
   });
 });
 
+describe('updateBrush', () => {
+  beforeEach(async () => {
+    h.result = { brushes: [brush('aaa'), brush('bbb')], errors: [] };
+    await importBrushes(['/x/one.sut']);
+  });
+
+  it('renames and re-sanitises the settings, in memory and on disk', async () => {
+    expect(await updateBrush('aaa', { name: '  Big pen ', settings: { size: 9999, spacing: 0, dyn: { src: 'velocity', amount: 40 } } })).toBe(true);
+    const b = getBrush('aaa');
+    expect(b.name).toBe('Big pen');
+    expect(b.settings.size).toBe(2000);
+    expect(b.settings.spacing).toBe(1);
+    expect(b.settings.dyn).toEqual({ src: 'velocity', amount: 40 });
+    // What the patch did not name stays.
+    expect(b.settings.hardness).toBe(80);
+    const disk = JSON.parse(fsx._tree.files.get(INDEX)).brushes.find((x) => x.id === 'aaa');
+    expect(disk.name).toBe('Big pen');
+    expect(disk.settings.size).toBe(2000);
+    // The other brush and the order are untouched.
+    expect(installedBrushes.map((x) => x.id)).toEqual(['aaa', 'bbb']);
+  });
+
+  it('a blank name keeps the old one; junk in the patch is ignored', async () => {
+    expect(await updateBrush('aaa', { name: '   ', settings: 'nope', id: 'zzz' })).toBe(true);
+    expect(getBrush('aaa').name).toBe('Brush aaa');
+    expect(getBrush('zzz')).toBeUndefined();
+  });
+
+  it('refuses an unknown brush', async () => {
+    expect(await updateBrush('nothere', { name: 'x' })).toBe(false);
+  });
+
+  it('refuses a read-only library', async () => {
+    fsx._tree.files.set(INDEX, JSON.stringify({ schema: INDEX_SCHEMA + 1, brushes: [] }));
+    await loadBrushLibrary({ force: true });
+    expect(brushLibrary.readOnly).toBe(true);
+    expect(await updateBrush('aaa', { name: 'x' })).toBe(false);
+  });
+});
+
 describe('without a Tauri host', () => {
   beforeEach(() => withoutTauri());
 
@@ -659,7 +700,7 @@ describe('sanitiseBrushSettings', () => {
     expect(s.size).toBe(24);
     expect(s.spacing).toBe(7);
     expect(s.hardness).toBe(100);
-    expect(s.taperIn).toEqual({ on: true, len: 20, ratio: 60 });
+    expect(s.taperIn).toEqual({ on: true, len: 20, ratio: 60, mode: 'px' });
   });
 
   it('treats a null as absent rather than as the zero it coerces to', () => {
@@ -733,12 +774,17 @@ describe('sanitiseBrushSettings', () => {
     }
   });
 
-  it('refuses a dynamics source this engine does not have, off included', () => {
-    // `off` is the one the panel offers and an import may not send: a brush
-    // with no dynamics omits the key rather than switching the letterer's off.
-    for (const src of ['off', 'tilt', 'Pressure', '', 7]) {
+  it('refuses a dynamics source this engine does not have', () => {
+    for (const src of ['tilt', 'Pressure', '', 7]) {
       expect('dyn' in sanitiseBrushSettings({ dyn: { src, amount: 50 } })).toBe(false);
     }
+  });
+
+  it('keeps an explicit off, which is how the manager switches a brush\'s dynamics off', () => {
+    // An import never sends `off` (a brush with no driver omits the key), so
+    // one that is there is the letterer's, and it must beat the tool's own
+    // dynamics when the brush is picked.
+    expect(sanitiseBrushSettings({ dyn: { src: 'off', amount: 50, curve: [[0, 0], [1, 1]] } }).dyn).toEqual({ src: 'off', amount: 50 });
   });
 
   // `rowOf` re-sanitises on the way out, so a key dropped there would be a

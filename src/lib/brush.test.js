@@ -512,3 +512,192 @@ describe('strokeHit', () => {
     expect(strokeHit(normalizeInkStroke({ size: 20, pts: [[0, 0, 0]] }), 0, 0, 5)).toBe(false);
   });
 });
+
+// ===========================================================================
+// Sharp angles and rounded ones
+// ===========================================================================
+// A corner is protected by BOTH corrections or by neither: stabilisation
+// rounds it before smoothing ever sees it, so the guard has to sit in front of
+// both. And smoothing is stated in page px, not in samples: a hand that slows
+// into a corner leaves points a px apart, a hand that sweeps leaves them ten
+// apart, and the same slider has to round both the same amount.
+import { sharpCorners } from './brush.js';
+
+// An L, right then down, sampled every `step` px.
+const ell = (step) => {
+  const out = [];
+  for (let x = 0; x <= 100; x += step) out.push([x, 0, 1]);
+  for (let y = step; y <= 100; y += step) out.push([100, y, 1]);
+  return out;
+};
+const cornerMiss = (pts) => Math.min(...pts.map(([x, y]) => Math.hypot(x - 100, y)));
+
+describe('sharpCorners', () => {
+  it('finds a corner the hand spread over several points, once', () => {
+    const spread = [[0, 0, 1], [4, 0, 1], [8, 0, 1], [10, 0, 1], [11, 1, 1], [12, 3, 1], [12, 7, 1], [12, 11, 1], [12, 15, 1]];
+    const pins = [...sharpCorners(spread, 45)];
+    expect(pins).toHaveLength(1);
+    expect([3, 4, 5]).toContain(pins[0]);
+  });
+
+  it('finds nothing at a threshold of zero, and nothing in a one-px wobble', () => {
+    expect(sharpCorners(ell(4), 0).size).toBe(0);
+    const wobble = Array.from({ length: 30 }, (_, i) => [i, i % 2, 1]);
+    expect(sharpCorners(wobble, 45).size).toBe(0);
+  });
+});
+
+describe('a protected corner', () => {
+  it('survives stabilisation exactly, and moves without the guard', () => {
+    const pts = ell(4);
+    expect(stabilisePath(pts, 60, 45)).toContainEqual([100, 0, 1]);
+    expect(cornerMiss(stabilisePath(pts, 60, 0))).toBeGreaterThan(1);
+  });
+
+  it('survives both passes end to end with the hand steadied hard', () => {
+    const raw = ell(4).map(([x, y], i) => ({ x, y, pressure: 0.5, t: i * 8 }));
+    const s = { ...defaultBrushSettings(), stabilise: 40, postCorrect: 60, sharpAngles: { on: true, deg: 45 }, dyn: { src: 'off' } };
+    expect(buildStroke(raw, s).pts).toContainEqual([100, 0, 1]);
+  });
+});
+
+describe('a rounded corner', () => {
+  it('is rounded the same whether the hand was slow or fast', () => {
+    const slow = cornerMiss(smoothPath(ell(1), 100, 0));
+    const fast = cornerMiss(smoothPath(ell(4), 100, 0));
+    expect(slow).toBeGreaterThan(2);
+    expect(Math.abs(slow - fast)).toBeLessThan(0.5);
+  });
+
+  it('is rounded less at a lower setting, and not at all when protected', () => {
+    expect(cornerMiss(smoothPath(ell(2), 35, 0))).toBeLessThan(cornerMiss(smoothPath(ell(2), 100, 0)));
+    expect(cornerMiss(smoothPath(ell(2), 100, 45))).toBe(0);
+  });
+
+  it('leaves a straight run straight', () => {
+    const run = Array.from({ length: 40 }, (_, i) => [i * 3, 10, 1]);
+    for (const [, y] of smoothPath(run, 100, 0)) expect(y).toBeCloseTo(10, 9);
+  });
+});
+
+// ===========================================================================
+// What phase 7 added: the CSP settings the corpus actually uses
+// ===========================================================================
+import { taperPx, tipIndex, speedProfile, smoothReach, TIP_ORDERS } from './brush.js';
+
+describe('taperPx', () => {
+  it('reads a percentage taper against the brush size and a px one as is', () => {
+    expect(taperPx({ len: 30, mode: 'pct' }, 200)).toBe(60);
+    expect(taperPx({ len: 30, mode: 'px' }, 200)).toBe(30);
+    expect(taperPx({ len: 30 }, 200)).toBe(30);
+  });
+
+  it('rides through strokeStamps: the same percentage tapers a bigger brush further', () => {
+    const k = (size) => normalizeInkStroke({
+      size, spacing: 10, taperIn: { on: true, len: 50, ratio: 0, mode: 'pct' }, taperOut: { on: false },
+      pts: line(60, 10),
+    });
+    const at = (size, x) => strokeStamps(k(size)).find((s) => Math.abs(s.x - x) < 0.6).size / size;
+    // Half the size in: the 20 px brush is past its 10 px taper, the 100 px
+    // brush is still climbing its 50 px one.
+    expect(at(20, 20)).toBeCloseTo(1, 5);
+    expect(at(100, 20)).toBeLessThan(0.5);
+  });
+});
+
+describe('tipIndex', () => {
+  it('cycles, ping-pongs, stops, or draws at random', () => {
+    const seq = (order, n, count) => Array.from({ length: count }, (_, i) => tipIndex(order, i, n, () => 0.6));
+    expect(seq('repeat', 3, 7)).toEqual([0, 1, 2, 0, 1, 2, 0]);
+    expect(seq('reverse', 3, 7)).toEqual([0, 1, 2, 1, 0, 1, 2]);
+    expect(seq('once', 3, 5)).toEqual([0, 1, 2, 2, 2]);
+    expect(seq('random', 3, 3)).toEqual([1, 1, 1]);
+    expect(tipIndex('repeat', 5, 1, () => 0)).toBe(0);
+    expect(TIP_ORDERS).toContain('random');
+  });
+
+  it('is put on the stamps of a stroke that carries a cycle, and on no other', () => {
+    const k = normalizeInkStroke({ size: 10, spacing: 100, tips: ['a', 'b'], tipOrder: 'repeat', pts: line(5, 10) });
+    expect(strokeStamps(k).map((s) => s.tip)).toEqual([0, 1, 0, 1, 0]);
+    const one = normalizeInkStroke({ size: 10, spacing: 100, tips: ['a'], pts: line(3, 10) });
+    expect(one.tips).toBeUndefined();
+    expect(strokeStamps(one)[0].tip).toBeUndefined();
+  });
+});
+
+describe('a ribbon stroke', () => {
+  it('is cut into slices that tile the path, each facing along it', () => {
+    const k = normalizeInkStroke({ size: 24, spacing: 10, ribbon: true, angle: 0, pts: line(11, 10) });
+    const st = strokeStamps(k);
+    expect(st.length).toBeGreaterThan(20);
+    // The slices cover the path once: their lengths sum to its length.
+    expect(st.reduce((a, s) => a + s.len, 0)).toBeCloseTo(100, 0);
+    // Along a rightward line every slice stands up 90 degrees to it.
+    for (const s of st) expect(s.angle).toBeCloseTo(-90, 5);
+    expect(st.at(-1).d).toBeCloseTo(100, 0);
+  });
+
+  it('turns with the path, as a stamped tip does under follow-direction', () => {
+    const down = [[0, 0, 1], [0, 50, 1], [0, 100, 1]];
+    const rib = strokeStamps(normalizeInkStroke({ size: 24, ribbon: true, pts: down }));
+    expect(rib[5].angle).toBeCloseTo(0, 5); // heading 90, less the quarter turn
+    const follow = strokeStamps(normalizeInkStroke({ size: 24, spacing: 50, followDir: true, angle: 10, pts: down }));
+    expect(follow[1].angle).toBeCloseTo(100, 5);
+    const fixed = strokeStamps(normalizeInkStroke({ size: 24, spacing: 50, angle: 10, pts: down }));
+    expect(fixed[1].angle).toBe(10);
+  });
+});
+
+describe('speedProfile and the speed-aware corrections', () => {
+  const gesture = (speeds) => {
+    let x = 0;
+    return speeds.map((v, i) => {
+      x += v * 10;
+      return { x, y: 0, pressure: 0.5, t: i * 10 };
+    });
+  };
+
+  it('is the speed at each point against the fastest, 0..1', () => {
+    const p = speedProfile(gesture([1, 1, 4, 1]));
+    expect(p[2]).toBe(1);
+    expect(p[1]).toBeCloseTo(0.25, 5);
+    expect(p[0]).toBe(p[1]);
+    expect(speedProfile([{ x: 0, y: 0, t: 0 }])).toEqual([0]);
+  });
+
+  it('reach grows past the old 12 px at the top of the slider', () => {
+    expect(smoothReach(35)).toBeCloseTo(12.4, 0);
+    expect(smoothReach(100)).toBe(60);
+    expect(smoothReach(0)).toBe(0);
+  });
+
+  it('smooths a fast stretch harder than a slow one when asked', () => {
+    // A wobble at the same amplitude in a slow stretch and a fast one.
+    const pts = [];
+    const speed = [];
+    for (let i = 0; i < 40; i++) {
+      pts.push([i * 2, i % 2 ? 6 : 0, 1]);
+      speed.push(0.1);
+    }
+    for (let i = 0; i < 40; i++) {
+      pts.push([80 + i * 2, i % 2 ? 6 : 0, 1]);
+      speed.push(1);
+    }
+    const out = smoothPath(pts, 40, 0, speed);
+    const wobble = (from, to) => {
+      let m = 0;
+      for (let i = from; i < to; i++) m = Math.max(m, Math.abs(out[i][1] - 3));
+      return m;
+    };
+    expect(wobble(10, 30)).toBeGreaterThan(wobble(50, 70));
+  });
+
+  it('shortens the taper of an end the hand crawled through', () => {
+    const slowIn = gesture([0.2, 0.2, 0.2, 0.2, 1, 1, 1, 1, 1, 1, 1, 1]);
+    const s = { ...defaultBrushSettings(), taperBySpeed: true, taperIn: { on: true, len: 20, ratio: 0, mode: 'px' }, dyn: { src: 'off' } };
+    const k = buildStroke(slowIn, s);
+    expect(k.taperIn.len).toBeLessThan(20);
+    expect(k.taperIn.len).toBeGreaterThanOrEqual(4);
+    expect(buildStroke(slowIn, { ...s, taperBySpeed: false }).taperIn.len).toBe(20);
+  });
+});

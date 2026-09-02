@@ -12,9 +12,13 @@ use super::geometry::{decode_yolo11, nms, BBox, Letterbox};
 /// Class index for panel frame in manga109 YOLO model.
 pub const FRAME_CLASS: usize = 2;
 
+/// Class index for text region in manga109 YOLO model (`{0: 'body', 1: 'face', 2: 'frame', 3: 'text'}`).
+pub const TEXT_CLASS: usize = 3;
+
 /// Loads an ONNX session for manga109 panel detection (CPU only).
 ///
-/// CPU execution is used deliberately to match float precision and avoid CoreML box edge drift.
+/// CPU execution is used deliberately to match float precision: GPU providers
+/// (CoreML measurably, the others by the same mechanism) drift box edges.
 pub fn load_session(model_path: &std::path::Path) -> ort::Result<Session> {
     Session::builder()?.commit_from_file(model_path)
 }
@@ -81,8 +85,8 @@ pub fn to_nchw(img: &RgbImage) -> Vec<f32> {
     out
 }
 
-/// Runs panel detection model on an image and returns panel boxes in page coordinates.
-pub fn detect(session: &mut Session, img: &DynamicImage, class_frame: usize) -> ort::Result<Vec<Panel>> {
+/// Runs panel detection model on an image and returns all kept bounding boxes in page coordinates.
+pub fn detect_classes(session: &mut Session, img: &DynamicImage) -> ort::Result<Vec<BBox>> {
     let (w, h) = img.dimensions();
     let (padded, lb) = preprocess(img);
     let input = Tensor::from_array((
@@ -100,12 +104,21 @@ pub fn detect(session: &mut Session, img: &DynamicImage, class_frame: usize) -> 
     let boxes = decode_yolo11(data, dims[1], dims[2], CONF_THRESHOLD);
     let kept = nms(boxes, IOU_THRESHOLD);
 
-    Ok(kept
+    Ok(kept.into_iter().map(|b| lb.to_source(b, w, h)).collect())
+}
+
+/// Runs panel detection model on an image and returns panel boxes in page coordinates.
+pub fn detect(session: &mut Session, img: &DynamicImage, class_frame: usize) -> ort::Result<Vec<Panel>> {
+    let boxes = detect_classes(session, img)?;
+    Ok(boxes
         .into_iter()
         .filter(|b| b.class == class_frame)
-        .map(|b| {
-            let s: BBox = lb.to_source(b, w, h);
-            Panel { x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2, score: s.score }
+        .map(|s| Panel {
+            x1: s.x1,
+            y1: s.y1,
+            x2: s.x2,
+            y2: s.y2,
+            score: s.score,
         })
         .collect())
 }
@@ -191,6 +204,10 @@ mod tests {
         assert!(
             names.contains("2: 'frame'"),
             "expected metadata 'names' to contain \"2: 'frame'\", got: {names}"
+        );
+        assert!(
+            names.contains("3: 'text'"),
+            "expected metadata 'names' to contain \"3: 'text'\", got: {names}"
         );
     }
 

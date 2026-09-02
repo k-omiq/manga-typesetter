@@ -51,9 +51,9 @@ export function resamplePath(pts, step) {
 // Where the taper leaves the width, at a point `dist` px into a stroke of
 // `total` px. `ratio` is how sharp the point is: 0 blunts the taper to a
 // straight ramp, 100 pulls it to a fine tip.
-function taperFactor(taper, dist, total) {
-  if (!taper?.on || taper.len <= 0) return 1;
-  const len = Math.min(taper.len, total / 2);
+function taperFactor(taper, dist, total, size) {
+  if (!taper?.on) return 1;
+  const len = Math.min(taperPx(taper, size), total / 2);
   if (len <= 0 || dist >= len) return 1;
   const f = dist / len;
   // ratio 0 -> linear, ratio 100 -> f^3, which is what makes an SFX stroke end
@@ -61,10 +61,63 @@ function taperFactor(taper, dist, total) {
   return Math.pow(f, 1 + (taper.ratio / 100) * 2);
 }
 
+// How far a ribbon advances between slices, page px. A ribbon is the tip laid
+// out continuously, so its slices have to butt up against each other: the step
+// is a fraction of the width rather than the stamp spacing, floored so a fine
+// line does not turn into thousands of hairline slices.
+function ribbonStep(size) {
+  return Math.max(1, size / 12);
+}
+
+export const TIP_ORDERS = ['repeat', 'reverse', 'once', 'random'];
+
+// Which of `n` tips the `i`th stamp uses under CSP's Repeat method. `rnd` is
+// the stroke's own PRNG for the random order, so the run is repeatable.
+export function tipIndex(order, i, n, rnd) {
+  if (!(n > 1)) return 0;
+  switch (order) {
+    case 'reverse': {
+      const period = 2 * (n - 1);
+      const k = i % period;
+      return k < n ? k : period - k;
+    }
+    case 'once':
+      return Math.min(i, n - 1);
+    case 'random':
+      return Math.min(n - 1, Math.floor(rnd() * n));
+    default:
+      return i % n;
+  }
+}
+
+// The direction the path is heading at each resampled point, degrees. Central
+// difference inside, one-sided at the ends; a single point has no heading and
+// gets 0.
+function headings(path) {
+  const n = path.length;
+  const out = new Array(n).fill(0);
+  if (n < 2) return out;
+  for (let i = 0; i < n; i++) {
+    const a = path[Math.max(0, i - 1)];
+    const b = path[Math.min(n - 1, i + 1)];
+    out[i] = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
+  }
+  return out;
+}
+
 // A stored stroke as the list of tip impressions that make it up.
+//
+// Every stamp is `{ x, y, size, angle, alpha }`. A ribbon stroke's stamps are
+// slices rather than dabs and carry two more numbers: `d`, the arc length at
+// which the slice sits, and `len`, how much of the path it covers - the
+// renderer unrolls the tip image along `d` and draws the `len` px of it that
+// belong here. `size` is the ribbon's width at that point.
 export function strokeStamps(stroke) {
   if (!stroke?.pts?.length) return [];
-  const step = Math.max(0.5, (stroke.size * stroke.spacing) / 100);
+  const ribbon = stroke.ribbon === true;
+  const step = ribbon
+    ? ribbonStep(stroke.size)
+    : Math.max(0.5, (stroke.size * stroke.spacing) / 100);
   const path = resamplePath(stroke.pts, step);
   // Arc length at each resampled point, so the taper knows how far in it is.
   const dist = [0];
@@ -72,18 +125,41 @@ export function strokeStamps(stroke) {
     dist.push(dist[i - 1] + Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]));
   }
   const total = dist.at(-1);
+  // A ribbon always follows the line - a band that did not would be a stack of
+  // slices all facing one way, which is not a ribbon.
+  const follow = ribbon || stroke.followDir === true;
+  const head = follow ? headings(path) : null;
   const rnd = mulberry32(stroke.seed);
+  // The tip cycle draws from its own stream so that switching a brush's
+  // repeat method does not shift its angle jitter.
+  const tips = Array.isArray(stroke.tips) ? stroke.tips.length : 0;
+  const tipRnd = tips > 1 ? mulberry32(stroke.seed + 0x9e3779b9) : null;
   const out = [];
   for (let i = 0; i < path.length; i++) {
     const [x, y, w] = path[i];
-    const t = taperFactor(stroke.taperIn, dist[i], total) *
-      taperFactor(stroke.taperOut, total - dist[i], total);
+    const t = taperFactor(stroke.taperIn, dist[i], total, stroke.size) *
+      taperFactor(stroke.taperOut, total - dist[i], total, stroke.size);
     const size = stroke.size * w * t;
     // A jitter draw happens for every stamp whether or not it is used, so the
     // sequence does not shift when a stamp is skipped for being too small.
     const jit = (rnd() * 2 - 1) * (stroke.angleJitter / 100) * 180;
     if (size < 0.25) continue; // below a quarter pixel there is nothing to see
-    out.push({ x, y, size, angle: stroke.angle + jit, alpha: stroke.opacity });
+    const angle = stroke.angle + jit + (head ? head[i] : 0);
+    if (ribbon) {
+      // The slice reaches halfway to each neighbour, so a run of them tiles
+      // the path with no gap and no double cover. The quarter turn is the
+      // ribbon's own convention, measured on the corpus: a ribbon tip is a
+      // tall strip whose vertical axis runs along the stroke, so at a heading
+      // of 0 - travelling right - the image stands up 90 degrees to it.
+      const back = i > 0 ? (dist[i] - dist[i - 1]) / 2 : 0;
+      const fwd = i + 1 < path.length ? (dist[i + 1] - dist[i]) / 2 : 0;
+      const len = Math.max(0.5, back + fwd);
+      out.push({ x, y, size, angle: angle - 90, alpha: stroke.opacity, d: dist[i], len });
+    } else if (tips > 1) {
+      out.push({ x, y, size, angle, alpha: stroke.opacity, tip: tipIndex(stroke.tipOrder, out.length, tips, tipRnd) });
+    } else {
+      out.push({ x, y, size, angle, alpha: stroke.opacity });
+    }
   }
   return out;
 }
@@ -105,9 +181,14 @@ export function strokeBounds(stroke, laid) {
   // angle. The bound is only ever used to pad a canvas and to bound a pixel
   // pass, where being generous costs a few px of margin and nothing else.
   const reach = stroke?.brush && stroke.brush !== 'round' ? Math.SQRT1_2 : 0.5;
+  // The watercolour edge sits OUTSIDE the ink, so a stroke wearing one reaches
+  // further than its stamps by the rim and its blur.
+  const rim = stroke?.waterEdge === true
+    ? Math.max(0, +stroke.waterEdgeWidth || 0) + Math.max(0, +stroke.waterEdgeBlur || 0)
+    : 0;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const s of stamps) {
-    const r = s.size * reach;
+    const r = s.size * reach + rim;
     if (s.x - r < minX) minX = s.x - r;
     if (s.y - r < minY) minY = s.y - r;
     if (s.x + r > maxX) maxX = s.x + r;
@@ -120,21 +201,97 @@ export function strokeBounds(stroke, laid) {
 // Correction: what the CSP guide groups under Correction, and what makes an
 // unsteady hand draw a clean letter.
 
+// Arc length at every point: how far along the path each one sits.
+function arcLengths(pts) {
+  const arc = [0];
+  for (let i = 1; i < pts.length; i++) {
+    arc.push(arc[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  }
+  return arc;
+}
+
+// How far along the path a turn is measured over, page px. A hand does not
+// turn a corner in one sample: it slows into it and leaves two or three points
+// within a few px of each other, each turning a little, and the corner is only
+// there in their sum. Measured over a reach it is found; and a one-px wobble on
+// a straight line, which sample to sample can be a full right angle, is spread
+// thin enough to be ignored.
+const CORNER_REACH = 6;
+
+// The vertices the sharp-angle setting protects: where the path turns by at
+// least `deg`, one vertex per corner - the sharpest of a cluster, the earliest
+// of equals. Empty at a threshold of 0, which is "protect nothing".
+//
+// A pinned vertex is treated like the ends of the stroke by both corrections
+// below: it does not move, and no averaging window reaches across it. That is
+// what makes a boxy letter's corner stay a corner instead of being rounded a
+// little by stabilisation and then a little more by smoothing.
+export function sharpCorners(pts, deg) {
+  const guard = Number(deg) || 0;
+  const out = new Set();
+  if (guard <= 0 || !pts || pts.length < 3) return out;
+  const arc = arcLengths(pts);
+  const last = pts.length - 1;
+  const found = []; // [index, turn] for every vertex over the threshold
+  let a = 0;
+  for (let i = 1; i < last; i++) {
+    // The nearest point at least a reach behind, and the nearest at least a
+    // reach ahead; the ends of the stroke when there is no such point.
+    while (a + 1 < i && arc[i] - arc[a + 1] >= CORNER_REACH) a++;
+    let b = i + 1;
+    while (b < last && arc[b] - arc[i] < CORNER_REACH) b++;
+    const ux = pts[i][0] - pts[a][0];
+    const uy = pts[i][1] - pts[a][1];
+    const vx = pts[b][0] - pts[i][0];
+    const vy = pts[b][1] - pts[i][1];
+    const u = Math.hypot(ux, uy);
+    const v = Math.hypot(vx, vy);
+    // Within half a reach of either end the chord is too short to trust: the
+    // first px of a stroke wobble as the pen lands, and a chord of one sample
+    // is the per-sample reading the reach exists to avoid.
+    if (u < CORNER_REACH / 2 || v < CORNER_REACH / 2) continue;
+    const dot = (ux * vx + uy * vy) / (u * v);
+    const turn = (Math.acos(Math.min(1, Math.max(-1, dot))) * 180) / Math.PI;
+    if (turn >= guard) found.push([i, turn]);
+  }
+  for (let n = 0; n < found.length; n++) {
+    const [i, turn] = found[n];
+    let best = true;
+    for (let m = n - 1; best && m >= 0 && arc[i] - arc[found[m][0]] <= CORNER_REACH; m--) {
+      if (found[m][1] >= turn) best = false;
+    }
+    for (let m = n + 1; best && m < found.length && arc[found[m][0]] - arc[i] <= CORNER_REACH; m++) {
+      if (found[m][1] > turn) best = false;
+    }
+    if (best) out.add(i);
+  }
+  return out;
+}
+
 // Stabilisation. Each point is pulled towards the running average of the points
 // behind it, which is why a high setting makes the stroke visibly trail the
 // cursor - the panel says so out loud rather than letting it read as lag. The
 // first point never moves: it is where the user put the pen down, and shifting
-// it makes the stroke start somewhere they did not click.
-export function stabilisePath(pts, amount) {
+// it makes the stroke start somewhere they did not click. A sharp corner (see
+// `sharpCorners`) is a fresh start in the same way: it stays put, and the
+// points after it average only with each other, not with the leg before.
+export function stabilisePath(pts, amount, sharpDeg = 0) {
   const a = Math.min(100, Math.max(0, Number(amount) || 0)) / 100;
   if (a <= 0 || !pts?.length) return pts ?? [];
   // 0..100 maps to a window of 1..16 points. Past that the trail is so long the
   // stroke stops following the hand at all.
   const win = Math.max(1, Math.round(a * 15) + 1);
+  const pins = sharpCorners(pts, sharpDeg);
   const out = [[...pts[0]]];
+  let anchor = 0;
   for (let i = 1; i < pts.length; i++) {
+    if (pins.has(i)) {
+      out.push([...pts[i]]);
+      anchor = i;
+      continue;
+    }
     let sx = 0, sy = 0, n = 0;
-    for (let j = Math.max(0, i - win + 1); j <= i; j++) {
+    for (let j = Math.max(anchor, i - win + 1); j <= i; j++) {
       sx += pts[j][0];
       sy += pts[j][1];
       n++;
@@ -150,41 +307,90 @@ export function stabilisePath(pts, amount) {
   return out;
 }
 
-// The turn at vertex i, in degrees. 0 is straight on, 180 is a full reversal.
-function turnDegrees(pts, i) {
-  const [ax, ay] = pts[i - 1];
-  const [bx, by] = pts[i];
-  const [cx, cy] = pts[i + 1];
-  const u = Math.hypot(bx - ax, by - ay);
-  const v = Math.hypot(cx - bx, cy - by);
-  if (u === 0 || v === 0) return 0;
-  const dot = ((bx - ax) * (cx - bx) + (by - ay) * (cy - by)) / (u * v);
-  return (Math.acos(Math.min(1, Math.max(-1, dot))) * 180) / Math.PI;
+// How far along the path smoothing reaches, page px each way at full strength.
+// Stated in px rather than in points because a hand that slows down leaves
+// points a px apart and a hand that sweeps leaves them ten apart, and the
+// same slider has to iron the same wobble out of both. It is also the radius a
+// corner is rounded to when nothing protects it: at full strength a right
+// angle becomes a quarter circle about this big.
+const SMOOTH_REACH = 60;
+
+// The window's half-width for a strength slider position, page px. Cubic in
+// the slider, which keeps the bottom half of it gentle - 35, the default, irons
+// a 12 px wobble as it always has - and lets the top of it do what CSP's post
+// correction does at 40 and above: pull a wavy pass into a near-straight line.
+export function smoothReach(strength) {
+  const k = Math.min(100, Math.max(0, Number(strength) || 0)) / 100;
+  return Math.pow(k, 1.5) * SMOOTH_REACH;
 }
 
-// Post-correction: one smoothing pass over the finished stroke. A vertex whose
-// turn exceeds `sharpDeg` is left exactly where it is - that is the guide's
-// sharp-angle setting, and it is what keeps a boxy letter's corners boxy while
-// the wobble between them is ironed out. `sharpDeg` of 0 protects nothing.
-export function smoothPath(pts, strength, sharpDeg) {
+// Post-correction: one smoothing pass over the finished stroke. Each point
+// becomes the average of the path within `reach` px of it on either side,
+// weighted by arc length so the answer does not depend on how the samples
+// happen to fall. The window never crosses the ends of the stroke or a
+// protected corner - it shrinks to stay symmetric inside them - so the ends
+// stay put and a sharp corner stays sharp, which is the guide's sharp-angle
+// setting. `sharpDeg` of 0 protects nothing, and a corner is then rounded.
+//
+// `speed`, when given, is one 0..1 number per point - the hand's speed there
+// against the stroke's fastest moment - and scales the window at that point
+// between half and one-and-a-half times: CSP's Adjust by speed, where a fast
+// sweep is trusted less than a slow, deliberate one.
+export function smoothPath(pts, strength, sharpDeg, speed) {
   const k = Math.min(100, Math.max(0, Number(strength) || 0)) / 100;
   if (k <= 0 || !pts || pts.length < 3) return pts ?? [];
-  const guard = Math.max(0, Number(sharpDeg) || 0);
+  const base = smoothReach(strength);
+  const reachAt = speed?.length === pts.length
+    ? (i) => base * (0.5 + Math.min(1, Math.max(0, speed[i])))
+    : () => base;
+  const last = pts.length - 1;
+  const pins = sharpCorners(pts, sharpDeg);
+  const arc = arcLengths(pts);
+  // Where the window may not cross: the ends and the pins. `prev[i]` is the
+  // nearest such index at or before i, `next[i]` the nearest at or after.
+  const prev = new Array(pts.length);
+  const next = new Array(pts.length);
+  for (let i = 0, p = 0; i <= last; i++) {
+    if (i === 0 || pins.has(i)) p = i;
+    prev[i] = p;
+  }
+  for (let i = last, n = last; i >= 0; i--) {
+    if (i === last || pins.has(i)) n = i;
+    next[i] = n;
+  }
+  // Each sample stands for the stretch of path nearer to it than to its
+  // neighbours: from halfway back to halfway forward.
+  const cellLo = (j) => (j === 0 ? arc[0] : (arc[j - 1] + arc[j]) / 2);
+  const cellHi = (j) => (j === last ? arc[last] : (arc[j] + arc[j + 1]) / 2);
   const out = [[...pts[0]]];
-  for (let i = 1; i < pts.length - 1; i++) {
-    if (guard > 0 && turnDegrees(pts, i) >= guard) {
+  for (let i = 1; i < last; i++) {
+    const lo = prev[i];
+    const hi = next[i];
+    const r = Math.min(reachAt(i), arc[i] - arc[lo], arc[hi] - arc[i]);
+    if (lo === i || hi === i || !(r > 0)) {
       out.push([...pts[i]]);
       continue;
     }
-    const mx = (pts[i - 1][0] + pts[i + 1][0]) / 2;
-    const my = (pts[i - 1][1] + pts[i + 1][1]) / 2;
-    out.push([
-      pts[i][0] + (mx - pts[i][0]) * k,
-      pts[i][1] + (my - pts[i][1]) * k,
-      pts[i][2] ?? 1,
-    ]);
+    const w0 = arc[i] - r;
+    const w1 = arc[i] + r;
+    let sx = 0, sy = 0, sw = 0;
+    for (let j = i; j >= lo && cellHi(j) > w0; j--) {
+      const w = Math.min(cellHi(j), w1) - Math.max(cellLo(j), w0);
+      if (w <= 0) continue;
+      sx += pts[j][0] * w;
+      sy += pts[j][1] * w;
+      sw += w;
+    }
+    for (let j = i + 1; j <= hi && cellLo(j) < w1; j++) {
+      const w = Math.min(cellHi(j), w1) - Math.max(cellLo(j), w0);
+      if (w <= 0) continue;
+      sx += pts[j][0] * w;
+      sy += pts[j][1] * w;
+      sw += w;
+    }
+    out.push(sw > 0 ? [sx / sw, sy / sw, pts[i][2] ?? 1] : [...pts[i]]);
   }
-  out.push([...pts.at(-1)]);
+  out.push([...pts[last]]);
   return out;
 }
 
@@ -207,6 +413,22 @@ export function defaultBrushSettings() {
     hardness: 100,
     angle: 0,
     angleJitter: 0,
+    // CSP's Direction "Direction of line": the tip turns to follow the
+    // stroke, with `angle` added on top. Off for the round dab, where it
+    // changes nothing; an imported pattern tip switches it on.
+    followDir: false,
+    // CSP's Stroke "Ribbon": the tip is not stamped but laid along the path as
+    // a continuous band, its height across the stroke and its width unrolled
+    // along it. What makes a dry-brush pen streak instead of dot.
+    ribbon: false,
+    // CSP's Stroke "Blend brush tips with Darken": where dabs overlap the
+    // darker wins rather than the two adding up, so a textured tip keeps its
+    // texture through the overlap instead of clotting solid.
+    darkenTips: false,
+    // A brush with several tip images: the ids of all of them, in order, and
+    // CSP's Repeat method for cycling through them. Empty for one tip.
+    tips: [],
+    tipOrder: 'repeat',
     flatness: 1,
     antialias: true,
     // The watercolour edge is off by default: it is a look, not a default, and
@@ -214,15 +436,33 @@ export function defaultBrushSettings() {
     waterEdge: false,
     waterEdgeWidth: 4,
     waterEdgePower: 0.5,
+    // CSP's Darkness: how far the rim's colour drops towards black, 0-1.
+    waterEdgeDark: 0,
+    // CSP's Blurring width: how far the rim is softened, page px.
+    waterEdgeBlur: 0,
     // Velocity by default: it is the setting the CSP guide leads with, and it
     // is the one that reads as hand lettering rather than as a marker pen.
     dyn: { src: 'velocity', amount: 70 },
-    taperIn: { on: true, len: 20, ratio: 60 },
-    taperOut: { on: true, len: 20, ratio: 60 },
+    // `mode` is CSP's Specification method: 'px' is Specify length, 'pct' is
+    // By percentage, where `len` is a percentage of the brush size.
+    taperIn: { on: true, len: 20, ratio: 60, mode: 'px' },
+    taperOut: { on: true, len: 20, ratio: 60, mode: 'px' },
+    // CSP's Starting and ending by speed: a slow stroke tapers less.
+    taperBySpeed: false,
     stabilise: 12,
     postCorrect: 35,
+    // CSP's Adjust by speed under Post correction: the faster the hand moved
+    // through a stretch, the harder that stretch is smoothed.
+    postBySpeed: false,
     sharpAngles: { on: false, deg: 45 },
   };
+}
+
+// The taper's length in page px for a stroke of `size`: what the brush stores,
+// or that many percent of the size when the taper is stated that way.
+export function taperPx(taper, size) {
+  const len = Math.max(0, Number(taper?.len) || 0);
+  return taper?.mode === 'pct' ? (size * len) / 100 : len;
 }
 
 // How much smaller the thinnest part of a stroke may get. Zero would break the
@@ -361,8 +601,22 @@ export function buildStroke(raw, settings) {
   // time would let a later settings change silently rewrite accepted ink.
   const w = widthFactors(raw, settings.dyn?.src, settings.dyn?.amount, seed, settings.dyn?.curve);
   let pts = raw.map((p, i) => [p.x, p.y, w[i] ?? 1]);
-  pts = stabilisePath(pts, settings.stabilise);
-  pts = smoothPath(pts, settings.postCorrect, settings.sharpAngles?.on ? settings.sharpAngles.deg : 0);
+  const speed = speedProfile(raw);
+  // Both corrections protect the same corners: a corner stabilisation had
+  // already rounded is not there for smoothing to protect.
+  const sharp = settings.sharpAngles?.on ? settings.sharpAngles.deg : 0;
+  pts = stabilisePath(pts, settings.stabilise, sharp);
+  pts = smoothPath(pts, settings.postCorrect, sharp, settings.postBySpeed === true ? speed : null);
+  // The speed tapers are resolved here too, for the same reason the widths
+  // are: how fast the hand came in and left is a capture-time fact, and it is
+  // folded into the stored taper length rather than kept beside it.
+  const bySpeed = settings.taperBySpeed === true;
+  const taperIn = { ...settings.taperIn };
+  const taperOut = { ...settings.taperOut };
+  if (bySpeed) {
+    taperIn.len = taperIn.len * endSpeed(raw, speed, taperPx(taperIn, settings.size), false);
+    taperOut.len = taperOut.len * endSpeed(raw, speed, taperPx(taperOut, settings.size), true);
+  }
   return {
     brush: settings.brush,
     size: settings.size,
@@ -372,6 +626,13 @@ export function buildStroke(raw, settings) {
     hardness: settings.hardness,
     angle: settings.angle,
     angleJitter: settings.angleJitter,
+    followDir: settings.followDir === true,
+    ribbon: settings.ribbon === true,
+    darkenTips: settings.darkenTips === true,
+    // The cycle only when there is one: a single-tip stroke carries no list.
+    ...(Array.isArray(settings.tips) && settings.tips.length > 1
+      ? { tips: settings.tips.slice(), tipOrder: TIP_ORDERS.includes(settings.tipOrder) ? settings.tipOrder : 'repeat' }
+      : null),
     flatness: settings.flatness,
     // Absent reads as on: the smooth edge is what a brush gives by default, and
     // only a deliberate false asks for the hard pixel edge.
@@ -381,11 +642,52 @@ export function buildStroke(raw, settings) {
     waterEdge: settings.waterEdge === true,
     waterEdgeWidth: Number.isFinite(+settings.waterEdgeWidth) ? +settings.waterEdgeWidth : 4,
     waterEdgePower: Number.isFinite(+settings.waterEdgePower) ? +settings.waterEdgePower : 0.5,
-    taperIn: { ...settings.taperIn },
-    taperOut: { ...settings.taperOut },
+    waterEdgeDark: Number.isFinite(+settings.waterEdgeDark) ? +settings.waterEdgeDark : 0,
+    waterEdgeBlur: Number.isFinite(+settings.waterEdgeBlur) ? +settings.waterEdgeBlur : 0,
+    taperIn,
+    taperOut,
     seed,
     pts,
   };
+}
+
+// The hand's speed at every raw point against the stroke's own fastest moment,
+// 0..1. The same normalisation `widthFactors` uses for the velocity source: a
+// brush must behave the same on a page zoomed out as on one zoomed in.
+export function speedProfile(raw) {
+  const n = raw?.length ?? 0;
+  if (n < 2) return new Array(n).fill(0);
+  const speed = new Array(n).fill(0);
+  for (let i = 1; i < n; i++) {
+    const dt = Math.max(1, (Number(raw[i].t) || 0) - (Number(raw[i - 1].t) || 0));
+    speed[i] = Math.hypot(raw[i].x - raw[i - 1].x, raw[i].y - raw[i - 1].y) / dt;
+  }
+  speed[0] = speed[1];
+  const top = Math.max(...speed);
+  return top > 0 ? speed.map((v) => v / top) : speed.fill(0);
+}
+
+// How much of its taper an end keeps under Starting and ending by speed: the
+// mean speed over the taper's own length, as a fraction of the stroke's top
+// speed. A hand that crawled into a stroke keeps a fifth of the taper, one
+// that swept in keeps all of it. The floor is what stops a careful stroke
+// from losing its point altogether.
+function endSpeed(raw, speed, len, fromEnd) {
+  const n = raw.length;
+  if (n < 2 || !(len > 0)) return 1;
+  let walked = 0;
+  let sum = 0;
+  let count = 0;
+  for (let k = 0; k < n && walked <= len; k++) {
+    const i = fromEnd ? n - 1 - k : k;
+    sum += speed[i];
+    count++;
+    if (k + 1 < n) {
+      const j = fromEnd ? n - 2 - k : k + 1;
+      walked += Math.hypot(raw[j].x - raw[i].x, raw[j].y - raw[i].y);
+    }
+  }
+  return Math.max(0.2, Math.min(1, count ? sum / count : 1));
 }
 
 // Whether an eraser of `radius` at (x, y) touches this stroke's ink. Tested

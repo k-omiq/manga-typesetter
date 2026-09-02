@@ -8,7 +8,7 @@ import {
   warpDragGesture,
   gizmoPts,
   handlePoints,
-  meshSegments,
+  meshLines,
   ghostOutline,
   movedPts,
   regridWarp,
@@ -104,19 +104,39 @@ describe('handlePoints', () => {
   });
 });
 
-describe('meshSegments', () => {
+describe('meshLines', () => {
   it('draws every grid line of the mesh and nothing else', () => {
-    // cols x rows cells: (rows+1) horizontal lines of cols segments each, plus
-    // (cols+1) vertical lines of rows segments each.
-    const segs = meshSegments(warp({ cols: 3, rows: 2 }), W, H);
-    expect(segs).toHaveLength((2 + 1) * 3 + (3 + 1) * 2);
+    // cols x rows cells: (rows+1) horizontal lines plus (cols+1) vertical ones,
+    // and an untouched grid draws each as straight runs between its nodes.
+    const lines = meshLines(warp({ cols: 3, rows: 2 }), W, H);
+    expect(lines).toHaveLength(2 + 1 + 3 + 1);
+    expect(lines[0]).toEqual([[0, 0], [W / 3, 0], [(2 * W) / 3, 0], [W, 0]]);
+    expect(lines[3]).toEqual([[0, 0], [0, H / 2], [0, H]]);
   });
 
   it('joins the control points themselves, so the wireframe IS the cell edges', () => {
     const pts = movedPts(identityMesh(1, 1, W, H), 1, 400, -50);
-    const segs = meshSegments(warp({ pts }), W, H);
-    // The top edge runs from the untouched top-left to the dragged top-right.
-    expect(segs).toContainEqual([0, 0, 400, -50]);
+    const lines = meshLines(warp({ cols: 1, rows: 1, pts }), W, H);
+    // The top edge runs straight from the untouched top-left to the dragged
+    // top-right: a one-cell map keeps lines straight.
+    expect(lines[0]).toEqual([[0, 0], [400, -50]]);
+  });
+
+  it('follows the curve of a grid, through every control point on the way', () => {
+    const pts = identityMesh(3, 3, W, H);
+    pts[5] = [pts[5][0] + 20, pts[5][1] + 15];
+    const lines = meshLines(warp({ cols: 3, rows: 3, pts }), W, H);
+    // The second row: starts and ends on its end nodes, passes through the
+    // dragged one, and has samples between the nodes.
+    const row = lines[1];
+    expect(row[0]).toEqual(pts[4]);
+    expect(row[row.length - 1]).toEqual(pts[7]);
+    expect(row).toContainEqual(pts[5]);
+    expect(row.length).toBeGreaterThan(4);
+    // The samples between two unmoved nodes still bend, because the surface
+    // is smooth and the moved node is next door.
+    const between = row.slice(row.indexOf(pts[6]) + 1, -1);
+    expect(between.some(([, y]) => Math.abs(y - pts[6][1]) > 0.5)).toBe(true);
   });
 });
 

@@ -1,0 +1,25 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/bin/libonnxruntime_providers_shared.so": "gpu-libs/bin/libonnxruntime_providers_shared.so",
+          "/usr/bin/libonnxruntime_providers_cuda.so": "gpu-libs/bin/libonnxruntime_providers_cuda.so"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/bin/libonnxruntime_providers_shared.so": "gpu-libs/bin/libonnxruntime_providers_shared.so",
+          "/usr/bin/libonnxruntime_providers_cuda.so": "gpu-libs/bin/libonnxruntime_providers_cuda.so"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/bin/libonnxruntime_providers_shared.so": "gpu-libs/bin/libonnxruntime_providers_shared.so",
+          "/usr/bin/libonnxruntime_providers_cuda.so": "gpu-libs/bin/libonnxruntime_providers_cuda.so"
+        }
+      }
+    }
+  }
+}

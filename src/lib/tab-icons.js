@@ -73,6 +73,11 @@ export const iconEffectTransform = wrap(
   '<path d="M4 6.5 16 4l1 10.5L6 16.5Z"/><circle cx="4" cy="6.5" r="1.4" fill="currentColor"/><circle cx="16" cy="4" r="1.4" fill="currentColor"/><circle cx="17" cy="14.5" r="1.4" fill="currentColor"/><circle cx="6" cy="16.5" r="1.4" fill="currentColor"/>',
 );
 
+// A circle with a bent line through it: the round liquify tool over a mesh.
+export const iconEffectLiquify = wrap(
+  '<circle cx="10" cy="10" r="6.5" stroke-dasharray="2.5 2"/><path d="M3.5 12c2.5-4 4.5-4 6.5 0s4 4 6.5 0"/>',
+);
+
 // Three horizontal speed lines of varying lengths: motion smear / blur.
 export const iconEffectBlur = wrap('<path d="M3 7h9"/><path d="M5 10.5h11"/><path d="M3 14h7"/>');
 
@@ -87,8 +92,53 @@ export const effectsSubTabIcons = {
   shadow: iconEffectShadow,
   warp: iconEffectWarp,
   transform: iconEffectTransform,
+  liquify: iconEffectLiquify,
   blur: iconEffectBlur,
   edges: iconEffectEdges,
   mask: iconEffectMask,
 };
 
+
+// ---- the brush panel's tabs ----
+//
+// Icon-only, the whole reason the panel can afford five: a label per tab
+// truncated to "DYNA..." at the panel's width, and an icon does not.
+
+// A sheet with a stroke on it: the board.
+export const iconBrushBoard = wrap(
+  '<rect x="3" y="3.5" width="14" height="13" rx="1.5"/><path d="M6 12.5c1.5-3.5 3-4.5 4.5-2.5s2.5 1.5 3.5-2"/>',
+);
+
+// A brush: handle, ferrule, tip.
+export const iconBrushTip = wrap(
+  '<path d="M16.5 3.5 9 11"/><path d="M11 9l-1.8 3.2a2.4 2.4 0 1 1-3.4-3.4L9 7"/><path d="M4 16.5c1.5 0 2.5-.6 3-1.7"/>',
+);
+
+// A tip seen head-on, with its angle: shape.
+export const iconBrushShape = wrap(
+  '<ellipse cx="10" cy="10" rx="6.5" ry="4" transform="rotate(-30 10 10)"/><path d="M10 10l5-3"/>',
+);
+
+// A stroke that thins: dynamics.
+export const iconBrushDynamics = wrap(
+  '<path d="M3 13.5c2.5-.5 3.5-5 6.5-5.5" stroke-width="2.8"/><path d="M9.5 8c2.5-.4 4.5 3.5 7.5 3" stroke-width="1.1"/>',
+);
+
+// A shaky line beside a straight one: correction.
+export const iconBrushCorrection = wrap(
+  '<path d="M4 14.5c1-1.5 1.5 1 2.5-.5s1.5 1 2.5-.5 1.5 1 2.5-.5"/><path d="M4 8h12"/><path d="M13 5.5 16 8l-3 2.5"/>',
+);
+
+// A dot with a ring around it: the finish, an outline around the whole.
+export const iconBrushFinish = wrap(
+  '<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3.2" fill="currentColor" stroke="none"/>',
+);
+
+export const brushTabIcons = {
+  board: iconBrushBoard,
+  brush: iconBrushTip,
+  shape: iconBrushShape,
+  dynamics: iconBrushDynamics,
+  correction: iconBrushCorrection,
+  finish: iconBrushFinish,
+};
