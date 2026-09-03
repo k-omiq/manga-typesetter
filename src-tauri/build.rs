@@ -3,8 +3,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    tauri_build::build();
+    // Staging runs first: tauri_build resolves the bundle resources named by
+    // tauri.<platform>.conf.json, and on Linux and Windows those point into
+    // `gpu-libs/`. On a clean checkout that directory does not exist yet, so
+    // resolving before staging fails the build outright.
     stage_gpu_libs();
+    tauri_build::build();
 }
 
 /// ONNX Runtime's GPU execution providers are shared libraries the bundle has
