@@ -76,9 +76,12 @@ jobs:
           key: dev-${{ matrix.target }}
       - run: npm ci
       - name: Build app
-        # createUpdaterArtifacts off: a dev build must not be installable as
-        # an update, and without it there is no signing key to supply.
-        run: npx tauri build --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        # The overlay config switches createUpdaterArtifacts off: a dev build
+        # must not be installable as an update, and without those artifacts
+        # there is no signing key to supply. It is a file rather than an inline
+        # JSON string because PowerShell strips the inner quotes on the Windows
+        # runner and tauri then rejects the value.
+        run: npx tauri build --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }} --config src-tauri/tauri.dev-build.conf.json
       - name: Collect installers
         shell: bash
         run: |
