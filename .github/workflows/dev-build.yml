@@ -1,0 +1,146 @@
+name: Dev build
+
+# Unstable installers for hand testing. Deliberately NOT the release path:
+# nothing here writes latest.json or touches the R2 bucket, so an installed
+# app is never offered one of these builds by the in-app updater.
+#
+# Trigger: run manually with workflow_dispatch, or push a tag like
+# v0.2.1-dev.1. The GitHub release it makes is always marked prerelease.
+#
+# Updater artifacts are switched off through --config, which also means the
+# build needs no signing key.
+
+on:
+  push:
+    tags: ["v*-dev*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag for the prerelease (e.g. v0.2.1-dev.1)"
+        required: false
+        default: ""
+      notes:
+        description: "Notes shown on the prerelease"
+        required: false
+        default: ""
+
+concurrency:
+  group: dev-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: darwin-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x86_64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+            features: gpu-webgpu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            curl wget file patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: dev-${{ matrix.target }}
+      - run: npm ci
+      - name: Build app
+        # createUpdaterArtifacts off: a dev build must not be installable as
+        # an update, and without it there is no signing key to supply.
+        run: npx tauri build --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: Collect installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          OUT="out/${{ matrix.platform }}"
+          PREFIX="MangaTypesetter_${VERSION}-dev_${{ matrix.platform }}"
+          mkdir -p "$OUT"
+          case "${{ matrix.platform }}" in
+            darwin-*)
+              cp "$(ls "$BUNDLE"/dmg/*.dmg | head -1)" "$OUT/$PREFIX.dmg"
+              ;;
+            windows-*)
+              cp "$(ls "$BUNDLE"/nsis/*-setup.exe | head -1)" "$OUT/$PREFIX-setup.exe"
+              ;;
+            linux-*)
+              cp "$(ls "$BUNDLE"/appimage/*.AppImage | head -1)" "$OUT/$PREFIX.AppImage"
+              cp "$(ls "$BUNDLE"/deb/*.deb | head -1)" "$OUT/$PREFIX.deb"
+              ;;
+          esac
+          ls -la "$OUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dev-${{ matrix.platform }}
+          path: out/${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 7
+
+  prerelease:
+    name: Publish prerelease
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create or update the prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="${{ github.event.inputs.tag }}"
+            [ -n "$TAG" ] || TAG="v$(node -p "require('./src-tauri/tauri.conf.json').version")-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          NOTES="${{ github.event.inputs.notes }}"
+          [ -n "$NOTES" ] || NOTES="Unstable dev build from ${GITHUB_SHA}. Not served by the in-app updater. Install by hand at your own risk."
+          FILES=$(ls artifacts/*/*.dmg artifacts/*/*-setup.exe artifacts/*/*.AppImage artifacts/*/*.deb)
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$TAG (unstable)" \
+              --notes "$NOTES" \
+              --prerelease
+          fi
+          gh release upload "$TAG" $FILES --repo "$GITHUB_REPOSITORY" --clobber
+          echo "== prerelease $TAG published, updater untouched =="

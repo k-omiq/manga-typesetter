@@ -1,6 +1,6 @@
 name: Release
 
-# Builds signed installers for mac (apple silicon) and windows, then publishes
+# Builds signed installers for mac (apple silicon), windows and linux, then publishes
 # them plus latest.json to the R2 bucket behind https://update-typesetter.komiq.cc.
 # Installed apps poll that URL and offer the update in-app.
 #
@@ -29,6 +29,10 @@ concurrency:
 jobs:
   build:
     name: Build (${{ matrix.platform }})
+    # A dev tag (v0.2.1-dev.1) must never reach this workflow: it publishes
+    # latest.json, which is what every installed app polls for updates.
+    # dev-build.yml owns those tags.
+    if: ${{ !contains(github.ref_name, 'dev') }}
     strategy:
       fail-fast: false
       matrix:
@@ -41,9 +45,28 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: windows-x86_64
+          # WebGPU is the one GPU provider that covers every Linux GPU without
+          # a toolkit install; see src-tauri/Cargo.toml [features].
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+            features: gpu-webgpu
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            curl wget file patchelf
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -59,7 +82,7 @@ jobs:
           key: ${{ matrix.target }}
       - run: npm ci
       - name: Build app
-        run: npx tauri build --target ${{ matrix.target }}
+        run: npx tauri build --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
@@ -89,6 +112,14 @@ jobs:
               cp "$SRC" "$OUT/$PREFIX-setup.exe"
               cp "$SRC.sig" "$OUT/$PREFIX-setup.exe.sig"
               ;;
+            linux-*)
+              # The AppImage is what the updater swaps in; the .deb is for hand installs.
+              SRC=$(ls "$BUNDLE"/appimage/*.AppImage)
+              cp "$SRC" "$OUT/$PREFIX.AppImage"
+              cp "$SRC.sig" "$OUT/$PREFIX.AppImage.sig"
+              DEB=$(ls "$BUNDLE"/deb/*.deb 2>/dev/null | head -1 || true)
+              [ -n "$DEB" ] && cp "$DEB" "$OUT/$PREFIX.deb"
+              ;;
           esac
           ls -la "$OUT"
       - uses: actions/upload-artifact@v4
@@ -101,6 +132,7 @@ jobs:
   publish:
     name: Publish to R2
     needs: build
+    if: ${{ !contains(github.ref_name, 'dev') }}
     runs-on: ubuntu-latest
     # contents: write lets the last step create the GitHub release and attach
     # the installers to it.
@@ -166,7 +198,7 @@ jobs:
                   "url": f"{base}/{remote}",
               }
               uploads.append((artifact, remote))
-              for extra in glob.glob(pdir + "/*.dmg"):
+              for extra in glob.glob(pdir + "/*.dmg") + glob.glob(pdir + "/*.deb"):
                   uploads.append((extra, f"releases/v{version}/{os.path.basename(extra)}"))
           out = {
               "version": version,
@@ -197,7 +229,7 @@ jobs:
           TAG="v$VERSION"
           # The installers people download by hand; the updater artifacts stay
           # on R2 only. --clobber makes a re-run of this job idempotent.
-          FILES=$(ls artifacts/*/*.dmg artifacts/*/*-setup.exe)
+          FILES=$(ls artifacts/*/*.dmg artifacts/*/*-setup.exe artifacts/*/*.deb artifacts/*/*.AppImage)
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes "$RELEASE_NOTES"
           fi

@@ -58,6 +58,28 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+      # gpu-webgpu is what the Linux release ships with; checking it here keeps
+      # the WebGPU code path and its prebuilt onnxruntime download honest.
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml --features gpu-webgpu
+      - name: cargo clippy (deny warnings)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --features gpu-webgpu --all-targets -- -D warnings
+
+  rust-windows:
+    name: Rust (check + clippy, windows)
+    # Windows is the one target whose onnxruntime carries CUDA and DirectML;
+    # nothing else compiles those code paths.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
       - name: cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: cargo clippy (deny warnings)
