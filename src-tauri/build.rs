@@ -21,7 +21,11 @@ fn main() {
 /// must land beside the binary. `lib/` holds libraries the executable links
 /// against, found through the rpath set below. Both directories always exist,
 /// empty or not, because the bundle configs name them as directories: an
-/// empty directory bundles nothing, a glob with no match is an error.
+/// empty directory bundles nothing, a named file that is missing is an error
+/// and a glob with no match is an error.
+///
+/// This runs after ort-sys's build script because Cargo.toml depends on
+/// `ort-sys` directly - see the comment there before removing that line.
 fn stage_gpu_libs() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     // OUT_DIR is target/<profile>/build/<pkg>-<hash>/out; three up is the

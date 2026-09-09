@@ -64,6 +64,14 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # Already in the dep tree via tauri; declared because this crate calls it.
 libc = "0.2"
 ort = { version = "2.0.0-rc.10", features = ["download-binaries"] }
+# Declared only for build-script ordering. `ort-sys` sets `links`, and cargo
+# orders a build script after the build scripts of the `links` packages it
+# depends on DIRECTLY - a transitive one (`ort` -> `ort-sys`) gets no edge, so
+# without this line build.rs and ort-sys's build script run in parallel and
+# `stage_gpu_libs` reads the execution-provider libraries before ort-sys has
+# put them there. On a cold CI cache that is a build failure, not a flake:
+# ort-sys spends the whole download in front of us.
+ort-sys = { version = "2.0.0-rc.13", default-features = false }
 # Page decoding for the detection engine (`detect::analyze::decode_image`).
 # Every format the picker offers (`IMAGE_EXTENSIONS` in src/lib/importer.js) is
 # listed here, and each is a pure-Rust decoder - no C library to ship beside the

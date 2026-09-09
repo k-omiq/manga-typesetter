@@ -85,6 +85,7 @@ dependencies = [
  "libc",
  "log",
  "ort",
+ "ort-sys",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
