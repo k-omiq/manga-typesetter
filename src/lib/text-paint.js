@@ -760,8 +760,7 @@ export function roughenPixels(src, dst, r, { ss = 1, originX = 0, originY = 0 } 
 // ---------------------------------------------------------------------------
 // Motion blur.
 //
-// TypeBubble's shader, restated as a flat tap list. The original (see
-// external/TypeBubble/src/Shaders/motion_blur.gdshader) runs `amount`
+// An iterated-gaussian smear, restated as a flat tap list. It runs `amount`
 // iterations of the Experience-Monks 5-tap gaussian, each iteration at a
 // growing spread (`size = amount - i`), and divides the sum by `amount + 1` -
 // which dims the picture by amount/(amount+1), and that dimming is part of
@@ -772,11 +771,10 @@ export function roughenPixels(src, dst, r, { ss = 1, originX = 0, originY = 0 } 
 // 'lighter' canvas draws at each tap's weight. One list, two executions, the
 // same smear.
 //
-// `x`/`y` are the shader's blur_direction (pixels per unit step - the shader
-// divides its uv offsets by pixel size, so the vector is already in pixels),
-// `amount` its iteration count. Direction (0,0) means no taps at all: the
-// shader would still dim by 1/(amount+1), but a smear control that only
-// darkens is a bug, not a look.
+// `x`/`y` are the blur direction in pixels per unit step, `amount` the
+// iteration count. Direction (0,0) means no taps at all: an iterated gaussian
+// at zero offset would still dim by 1/(amount+1), but a smear control that
+// only darkens is a bug, not a look.
 const MB_OFF1 = 1.3846153846;
 const MB_OFF2 = 3.2307692308;
 const MB_W0 = 0.227027027;

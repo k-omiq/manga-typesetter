@@ -266,11 +266,11 @@ export function circleLayout(text, style, sizePx) {
 // The path is `style.path.pts`: anchors in box-local page px, each with in/out
 // handle OFFSETS. Between anchor i and i+1 runs the cubic (P[i], P[i]+out[i],
 // P[i+1]+in[i+1], P[i+1]). Glyphs are placed by cumulative advance along the
-// path's arc length - real text-on-path, not TypeBubble's closest-point
-// projection, which folds glyphs together on tight bends - and rotated to the
-// tangent. The line as a whole sits on the path by `align`: left starts at the
-// path's start, right ends at its end, center centres it; text longer than the
-// path runs off the ends along the end tangents.
+// path's arc length - real text-on-path rather than closest-point projection,
+// which folds glyphs together on tight bends - and rotated to the tangent.
+// The line as a whole sits on the path by `align`: left starts at the path's
+// start, right ends at its end, center centres it; text longer than the path
+// runs off the ends along the end tangents.
 //
 // Same contract as `arcLayout`: positions are relative to the BOX CENTRE, in
 // the same px `sizePx` is in (the caller passes zoomed size and gets zoomed

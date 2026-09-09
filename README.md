@@ -144,8 +144,12 @@ same version on every distro. `scripts/build-appimage.sh` explains why.
 
 Detection models from
 [deepghs/manga109_yolo](https://huggingface.co/deepghs/manga109_yolo) and
-[kha-white/manga-ocr](https://github.com/kha-white/manga-ocr).
+[kha-white/manga-ocr](https://github.com/kha-white/manga-ocr). No model weights
+ship in the app - they download on first use, direct from the publisher,
+and each carries its publisher's own terms rather than this project's.
 
 ## License
 
 [MIT](LICENSE.md) © 2026 k-omiq
+
+Third-party licenses and notices are in [THIRD-PARTY.md](THIRD-PARTY.md).

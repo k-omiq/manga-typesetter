@@ -217,17 +217,16 @@ export function defaultStyle() {
     // Gaussian blur of the whole text (fill + strokes + shadows), page px.
     blur: 0,
     // Directional smear of the whole text, on top of (and after) `blur`.
-    // TypeBubble's own parameter model, kept verbatim so the pictures match
-    // its demo: `x`/`y` are the direction vector in pixels per unit step and
-    // `amount` the iteration count of the Experience-Monks gaussian. Both
-    // renderers build the smear from the same tap list - see
-    // `motionBlurTaps` in text-paint.js. Direction (0,0) draws nothing.
+    // `x`/`y` are the direction vector in pixels per unit step, and `amount` is
+    // the iteration count of the Experience-Monks gaussian. Both renderers
+    // build the smear from the same tap list - see `motionBlurTaps` in
+    // text-paint.js. Direction (0,0) draws nothing.
     motionBlur: { on: false, x: 2, y: 0, amount: 16 },
     // Text on an editable bezier path. `pts` is the path's anchors in
     // box-local page px (origin at the box's top-left, unscaled), each with
     // its in/out handle as an OFFSET from the anchor. Empty until the effect
-    // is first switched on, when the editor seeds the TypeBubble default -
-    // a straight three-point line across the box's middle. When `on` and
+    // is first switched on, when the editor seeds the default path - a
+    // straight three-point line across the box's middle. When `on` and
     // `pts` has at least two anchors, this wins over `curve` below.
     path: { on: false, pts: [] },
     // The visibility mask: shapes the user paints over the box that hide
@@ -681,10 +680,9 @@ export function normalizeStyle(s) {
   return out;
 }
 
-// The path a box starts with when the effect is switched on: TypeBubble's
-// default - a straight line across the box's middle, whose centre anchor
-// carries symmetric horizontal handles so one drag bends it. In box-local
-// page px, for a box `w` by `h`.
+// The path a box starts with when the effect is switched on: a straight line
+// across the box's middle, whose centre anchor carries symmetric horizontal
+// handles so one drag bends it. In box-local page px, for a box `w` by `h`.
 export function defaultPathPts(w, h) {
   const half = Math.max(10, Math.min(50, (Number(w) || 0) / 4));
   const midY = (Number(h) || 0) / 2;

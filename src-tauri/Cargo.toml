@@ -1,10 +1,10 @@
 [package]
 name = "app"
 version = "0.2.0"
-description = "A Tauri App"
-authors = ["you"]
-license = ""
-repository = ""
+description = "Lettering for scanlation, without Photoshop"
+authors = ["k-omiq"]
+license = "MIT"
+repository = "https://github.com/k-omiq/manga-typesetter"
 edition = "2021"
 rust-version = "1.77.2"
 

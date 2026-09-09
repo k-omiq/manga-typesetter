@@ -976,8 +976,8 @@
   }
 
   // Drag one bezier-path anchor or handle. `which` is 'a' (the anchor itself),
-  // 'in' or 'out'. Dragging a handle mirrors its partner, exactly as
-  // TypeBubble does, so one drag keeps the curve smooth through the anchor.
+  // 'in' or 'out'. Dragging a handle mirrors its partner, keeping the curve
+  // smooth through the anchor in a single drag.
   // The pointer delta is inverse-rotated into box space like a resize is, and
   // the gesture records one style edit at the end like the rotation handle.
   function startPathDrag(e, i, which) {
@@ -1634,8 +1634,8 @@
     -webkit-user-select: none;
   }
   /* The path gizmo. The svg itself lets clicks through to the box; only the
-     anchors and handles take the pointer. Colours are TypeBubble's, which read
-     well on both white pages and dark art. */
+     anchors and handles take the pointer. High-contrast colours so the curve
+     and handles read well on both white pages and dark art. */
   .path-gizmo { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
   .path-gizmo polyline { fill: none; stroke: #00d5e0; stroke-width: 1.5; }
   .path-gizmo line { stroke: #663399; stroke-width: 1; }

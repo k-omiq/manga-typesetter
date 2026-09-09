@@ -65,6 +65,8 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "copyright": "Copyright (c) 2026 k-omiq. MIT licensed. Third-party notices: THIRD-PARTY.md",
+    "licenseFile": "../LICENSE.md",
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
