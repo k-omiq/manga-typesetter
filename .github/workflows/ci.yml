@@ -1,0 +1,105 @@
+name: CI
+
+# Lightweight gate: frontend build plus Rust check/clippy. Deliberately skips
+# the heavy ML model downloads - this proves the two surfaces build, not that
+# detection runs (that needs the model weights + a real desktop app).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    # On both OSes, because half of what these tests assert is path handling and
+    # the two platforms disagree about it: separators, drive letters, and the
+    # characters a filename may contain. Running only on Linux is what let an
+    # export name that Windows refuses (`Ch1: Prologue`) pass the suite.
+    name: Frontend (vitest + vite build, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # The persistence layer has no other automated protection: these tests are
+      # what stands between a refactor and a library that eats the user's raws.
+      - run: npm test
+      - run: npx vite build
+
+  rust:
+    # 24.04 because that is what the Linux release is built on, and because
+    # nothing in this project links on 22.04: pyke's prebuilt onnxruntime needs
+    # glibc 2.38 and GCC 13's libstdc++ with or without a GPU feature.
+    # gpu-webgpu is not optional here either - it is what ships.
+    name: Rust (check + clippy + test, linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Tauri's crates link against webkit2gtk/gtk via pkg-config, so even
+      # `cargo check` needs the desktop dev libraries on Linux.
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            curl wget file patchelf
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml --features gpu-webgpu
+      - name: cargo clippy (deny warnings)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --features gpu-webgpu --all-targets -- -D warnings
+      # Tests whose fixtures are not in the repo - the ONNX goldens, the .sut
+      # brush corpus - skip themselves rather than fail.
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features gpu-webgpu
+
+  rust-windows:
+    name: Rust (check + clippy + test, windows)
+    # Windows is the one target whose onnxruntime carries CUDA and DirectML;
+    # nothing else compiles those code paths.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: cargo clippy (deny warnings)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      # The reason this job runs tests and not just lints: `fsync_path` needs a
+      # writable handle here and a read-only one everywhere else, and the device
+      # ladder is two rungs deep only on Windows. Neither is observable on a Mac.
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml

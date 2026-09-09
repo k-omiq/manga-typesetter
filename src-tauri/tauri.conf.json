@@ -1,0 +1,96 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Manga Typesetter",
+  "version": "0.2.0",
+  "identifier": "com.mangatypesetter.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Manga Typesetter",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": [
+            "$HOME/**"
+          ],
+          "deny": [
+            "$HOME/.ssh/**",
+            "$HOME/.aws/**",
+            "$HOME/.gnupg/**",
+            "$HOME/.config/gh/**",
+            "$HOME/.kube/**",
+            "$HOME/.azure/**",
+            "$HOME/.config/gcloud/**",
+            "$HOME/.netrc",
+            "$HOME/.npmrc",
+            "$HOME/.zsh_history",
+            "$HOME/.bash_history",
+            "$HOME/.tauri/**",
+            "$HOME/Library/Keychains/**",
+            "$HOME/AppData/Roaming/Microsoft/Protect/**",
+            "$HOME/AppData/Roaming/Microsoft/Crypto/**",
+            "$HOME/AppData/Local/Microsoft/Credentials/**",
+            "$HOME/AppData/Roaming/Microsoft/Credentials/**",
+            "$HOME/AppData/Local/Microsoft/Vault/**",
+            "$HOME/AppData/Local/Microsoft/TokenBroker/**",
+            "$HOME/AppData/Local/Google/Chrome/User Data/**",
+            "$HOME/AppData/Local/Microsoft/Edge/User Data/**",
+            "$HOME/AppData/Roaming/Mozilla/Firefox/**",
+            "$HOME/AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/**",
+            "$HOME/AppData/Roaming/GitHub CLI/**",
+            "$HOME/AppData/Roaming/gcloud/**",
+            "$HOME/NTUSER.DAT*"
+          ]
+        }
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    },
+    "macOS": {
+      "dmg": {
+        "background": "./dmg-background.png",
+        "windowSize": { "width": 660, "height": 400 },
+        "appPosition": { "x": 180, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 }
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://update-typesetter.komiq.cc/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM0QzMwMEQ3N0I4RDcxMEIKUldRTGNZMTcxd0REeE0rN2xsQ1owRzFEZjlTeWgzc3Y0UUR1TTBJK1JIYzlldjZGSzkwUE8yOVkK"
+    }
+  }
+}

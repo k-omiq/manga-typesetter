@@ -1,0 +1,10 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "resources": {
+      "gpu-libs/bin/DirectML.dll": "DirectML.dll",
+      "gpu-libs/bin/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll",
+      "gpu-libs/bin/onnxruntime_providers_cuda.dll": "onnxruntime_providers_cuda.dll"
+    }
+  }
+}

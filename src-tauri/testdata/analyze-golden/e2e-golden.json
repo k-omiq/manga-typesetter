@@ -1,0 +1,595 @@
+[
+ {
+  "file": "/Users/caved/Documents/MangaTypesetter/tsukimichi/001/raws/5_waifu2x_1080x1535_2n_jpg.png",
+  "img_width": 1080,
+  "img_height": 1535,
+  "lines": [
+   {
+    "n": 1,
+    "type": "dialogue",
+    "jp": "リリ皇女がクズンかに？",
+    "en": "",
+    "box": [
+     896,
+     105,
+     960,
+     264
+    ],
+    "vertical": true,
+    "font_size": 27.0
+   },
+   {
+    "n": 2,
+    "type": "dialogue",
+    "jp": "人の男者とは",
+    "en": "",
+    "box": [
+     699,
+     142,
+     729,
+     305
+    ],
+    "vertical": true,
+    "font_size": 28.0
+   },
+   {
+    "n": 3,
+    "type": "dialogue",
+    "jp": "面識がない",
+    "en": "",
+    "box": [
+     666,
+     109,
+     697,
+     244
+    ],
+    "vertical": true,
+    "font_size": 28.0
+   },
+   {
+    "n": 4,
+    "type": "dialogue",
+    "jp": "であれば何故興味を．．．",
+    "en": "",
+    "box": [
+     546,
+     188,
+     606,
+     346
+    ],
+    "vertical": true,
+    "font_size": 28.0
+   },
+   {
+    "n": 5,
+    "type": "dialogue",
+    "jp": "であれば何故興味を．．．",
+    "en": "",
+    "box": [
+     549,
+     190,
+     605,
+     348
+    ],
+    "vertical": true,
+    "font_size": 56.0
+   },
+   {
+    "n": 6,
+    "type": "dialogue",
+    "jp": "あああれは私の個人的な用件です",
+    "en": "",
+    "box": [
+     100,
+     134,
+     225,
+     263
+    ],
+    "vertical": true,
+    "font_size": 28.0
+   },
+   {
+    "n": 7,
+    "type": "dialogue",
+    "jp": "部下がこの街で一番良く効く薬を扱う店の話をしていまして",
+    "en": "",
+    "box": [
+     849,
+     548,
+     970,
+     749
+    ],
+    "vertical": true,
+    "font_size": 25.0
+   },
+   {
+    "n": 8,
+    "type": "dialogue",
+    "jp": "「店主が特徴的で一目でわかる」と聞いたのですが",
+    "en": "",
+    "box": [
+     829,
+     792,
+     919,
+     986
+    ],
+    "vertical": true,
+    "font_size": 25.0
+   },
+   {
+    "n": 9,
+    "type": "dialogue",
+    "jp": "本当に一目でわかるものですから",
+    "en": "",
+    "box": [
+     429,
+     550,
+     520,
+     698
+    ],
+    "vertical": true,
+    "font_size": 26.0
+   },
+   {
+    "n": 10,
+    "type": "dialogue",
+    "jp": "ふふふたしかに",
+    "en": "",
+    "box": [
+     138,
+     548,
+     199,
+     652
+    ],
+    "vertical": true,
+    "font_size": 27.0
+   },
+   {
+    "n": 11,
+    "type": "dialogue",
+    "jp": "つい驚いて立場も忘れ話しかけてしまいました",
+    "en": "",
+    "box": [
+     406,
+     754,
+     526,
+     908
+    ],
+    "vertical": true,
+    "font_size": 26.0
+   },
+   {
+    "n": 12,
+    "type": "dialogue",
+    "jp": "ここからでもすぐにわかりますものね",
+    "en": "",
+    "box": [
+     102,
+     688,
+     193,
+     846
+    ],
+    "vertical": true,
+    "font_size": 27.0
+   },
+   {
+    "n": 13,
+    "type": "dialogue",
+    "jp": "リリ様は何故彼にご興味を？",
+    "en": "",
+    "box": [
+     901,
+     1097,
+     958,
+     1271
+    ],
+    "vertical": true,
+    "font_size": 21.0
+   },
+   {
+    "n": 14,
+    "type": "dialogue",
+    "jp": "あくまで噂なのですが",
+    "en": "",
+    "box": [
+     543,
+     1080,
+     601,
+     1233
+    ],
+    "vertical": true,
+    "font_size": 26.0
+   },
+   {
+    "n": 15,
+    "type": "dialogue",
+    "jp": "変わった果物を販売しているとか",
+    "en": "",
+    "box": [
+     184,
+     1077,
+     274,
+     1256
+    ],
+    "vertical": true,
+    "font_size": 29.0
+   },
+   {
+    "n": 16,
+    "type": "dialogue",
+    "jp": "店の従業員の多くが亜人だとか",
+    "en": "",
+    "box": [
+     106,
+     1229,
+     199,
+     1385
+    ],
+    "vertical": true,
+    "font_size": 29.0
+   }
+  ],
+  "panels": [
+   [
+    84,
+    86,
+    994,
+    509
+   ],
+   [
+    84,
+    1051,
+    994,
+    1535
+   ],
+   [
+    83,
+    530,
+    544,
+    1033
+   ],
+   [
+    559,
+    530,
+    995,
+    1033
+   ]
+  ]
+ },
+ {
+  "file": "/Users/caved/Documents/MangaTypesetter/tsukimichi/001/raws/10_waifu2x_1080x1535_2n_jpg.png",
+  "img_width": 1080,
+  "img_height": 1535,
+  "lines": [
+   {
+    "n": 1,
+    "type": "dialogue",
+    "jp": "ここにおったか！",
+    "en": "",
+    "box": [
+     897,
+     671,
+     985,
+     860
+    ],
+    "vertical": true,
+    "font_size": 40.0
+   },
+   {
+    "n": 2,
+    "type": "dialogue",
+    "jp": "おおレンブラント！",
+    "en": "",
+    "box": [
+     139,
+     124,
+     211,
+     334
+    ],
+    "vertical": true,
+    "font_size": 36.0
+   },
+   {
+    "n": 3,
+    "type": "dialogue",
+    "jp": "セス将軍！",
+    "en": "",
+    "box": [
+     534,
+     730,
+     559,
+     855
+    ],
+    "vertical": true,
+    "font_size": 28.0
+   },
+   {
+    "n": 4,
+    "type": "dialogue",
+    "jp": "いらしてたのですか",
+    "en": "",
+    "box": [
+     448,
+     813,
+     510,
+     966
+    ],
+    "vertical": true,
+    "font_size": 28.0
+   },
+   {
+    "n": 5,
+    "type": "dialogue",
+    "jp": "お見えになると知っていればご挨拶に伺いましたものを．．．",
+    "en": "",
+    "box": [
+     679,
+     1185,
+     804,
+     1367
+    ],
+    "vertical": true,
+    "font_size": 26.0
+   },
+   {
+    "n": 6,
+    "type": "dialogue",
+    "jp": "うむ！俺は来る予定などなかったのだがな！",
+    "en": "",
+    "box": [
+     150,
+     1184,
+     273,
+     1365
+    ],
+    "vertical": true,
+    "font_size": 27.0
+   }
+  ],
+  "panels": [
+   [
+    83,
+    638,
+    563,
+    1130
+   ],
+   [
+    85,
+    1148,
+    993,
+    1535
+   ],
+   [
+    524,
+    638,
+    1078,
+    1130
+   ],
+   [
+    276,
+    0,
+    1080,
+    640
+   ],
+   [
+    84,
+    0,
+    332,
+    618
+   ]
+  ]
+ },
+ {
+  "file": "/Users/caved/Documents/MangaTypesetter/tsukimichi/001/raws/14_waifu2x_1080x1535_2n_jpg.png",
+  "img_width": 1080,
+  "img_height": 1535,
+  "lines": [
+   {
+    "n": 1,
+    "type": "sfx",
+    "jp": "――本っ当に不快な男",
+    "en": "",
+    "box": [
+     468,
+     72,
+     595,
+     415
+    ],
+    "vertical": true,
+    "font_size": 66.0
+   },
+   {
+    "n": 2,
+    "type": "dialogue",
+    "jp": "あれぇママだけ？",
+    "en": "",
+    "box": [
+     859,
+     688,
+     921,
+     815
+    ],
+    "vertical": true,
+    "font_size": 29.0
+   },
+   {
+    "n": 3,
+    "type": "dialogue",
+    "jp": "パパはー？",
+    "en": "",
+    "box": [
+     793,
+     730,
+     820,
+     855
+    ],
+    "vertical": true,
+    "font_size": 29.0
+   },
+   {
+    "n": 4,
+    "type": "dialogue",
+    "jp": "よろしい",
+    "en": "",
+    "box": [
+     831,
+     1178,
+     858,
+     1278
+    ],
+    "vertical": true,
+    "font_size": 27.0
+   },
+   {
+    "n": 5,
+    "type": "dialogue",
+    "jp": "あのお母様今の方って．．",
+    "en": "",
+    "box": [
+     671,
+     1173,
+     728,
+     1327
+    ],
+    "vertical": true,
+    "font_size": 23.0
+   },
+   {
+    "n": 6,
+    "type": "dialogue",
+    "jp": "己の方が飼い慣らされていることにも気づかない",
+    "en": "",
+    "box": [
+     251,
+     119,
+     373,
+     299
+    ],
+    "vertical": true,
+    "font_size": 25.0
+   },
+   {
+    "n": 7,
+    "type": "dialogue",
+    "jp": "哀れな愚か者ね",
+    "en": "",
+    "box": [
+     131,
+     197,
+     190,
+     301
+    ],
+    "vertical": true,
+    "font_size": 26.0
+   },
+   {
+    "n": 8,
+    "type": "dialogue",
+    "jp": "「お父様」「お母様」でしょう？",
+    "en": "",
+    "box": [
+     468,
+     701,
+     556,
+     827
+    ],
+    "vertical": true,
+    "font_size": 26.0
+   },
+   {
+    "n": 9,
+    "type": "dialogue",
+    "jp": "きっ気をつけますお母様",
+    "en": "",
+    "box": [
+     189,
+     698,
+     286,
+     854
+    ],
+    "vertical": true,
+    "font_size": 31.0
+   },
+   {
+    "n": 10,
+    "type": "dialogue",
+    "jp": "人前では話し方に気をつけなさいユーノ",
+    "en": "",
+    "box": [
+     424,
+     867,
+     547,
+     1020
+    ],
+    "vertical": true,
+    "font_size": 26.0
+   },
+   {
+    "n": 11,
+    "type": "dialogue",
+    "jp": "キゲン悪い！？",
+    "en": "",
+    "box": [
+     203,
+     889,
+     263,
+     1000
+    ],
+    "vertical": true,
+    "font_size": 33.0
+   },
+   {
+    "n": 12,
+    "type": "dialogue",
+    "jp": "そうよシフ",
+    "en": "",
+    "box": [
+     102,
+     1173,
+     165,
+     1256
+    ],
+    "vertical": true,
+    "font_size": 34.0
+   }
+  ],
+  "panels": [
+   [
+    400,
+    0,
+    1080,
+    664
+   ],
+   [
+    86,
+    684,
+    576,
+    1113
+   ],
+   [
+    428,
+    1135,
+    1080,
+    1535
+   ],
+   [
+    579,
+    666,
+    1080,
+    1130
+   ],
+   [
+    86,
+    80,
+    460,
+    665
+   ],
+   [
+    87,
+    1133,
+    509,
+    1535
+   ]
+  ]
+ }
+]

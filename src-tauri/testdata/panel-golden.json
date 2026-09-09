@@ -1,0 +1,113 @@
+[
+ {
+  "file": "/Users/caved/Documents/MangaTypesetter/tsukimichi/001/raws/5_waifu2x_1080x1535_2n_jpg.png",
+  "img_width": 1080,
+  "img_height": 1535,
+  "panels": [
+   [
+    84,
+    86,
+    994,
+    509
+   ],
+   [
+    84,
+    1051,
+    994,
+    1535
+   ],
+   [
+    83,
+    530,
+    544,
+    1033
+   ],
+   [
+    559,
+    530,
+    995,
+    1033
+   ]
+  ]
+ },
+ {
+  "file": "/Users/caved/Documents/MangaTypesetter/tsukimichi/001/raws/10_waifu2x_1080x1535_2n_jpg.png",
+  "img_width": 1080,
+  "img_height": 1535,
+  "panels": [
+   [
+    83,
+    638,
+    563,
+    1130
+   ],
+   [
+    85,
+    1148,
+    993,
+    1535
+   ],
+   [
+    524,
+    638,
+    1078,
+    1130
+   ],
+   [
+    276,
+    0,
+    1080,
+    640
+   ],
+   [
+    84,
+    0,
+    332,
+    618
+   ]
+  ]
+ },
+ {
+  "file": "/Users/caved/Documents/MangaTypesetter/tsukimichi/001/raws/14_waifu2x_1080x1535_2n_jpg.png",
+  "img_width": 1080,
+  "img_height": 1535,
+  "panels": [
+   [
+    400,
+    0,
+    1080,
+    664
+   ],
+   [
+    86,
+    684,
+    576,
+    1113
+   ],
+   [
+    428,
+    1135,
+    1080,
+    1535
+   ],
+   [
+    579,
+    666,
+    1080,
+    1130
+   ],
+   [
+    86,
+    80,
+    460,
+    665
+   ],
+   [
+    87,
+    1133,
+    509,
+    1535
+   ]
+  ]
+ }
+]
