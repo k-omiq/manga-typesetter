@@ -22,7 +22,7 @@ cd "$(dirname "$0")/.."
 VERSION="${1:-}"
 NOTES="${2:-}"
 DRY_RUN="${3:-}"
-REPO="k-omiq/manga-typesetter"
+REPO="komiq-cc/manga-typesetter"
 BASE_URL="https://update-typesetter.komiq.cc"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
@@ -99,7 +99,7 @@ done
 [ -n "$RUN_ID" ] || fail "release run for v$VERSION never appeared; check: gh run list --repo $REPO"
 echo "run: https://github.com/$REPO/actions/runs/$RUN_ID"
 
-echo "== watching (mac + windows builds, usually 10-25 min) =="
+echo "== watching (mac + windows + linux builds, usually 10-25 min) =="
 if ! gh run watch "$RUN_ID" --repo "$REPO" --exit-status --interval 30; then
   echo ""
   echo "== RELEASE FAILED - failing step log =="
@@ -117,7 +117,7 @@ want = sys.argv[1]
 assert m.get("version") == want, f"manifest has {m.get('version')}, expected {want}"
 plats = sorted(m.get("platforms", {}).keys())
 print(f"published v{want} with platforms: {', '.join(plats)}")
-missing = {"darwin-aarch64", "darwin-x86_64", "windows-x86_64"} - set(plats)
+missing = {"darwin-aarch64", "windows-x86_64", "linux-x86_64"} - set(plats)
 if missing:
     print(f"WARNING: missing platforms: {', '.join(sorted(missing))}", file=sys.stderr)
 PY

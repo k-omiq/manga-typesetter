@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "Lettering for scanlation, without Photoshop"
 authors = ["k-omiq"]
 license = "MIT"
-repository = "https://github.com/k-omiq/manga-typesetter"
+repository = "https://github.com/komiq-cc/manga-typesetter"
 edition = "2021"
 rust-version = "1.77.2"
 

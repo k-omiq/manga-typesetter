@@ -12,7 +12,7 @@
 [![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?logo=linux&logoColor=black)](#install)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev)
-[![latest](https://img.shields.io/badge/latest-v0.2.0-E8A33D)](https://typesetter.komiq.cc)
+[![latest](https://img.shields.io/badge/latest-v0.3.0-E8A33D)](https://typesetter.komiq.cc)
 [![license](https://img.shields.io/badge/license-MIT-6E8CBF)](LICENSE.md)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/vhuYWbZNX5)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/komiq)
@@ -88,7 +88,7 @@ Requires [Node](https://nodejs.org) 20+ and a [Rust toolchain](https://rustup.rs
 (see the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/)).
 
 ```sh
-git clone https://github.com/k-omiq/manga-typesetter.git
+git clone https://github.com/komiq-cc/manga-typesetter.git
 cd manga-typesetter
 npm install
 
