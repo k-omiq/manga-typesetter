@@ -103,3 +103,39 @@ jobs:
       # ladder is two rungs deep only on Windows. Neither is observable on a Mac.
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  rust-linux-arm64:
+    # Compile and test the exact CPU-only architecture shipped for ARM Linux.
+    # Native runners avoid cross-linking GTK, WebKitGTK and ONNX Runtime.
+    name: Rust (check + clippy + test, linux-arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            curl wget file patchelf
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-unknown-linux-gnu
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: linux-aarch64
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-unknown-linux-gnu
+      - name: cargo clippy (deny warnings)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --target aarch64-unknown-linux-gnu --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --target aarch64-unknown-linux-gnu

@@ -111,7 +111,7 @@ fn stage_gpu_libs() {
         if !webgpu && !cuda {
             println!(
                 "cargo:warning=CPU-only Linux build: detection runs on CPU. This is the \
-                 release's default lane; pass --features gpu-webgpu or gpu-cuda for the GPU lane"
+                 expected ARM64 release lane; x86_64 builds may pass --features gpu-webgpu or gpu-cuda"
             );
         }
     }

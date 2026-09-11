@@ -41,13 +41,15 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: windows-x86_64
-          # One Linux lane; see the note in release.yml for why a CPU-only
-          # build for older distros cannot exist. This one covers GPU and
-          # GPU-less machines alike.
+          # x86_64 carries WebGPU and falls back to CPU on GPU-less machines.
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
             features: gpu-webgpu
+          # The ARM64 ONNX Runtime distribution is CPU-only.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: linux-aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

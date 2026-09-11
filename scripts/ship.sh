@@ -7,7 +7,7 @@
 #
 # Steps it performs:
 #   1. Preflight: gh auth, clean tree, on main, synced with origin, secrets set.
-#   2. Bump version in src-tauri/tauri.conf.json and src-tauri/Cargo.toml.
+#   2. Bump version in app metadata, the README badge and site fallbacks.
 #   3. Commit "release: vX.Y.Z", push main.
 #   4. Annotated tag vX.Y.Z (message = release notes shown in the app), push it.
 #   5. Watch the Release run; on failure print the failing step's log and exit 1.
@@ -71,18 +71,33 @@ p = 'src-tauri/Cargo.toml'
 text = open(p).read()
 open(p, 'w').write(re.sub(r'^version = "[^"]+"', f'version = "{v}"', text, count=1, flags=re.M))
 PY
+CURRENT_VERSION="$CURRENT" python3 - "$VERSION" <<'PY'
+import os, sys
+old, new = os.environ['CURRENT_VERSION'], sys.argv[1]
+
+p = 'README.md'
+text = open(p).read()
+text = text.replace(f'latest-v{old}-', f'latest-v{new}-')
+open(p, 'w').write(text)
+
+p = 'site/index.html'
+text = open(p).read()
+text = text.replace(f'/v{old}/MangaTypesetter_{old}_', f'/v{new}/MangaTypesetter_{new}_')
+text = text.replace(f'>v{old} · free · MIT<', f'>v{new} · free · MIT<')
+open(p, 'w').write(text)
+PY
 # Keep Cargo.lock's own entry in sync so the release build does not dirty the tree.
 (cd src-tauri && cargo update -q --package app 2>/dev/null) || true
 git diff --stat | sed 's/^/  /'
 
 if [ "$DRY_RUN" = "--dry-run" ]; then
   echo "== dry run: reverting bump, nothing pushed =="
-  git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock 2>/dev/null || true
+  git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock README.md site/index.html 2>/dev/null || true
   exit 0
 fi
 
 echo "== commit and tag =="
-git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock 2>/dev/null || true
+git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock README.md site/index.html 2>/dev/null || true
 git commit -m "release: v$VERSION"
 git tag -a "v$VERSION" -m "$NOTES"
 git push origin main
@@ -117,7 +132,7 @@ want = sys.argv[1]
 assert m.get("version") == want, f"manifest has {m.get('version')}, expected {want}"
 plats = sorted(m.get("platforms", {}).keys())
 print(f"published v{want} with platforms: {', '.join(plats)}")
-missing = {"darwin-aarch64", "windows-x86_64", "linux-x86_64"} - set(plats)
+missing = {"darwin-aarch64", "windows-x86_64", "linux-x86_64", "linux-aarch64"} - set(plats)
 if missing:
     print(f"WARNING: missing platforms: {', '.join(sorted(missing))}", file=sys.stderr)
 PY

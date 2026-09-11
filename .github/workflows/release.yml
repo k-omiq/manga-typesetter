@@ -45,7 +45,7 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: windows-x86_64
-          # One Linux build, and there is no second one to have. An AppImage
+          # The x86_64 Linux build uses WebGPU. An AppImage
           # never bundles glibc, so it needs a host at least as new as the one
           # it was built on - and pyke's prebuilt onnxruntime is compiled
           # against glibc 2.38 and GCC 13's libstdc++ whether or not a GPU
@@ -66,6 +66,12 @@ jobs:
             target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
             features: gpu-webgpu
+          # ort ships an ARM64 Linux CPU runtime, but no ARM64 WebGPU or CUDA
+          # runtime. Build this lane natively and leave the GPU features off;
+          # the app's normal provider ladder then uses ONNX Runtime's CPU EP.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: linux-aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

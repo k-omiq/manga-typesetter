@@ -9,7 +9,7 @@
 
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-111?logo=apple&logoColor=white)](#install)
 [![Windows](https://img.shields.io/badge/Windows-x86__64-0078D4?logo=windows&logoColor=white)](#install)
-[![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?logo=linux&logoColor=black)](#install)
+[![Linux](https://img.shields.io/badge/Linux-x86__64%20%7C%20ARM64-FCC624?logo=linux&logoColor=black)](#install)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev)
 [![latest](https://img.shields.io/badge/latest-v0.3.0-E8A33D)](https://typesetter.komiq.cc)
@@ -62,20 +62,21 @@ Grab the installer from **<https://typesetter.komiq.cc>**.
 - macOS (Apple Silicon): open the `.dmg`, drag the app to Applications. The
   bundle is not notarised yet, so first launch needs right-click > **Open**.
 - Windows: run the setup `.exe`.
-- Linux (x86_64): two downloads. Install the `.deb`, or mark the `.AppImage`
+- Linux (x86_64 or ARM64): choose the download matching your architecture.
+  Install the `.deb`, or mark the `.AppImage`
   executable and run it. Both use your distro's GTK 3 and WebKitGTK 4.1
   (the `.deb` pulls them in; the AppImage tells you the install command if
   they are missing: `libwebkit2gtk-4.1-0` on Debian and Ubuntu,
   `webkit2gtk4.1` on Fedora, `webkit2gtk-4.1` on Arch).
-  - `linux-x86_64` needs glibc 2.39 or newer: Ubuntu 24.04, Mint 22, Fedora
+  - The Linux builds need glibc 2.39 or newer: Ubuntu 24.04, Mint 22, Fedora
     39, Debian 13, Arch, or anything newer. On an older distro it refuses to
     start with `version 'GLIBC_2.39' not found`, and there is no build that
     does: the floor comes from the prebuilt ONNX Runtime, which is compiled
     against glibc 2.38 with or without a GPU feature. Reaching Ubuntu 22.04 or
     Debian 12 would take a Flatpak, which carries its own runtime.
-  - It is one download whether or not the machine has a GPU. Detection uses
-    WebGPU over Vulkan when a usable driver is there and the CPU when it is
-    not.
+  - The x86_64 build uses WebGPU over Vulkan when a usable driver is there and
+    the CPU when it is not. The ARM64 build is CPU-only because its prebuilt
+    ONNX Runtime has no WebGPU or CUDA provider.
 
   `ldd --version` prints your glibc version.
 

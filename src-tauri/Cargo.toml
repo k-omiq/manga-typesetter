@@ -33,12 +33,11 @@ opt-level = 2
 #                (see tauri.linux-cuda.conf.json).
 # Both at once matches no prebuilt and ort-sys refuses to build.
 #
-# The Linux release is one lane (see .github/workflows/release.yml):
-# `gpu-webgpu`, built on Ubuntu 24.04, glibc 2.39 floor. There is no CPU-only
-# lane for older distros - pyke's prebuilt onnxruntime needs glibc 2.38 and
-# GCC 13's libstdc++ with or without a feature, so nothing here links on
-# 22.04. That build serves GPU-less machines too: the ladder falls back to the
-# CPU. build.rs prints a note when a Linux build has neither feature.
+# Linux releases are built on Ubuntu 24.04 (glibc 2.39 floor). x86_64 uses
+# `gpu-webgpu` and falls back to CPU on GPU-less machines. ARM64 is CPU-only:
+# pyke ships an aarch64 ONNX Runtime without a GPU provider, but no aarch64
+# WebGPU or CUDA distribution. build.rs prints a note when a Linux build has
+# neither feature.
 gpu-webgpu = ["ort/webgpu"]
 gpu-cuda = ["ort/cuda"]
 
